@@ -404,7 +404,7 @@ uas_to_rad = 180*3600*10**6/np.pi
 solar_radii_to_parsec = 2.254*10**-8
 
 
-define_2MASS_filters()
+Spyctres.define_2MASS_filters()
 twomass_filters = speclite.filters.load_filters('MASS-J', 'MASS-H','MASS-K')
 sdss_filters = speclite.filters.load_filters('sdss2010-*')
 bessel_filters = speclite.filters.load_filters('bessell-*')
@@ -430,9 +430,9 @@ extinction = [2.2,2.2-1.1,0.63,0.4,0.26]
 
 SED_flux,SED_mag = Spyctres.derive_SED_from_obs_mag(wave_obs,obs_mags,obs_emags,ab_corrections,filters)
 
-NIR = Spyctres.extract_spectrum('./Spectres/TOO_Gaia19bld_runA_SCI_SLIT_FLUX_MERGE1D_NIR.fits')
-VIS = Spyctres.extract_spectrum('./Spectres/TOO_Gaia19bld_runA_SCI_SLIT_FLUX_MERGE1D_VIS.fits')
-UVB = Spyctres.extract_spectrum('./Spectres/TOO_Gaia19bld_runA_SCI_SLIT_FLUX_MERGE1D_UVB.fits')
+NIR = Spyctres.extract_spectrum('/nethome/ebachelet/Desktop/Microlensing/OpenSourceProject/SimulationML/Gaia/Gaia19bld/Spectres/TOO_Gaia19bld_runA_SCI_SLIT_FLUX_MERGE1D_NIR.fits')
+VIS = Spyctres.extract_spectrum('/nethome/ebachelet/Desktop/Microlensing/OpenSourceProject/SimulationML/Gaia/Gaia19bld/Spectres/TOO_Gaia19bld_runA_SCI_SLIT_FLUX_MERGE1D_VIS.fits')
+UVB = Spyctres.extract_spectrum('/nethome/ebachelet/Desktop/Microlensing/OpenSourceProject/SimulationML/Gaia/Gaia19bld/Spectres/TOO_Gaia19bld_runA_SCI_SLIT_FLUX_MERGE1D_UVB.fits')
 
 spectrum_XShooter = np.r_[UVB,VIS,NIR]
 
@@ -458,11 +458,13 @@ spectra['XShooter_29_07_2019'] = data_fit
 #Find telluric lines
 
 
-telluric_mask = bin_spec[:,0]>0
-telluric_lines = fits.open('/home/ebachelet/Downloads/pwv_R300k_airmass1.0/LBL_A10_s0_w050_R0300000_T.fits')#https://www.aanda.org/articles/aa/pdf/2014/08/aa23790-14.pdf
+
+telluric_lines = Spyctres.load_telluric_lines()
 telluric_lines = np.c_[telluric_lines[1].data['lam']*10000,telluric_lines[1].data['trans']]
 telluric_lines,telluric_mask = Spyctres.telluric_lines(telluric_lines,wave,threshold=0.98)
 
+plt.fill_between(telluric_lines[:,0],0,1,where=telluric_mask,color='grey',alpha=0.25)
+plt.show()
 import pdb; pdb.set_trace()
 
 
