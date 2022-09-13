@@ -23,5 +23,5 @@ setup(
     zip_safe=False,
     packages=find_packages('.'),
     include_package_data=True,
-    package_data={'':['H_2MASS_responses.dat','J_2MASS_responses.dat','K_2MASS_responses.dat','LBL_A10_s0_w050_R0300000_T.fits']},     
+    package_data={'':['H_2MASS_responses.dat','J_2MASS_responses.dat','K_2MASS_responses.dat','LBL_A10_s0_w050_R0300000_T.fits','G_GAIA_responses.dat']},     
 )
