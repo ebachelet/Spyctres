@@ -9,6 +9,76 @@ import os
 import speclite.filters
 import speclite
 
+    
+
+def source_blend_from_flux(specs,magnifications):
+
+    v1 = 0
+    v2 = 0  
+    A = 0
+    B = 0
+    C = 0
+
+    t1 = 0
+    t2 = 0
+    t3 = 0
+    t4 = 0
+    t5 = 0
+    t6 = 0
+    t7 = 0
+       
+
+    for i in range(len(specs)):
+        
+         A += magnifications[i]**2/specs[i][:,2]**2
+         B += magnifications[i]/specs[i][:,2]**2
+         C += 1/specs[i][:,2]**2
+         v1 += specs[i][:,1]*magnifications[i]/specs[i][:,2]**2
+         v2 += specs[i][:,1]*1/specs[i][:,2]**2
+
+
+         t1 += magnifications[i]*specs[i][:,1]/specs[i][:,2]**2
+         t2 += 1/specs[i][:,2]**2
+         t3 += magnifications[i]/specs[i][:,2]**2
+         t4 += specs[i][:,1]/specs[i][:,2]**2
+         t5 += magnifications[i]**2/specs[i][:,2]**2
+         t6 += 0
+         t7 += magnifications[i]**2/specs[i][:,2]**2
+    
+    aa = np.zeros((len(A),len(A)))
+    bb = np.zeros((len(A),len(A)))
+    cc = np.zeros((len(A),len(A)))
+
+    np.fill_diagonal(aa,A)
+    np.fill_diagonal(bb,B)
+    np.fill_diagonal(cc,C) 
+    mat = np.block([[aa,bb],[bb,cc]])
+    
+
+    fs = (t1*t2-t3*t4)/(t5*t2-t3**2)
+    fb = (t7*t4-t3*t1)/(t5*t2-t3**2)
+    sol,res, rank, s = np.linalg.lstsq(mat,np.r_[v1,v2,],rcond=-1)
+    
+    cov = np.linalg.pinv(np.dot(mat.T,mat))
+    if len(res) !=0:
+        chi2 = np.sum((res-np.dot(mat,sol))**2)/(len(res)-len(specs[0]))
+        #import pdb; pdb.set_trace()
+        cov *= chi2
+        efs = cov.diagonal()[:len(A)]**0.5 
+        efb = cov.diagonal()[len(A):]**0.5
+        
+    else:
+        print('Not enough spectra to estimate covariance! Not reliable covariance')
+        chi2 = 1
+        efs = 1/(magnifications[0]-magnifications[1])*(specs[0][:,2]**2+specs[1][:,2]**2)**0.5
+        efb = 1/(magnifications[0]-magnifications[1])*(specs[0][:,2]**2*magnifications[1]**2+specs[1][:,2]**2*magnifications[0]**2)**0.5    
+    fs = sol[:len(A)] 
+    fb = sol[len(A):]
+    
+    return fs,fb,efs,efb
+	
+
+
 def star_spectrum(Teff,abundance,logg,catalog='k93models'):
 
     spectrum = PS.Icat(catalog,Teff,abundance,logg)
@@ -65,6 +135,13 @@ def absorption_law(Av,Rv,lamb):
     a_lamb = (np.array(A)+np.array(B)/Rv)*Av
     
     return a_lamb
+    
+    
+def absorption_law_2(Av,Rv,lamb):
+    
+    a_lamb = Av*((0.55/lamb)**Rv)
+    
+    return a_lamb
 def extract_spectrum(name):
 
 
@@ -78,11 +155,13 @@ def extract_spectrum(name):
     value_ref_pixel = head['CRVAL1']
 
     try:
+
         #LCO spectra
         coef_pixel_wave = head['CD1_1']
         flux = spec[0].data[0,0]
+#        eflux = (spec[0].data[3,0]**2+spec[0].data[2,0])**0.5
         eflux = spec[0].data[3,0]
-
+        #eflux = np.array([1.0]*len(eflux))
     except:
         #XSHOOTER spectra
         coef_pixel_wave = head['CDELT1']    
@@ -160,12 +239,24 @@ def define_2MASS_filters():
     data = np.loadtxt( TWOMASS_filters_path+'K_2MASS_responses.dat')
     MASS_J = speclite.filters.FilterResponse(wavelength = data[:,0]*u.um , response = data[:,1], meta=dict(group_name='MASS', band_name='K'))
 
+
+def define_GAIA_filters():
+
+
+    GAIA_filter_path = os.path.dirname(__file__)+'/data/'
+    #G
+    data = np.loadtxt( GAIA_filter_path+'G_GAIA_responses.dat')
+    GAIA_G = speclite.filters.FilterResponse(wavelength = data[:,0]*u.nm , response = data[:,1], meta=dict(group_name='GAIA', band_name='G'))
+  
+
+
 def mag_to_fluxdens(mag,emag,ab_corr,wave):
 
     mag += ab_corr
     mag_to_jansky = 10**(-0.4*(mag+48.6))/10**-23
     
-    jansky_to_fluxdens = mag_to_jansky*3.0*10**-5/wave**2
+    jansky_to_fluxdens = mag_to_jansky*1/(3.34*10**4)*1/wave**2
+
     ejansky_to_fluxdens = emag*jansky_to_fluxdens*2.5/np.log(10)
 
     return jansky_to_fluxdens,ejansky_to_fluxdens
@@ -177,7 +268,13 @@ def load_telluric_lines():
     telluric_lines = np.c_[telluric_lines[1].data['lam']*10000,telluric_lines[1].data['trans']]
     return telluric_lines
 def telluric_lines(telluric_lines,wave,threshold=0.98):
-
+    # 
+    
+#    import scipy.interpolate as si
+#    interp = si.interp1d(telluric_lines[:,0],telluric_lines[:,1],kind='cubic',bounds_error=False,fill_value = 0)
+#    telluric_lines = np.c_[wave,interp(wave)]
+#    telluric_mask = telluric_lines[:,1]<threshold
+     
     telluric_lines = bin_absorption(telluric_lines,np.array(wave))
 
     
@@ -194,8 +291,9 @@ def telluric_lines(telluric_lines,wave,threshold=0.98):
     
 
     return telluric_lines,telluric_mask
+
     
-def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filters=None):
+def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filters=None,gaia_filters=None):
 
     sorted_spec = spectrum[spectrum[:,0].argsort(),]
     unique,unique_index = np.unique(sorted_spec[:,0],return_index=True)
@@ -203,12 +301,12 @@ def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filter
     unique_spec = sorted_spec[unique_index]
 
 
-    interp_spec = interpolate.interp1d(unique_spec[:,0],unique_spec[:,1])
-    wave_temp = np.arange(np.min(np.round(spectrum[:,0])+1),np.max(np.round(spectrum[:,0])-1))
-    spec_temp = interp_spec(wave_temp)
-
+    interp_spec = interpolate.interp1d(unique_spec[:,0],unique_spec[:,1],bounds_error = False,fill_value =0)
+    #wave_temp = np.arange(np.min(np.round(spectrum[:,0])+1),np.max(np.round(spectrum[:,0])-1))
+    #spec_temp = interp_spec(wave_temp) 
+    waves_center = []
     spec_mags_ab = []
-
+    wave_range = []
     for ind,fil in enumerate(sed[:,-1]):
         
         if 'Bessel' in fil:
@@ -223,15 +321,36 @@ def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filter
 
             templates = twomass_filters
 
+        if 'GAIA' in fil:
+
+            templates = gaia_filters
+
         list_of_bands = [templates[i].meta['band_name'] for i in range(len(templates))]
 
         index = np.where(fil.split('_')[-1] == np.array(list_of_bands))[0][0]
-        spec_mag_ab = templates[index].get_ab_magnitude(spec_temp* (u.erg / u.cm**2 / u.s / u.Angstrom),wave_temp*u.Angstrom)
+        #import pdb; pdb.set_trace()   
+        try:
+             spec_mag_ab = templates[index].get_ab_magnitude(unique_spec[:,1]* (u.erg / u.cm**2 / u.s / u.Angstrom),unique_spec[:,0]*u.Angstrom)
+        except:
+             spec_mag_ab = templates[index].get_ab_magnitude(interp_spec( templates[index].wavelength)* (u.erg / u.cm**2 / u.s / u.Angstrom),templates[index].wavelength*u.Angstrom)
+        waves_center.append(templates[index].effective_wavelength.value)
         spec_mags_ab.append(spec_mag_ab)
-    offset = np.sum((spec_mags_ab-sed[:,1].astype(float))*1/sed[:,2].astype(float)**2)/np.sum(1.0/sed[:,2].astype(float)**2)
+        wave_range.append(templates[index].wavelength[-1]-  templates[index].wavelength[0])
+        #import pdb; pdb.set_trace()   
+    res =   spec_mags_ab-sed[:,1].astype(float)
 
-    return 10**(offset/2.5)
+    quant = 10**(res/2.5)
+    equant = sed[:,2].astype(float)*quant/2.5*np.log(10)
+    mean = np.sum(quant/equant**2)/np.sum(1/equant**2)
+    emean = 1/np.sum(1/equant**2)**0.5
+    #offset = np.sum((spec_mags_ab-sed[:,1].astype(float))*1/sed[:,2].astype(float)**2)/np.sum(1.0/sed[:,2].astype(float)**2)
+    #error = (1/np.sum(1/sed[:,2].astype(float)**2))**0.5*10**(offset/2.5)*np.log(10)/2.5
+    #import pdb; pdb.set_trace()   
+    return mean,emean,quant,equant
 
+    #phot_calib = interpolate.interp1d(waves_center,np.array(spec_mags_ab)-sed[:,1].astype(float),fill_value = 'extrapolate',kind=0)
+    return phot_calib
+    
 def derive_SED_from_obs_mag(wave,mags,emags,ab_corrections,filters):
 
     flux = []
@@ -248,5 +367,17 @@ def derive_SED_from_obs_mag(wave,mags,emags,ab_corrections,filters):
     SED_mag =np.c_[wave,mags+np.array(ab_corrections),emags,filters]#AB magnitudes
 
     return SED_flux,SED_mag
+    
+    
+def derive_AB_correction(filters):
+
+    correction = []
+    
+
+    for fil in filters:
+
+        correction.append(fil.get_ab_magnitude(PS.Vega.flux,PS.Vega.wave))
+        
+    return np.array(correction)
 
 
