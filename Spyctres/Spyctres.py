@@ -107,8 +107,8 @@ def bin_absorption(data,lambda_ref):
     return np.c_[lambda_ref,abso]
 
 
+def Cardelli_absorption_law(Av,Rv,lamb):
 
-def absorption_law(Av,Rv,lamb):
     #articles.adsabs.harvard.edu/pdf/1989ApJ...345..245C
     A=[]
     B=[]
@@ -135,13 +135,27 @@ def absorption_law(Av,Rv,lamb):
     a_lamb = (np.array(A)+np.array(B)/Rv)*Av
     
     return a_lamb
+
+def Wang_absorption_law(Av,lamb):
+    #https://iopscience.iop.org/article/10.3847/1538-4357/ab1c61/pdf
+    alambda = np.zeros(len(lamb))
+    mask = lamb<1
+    Y = 1/lamb-1.82
     
+    alambda[mask] = Av*(1+0.7499*Y[mask]-0.1086*Y[mask]**2-0.08909*Y[mask]**3+0.02905*Y[mask]**4+0.01069*Y[mask]**5+0.001707*Y[mask]**6-0.001002*Y[mask]**7)
+    
+    alambda[~mask] = Av*0.3722*lamb[~mask]**-2.070
+    mask = alambda<0
+    alambda[mask] = 0
+    return alambda    
+   
     
 def absorption_law_2(Av,Rv,lamb):
     
     a_lamb = Av*((0.55/lamb)**Rv)
     
     return a_lamb
+
 def extract_spectrum(name):
 
 
