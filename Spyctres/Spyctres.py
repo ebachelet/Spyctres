@@ -8,8 +8,134 @@ import astropy.constants as constantes
 import os
 import speclite.filters
 import speclite
+import scipy.interpolate as si
 
+UAS_TO_RAD = 180*3600*10**6/np.pi
+
+
+def star_model(parameters,catalog='k93models'):
+
+
+    theta_s, Av,Teff,abundance,logg = parameters
     
+    try:
+            starspectrum = star_spectrum(Teff,abundance,logg,catalog=catalog)
+    except:
+            return None
+            
+    normalisation = (10**theta_s/UAS_TO_RAD)**2    
+    
+    wave = starspectrum.wave * u.Angstrom
+    abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+    spectrum = starspectrum.flux*normalisation* (u.erg / u.cm**2 / u.s / u.Angstrom)/abso
+
+    model = np.c_[np.array(wave),np.array(spectrum),[1]*len(spectrum)]
+    
+    return model
+
+def sed_chichi(spectrum,sed):
+
+    chichi = 0
+    #breakpoint()
+    for obs in sed:
+    
+        filt = obs[0]
+        mag_ab = obs[1]
+        emag_ab = obs[2]
+        
+        predicted_mag_ab = filt.get_ab_magnitude(spectrum[:,1],spectrum[:,0])
+        #breakpoint()
+        chichi += (mag_ab-predicted_mag_ab)**2/emag_ab**2
+        
+    return chichi
+
+
+def fit_spectra_one_star(spectras=[],seds=[],magnifications=[],catalog='k93models'):
+
+    pass
+    
+def fit_spectra_one_star_chichi(params,spectras=[],seds=[],magnifications=[],telluric_lines_mask=None,catalog='k93models'):
+
+    star_parameters = params[:5]
+    
+    model_spectrum = star_model(star_parameters,catalog=catalog)
+
+    if model_spectrum is None:
+        
+        return np.inf
+   
+    try:
+    
+        rescale_flux_parameters = [params[5+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_flux_parameters = None 
+
+    try:
+    
+        rescale_errors_parameters = [params[5+len(spectras)+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_errors_parameters = None    
+    
+
+    chichi = 0
+    
+    for ind,data in enumerate(spectras):
+
+        tobin = np.copy(model_spectrum)
+        tobin[:,1] *= magnifications[ind] 
+        
+        if rescale_flux_parameters is not None:
+        
+            rescale_flux = 10**rescale_flux_parameters[ind]
+            tobin[:,1] /= rescale_flux
+        
+        mask = (tobin[:,0]>=data[0,0]) & (tobin[:,0]<=data[-1,0])
+        
+        if  tobin[mask].shape == data.shape:
+        
+            bin_spec = tobin[mask]
+        
+        else:
+            
+            bin_spec,cov = bin_spectrum(tobin,data[:,0])
+        
+        if telluric_lines_mask is not None:
+        
+            mask = telluric_lines_mask(data[:,0]).astype(bool)
+            
+        else:
+        
+            mask = [True]*len(data)
+        
+        errors = data[mask,2]**2
+        
+        if rescale_errors_parameters is not None:
+        
+            rescale_errors = 10**rescale_errors_parameters[ind]
+            errors *= rescale_errors**2
+       
+        res = ((data[mask,1]-bin_spec[mask,1]))**2/errors+np.log(errors)+np.log(2*np.pi)
+
+        chichi += np.sum(res)
+     
+    chichi_seds = 0    
+    for ind,sed in enumerate(seds):
+        
+        sed = seds[ind]
+        tobin = np.copy(model_spectrum)
+        tobin[:,1] *= magnifications[ind]    
+
+        chichi_seds += sed_chichi(tobin,sed)
+            
+    chichi += chichi_seds
+            
+    return chichi      
+            
+
 
 def source_blend_from_flux(specs,magnifications):
 
@@ -58,7 +184,7 @@ def source_blend_from_flux(specs,magnifications):
     fs = (t1*t2-t3*t4)/(t5*t2-t3**2)
     fb = (t7*t4-t3*t1)/(t5*t2-t3**2)
     sol,res, rank, s = np.linalg.lstsq(mat,np.r_[v1,v2,],rcond=-1)
-    
+
     cov = np.linalg.pinv(np.dot(mat.T,mat))
     if len(res) !=0:
         chi2 = np.sum((res-np.dot(mat,sol))**2)/(len(res)-len(specs[0]))
@@ -77,8 +203,41 @@ def source_blend_from_flux(specs,magnifications):
     
     return fs,fb,efs,efb
 	
+def source_blend_from_flux2(specs,magnifications):
+
+    mat_1_spectra = np.zeros((len(specs[0]),len(specs[0])))
+    mat_mag = np.copy(mat_1_spectra)
+    np.fill_diagonal(mat_mag,1)
+    mat_blend = np.copy(mat_1_spectra)    
+    np.fill_diagonal(mat_blend,1)
+    
+    for ind,mag in enumerate(magnifications):
+    
+        weights = specs[ind][:,2]
+        matmag = mat_mag*mag/weights
+
+        
+        try:
+            mat_tot = np.r_[mat_tot,np.c_[matmag,mat_blend/weights]]   
+            obs = np.r_[obs,specs[ind][:,1]/weights] 
+        except:
+            mat_tot = np.c_[matmag,mat_blend/weights]
+            obs = specs[ind][:,1]/weights 
 
 
+    
+    sol,res, rank, s = np.linalg.lstsq(mat_tot,obs,rcond=-1)
+    cov = np.linalg.pinv(np.dot(mat_tot.T,mat_tot))
+    sigmas = cov.diagonal()**0.5
+    
+    fs = sol[:len(specs[0])]
+    fb = sol[len(specs[0]):]
+    efs = sigmas[:len(specs[0])]
+    efb = sigmas[len(specs[0]):]
+
+    return fs,fb,efs,efb
+    
+    
 def star_spectrum(Teff,abundance,logg,catalog='k93models'):
 
     spectrum = PS.Icat(catalog,Teff,abundance,logg)
@@ -147,6 +306,7 @@ def Wang_absorption_law(Av,lamb):
     alambda[~mask] = Av*0.3722*lamb[~mask]**-2.070
     mask = alambda<0
     alambda[mask] = 0
+
     return alambda    
    
     
@@ -276,39 +436,51 @@ def mag_to_fluxdens(mag,emag,ab_corr,wave):
     return jansky_to_fluxdens,ejansky_to_fluxdens
 
 
-def load_telluric_lines():
+def load_telluric_lines(threshold = 0.95):
+    
+    
     telluric_lines_path  = os.path.dirname(__file__)+'/data/LBL_A10_s0_w050_R0300000_T.fits' #https://www.aanda.org/articles/aa/pdf/2014/08/aa23790-14.pdf
     telluric_lines = fits.open(telluric_lines_path)
     telluric_lines = np.c_[telluric_lines[1].data['lam']*10000,telluric_lines[1].data['trans']]
-    return telluric_lines
-def telluric_lines(telluric_lines,wave,threshold=0.98):
-    # 
+    telluric_mask = telluric_lines[:,1]<threshold
     
-#    import scipy.interpolate as si
-#    interp = si.interp1d(telluric_lines[:,0],telluric_lines[:,1],kind='cubic',bounds_error=False,fill_value = 0)
-#    telluric_lines = np.c_[wave,interp(wave)]
-#    telluric_mask = telluric_lines[:,1]<threshold
-     
-    telluric_lines = bin_absorption(telluric_lines,np.array(wave))
-
+    telluric_lines_interp = si.interp1d(telluric_lines[:,0],telluric_lines[:,1],fill_value='extrapolate')
+    telluric_mask_interp = si.interp1d(telluric_lines[:,0],telluric_mask.astype(int),fill_value='extrapolate')
     
-    telluric_mask = wave<0
-        
-
-    for ind,lam in enumerate(wave):
-
-        index = np.argmin(np.abs(telluric_lines[:,0]-lam))
-        if telluric_lines[index,1]<threshold:
-
-            telluric_mask[ind] = True
-
+    
     
 
-    return telluric_lines,telluric_mask
+    return telluric_lines_interp, telluric_mask_interp
+    
+    
+#def telluric_lines(telluric_lines,wave,threshold=0.98):
+#    # 
+#    
+##    import scipy.interpolate as si
+##    interp = si.interp1d(telluric_lines[:,0],telluric_lines[:,1],kind='cubic',bounds_error=False,fill_value = 0)
+##    telluric_lines = np.c_[wave,interp(wave)]
+##    telluric_mask = telluric_lines[:,1]<threshold
+#     
+#    telluric_lines = bin_absorption(telluric_lines,np.array(wave))
+
+#    
+#    telluric_mask = wave<0
+#        
+
+#    for ind,lam in enumerate(wave):
+
+#        index = np.argmin(np.abs(telluric_lines[:,0]-lam))
+#        if telluric_lines[index,1]<threshold:
+
+#            telluric_mask[ind] = True
+
+#    
+#    breakpoint()
+#    return telluric_lines,np.c_[wave,telluric_mask]
 
     
 def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filters=None,gaia_filters=None):
-
+    #breakpoint()
     sorted_spec = spectrum[spectrum[:,0].argsort(),]
     unique,unique_index = np.unique(sorted_spec[:,0],return_index=True)
 
