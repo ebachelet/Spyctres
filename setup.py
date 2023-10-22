@@ -2,7 +2,7 @@ from setuptools import setup, find_packages, Extension
 
 setup(
     name="Spyctres",
-    version="0.1.0",
+    version="0.2.0",
     description="It fits your spectra!",
     keywords='Spectroscopy',
     author="Etienne Bachelet",
@@ -23,5 +23,6 @@ setup(
     zip_safe=False,
     packages=find_packages('.'),
     include_package_data=True,
-    package_data={'':['H_2MASS_responses.dat','J_2MASS_responses.dat','K_2MASS_responses.dat','LBL_A10_s0_w050_R0300000_T.fits','G_GAIA_responses.dat']},     
+    package_data={'':['H_2MASS_responses.dat','J_2MASS_responses.dat','K_2MASS_responses.dat','LBL_A10_s0_w050_R0300000_T.fits','G_GAIA_responses.dat','Reader_Corliss_Lines.fits'
+    ,'SLOAN_SDSS.gprime_filter.dat','SLOAN_SDSS.uprime_filter.dat','SLOAN_SDSS.rprime_filter.dat','SLOAN_SDSS.iprime_filter.dat','SLOAN_SDSS.zprime_filter.dat']},     
 )

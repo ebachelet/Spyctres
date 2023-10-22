@@ -10,8 +10,79 @@ import speclite.filters
 import speclite
 import scipy.interpolate as si
 
+
+
+import stsynphot
+
 UAS_TO_RAD = 180*3600*10**6/np.pi
 
+
+def get_element_lines(wavelength_range = [2000,10000], require_elements=['H','HE','HG','CA','FE','MG','NA','O'],intensity_threshold=50):
+
+    elements_lines_path  = os.path.dirname(__file__)+'/data/Reader_Corliss_Lines.fits' #http://cdsarc.u-strasbg.fr/viz-bin/cat/VI/16
+    lines = fits.open(elements_lines_path)
+    waves = lines[1].data['wavel']
+    
+    # Air-Vacuum correction https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion
+    
+    mask = waves.astype(float)>2000
+    
+    s = 10**4/waves[mask]
+    n = 1 + 0.00008336624212083 + 0.02408926869968 / (130.1065924522 - s**2) + 0.0001599740894897 / (38.92568793293 - s**2)
+    waves[mask] *= n
+
+    intensities = lines[1].data['INT']
+    elements = lines[1].data['Element']
+    ions  = lines[1].data['Spectrum']
+        
+    good_lines = np.c_[waves,elements,ions,intensities]
+
+    general_mask = (intensities>intensity_threshold)&(waves>wavelength_range[0])&(waves<wavelength_range[1])
+
+    if len(require_elements) == 0:
+    
+        pass
+    
+    else:
+        
+        elements_mask = [True if i in require_elements else False for i in elements]
+        
+        general_mask = (general_mask) & (elements_mask)
+           
+    return good_lines[general_mask] 
+        
+def plot_element_lines(figure_axe,lines):
+
+
+    for line in lines:
+
+        figure_axe.axvline(float(line[0]),linestyle=':',color='grey',alpha=0.5)
+        figure_axe.text(float(line[0]),0.8,line[1]+line[2],rotation='vertical',fontdict=dict(color='grey',fontsize=10),bbox=dict(alpha=0.0,facecolor='w',edgecolor='w'))
+        
+
+
+
+
+def star_model_new(parameters,wave,catalog='k93models'):
+
+
+    theta_s, Av,Teff,abundance,logg = parameters
+    
+    try:
+        model_spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
+    except:
+        return np.inf
+
+    normalisation = (10**theta_s/UAS_TO_RAD)**2    
+
+    abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+    flux = np.array(model_spectrum(wave*u.AA)*1.99*10**-8/wave)
+    spectrum = flux*normalisation/abso
+
+    model = np.c_[np.array(wave),np.array(spectrum),[1]*len(spectrum)]
+    
+    return model
+            
 
 def star_model(parameters,catalog='k93models'):
 
@@ -49,6 +120,23 @@ def sed_chichi(spectrum,sed):
         
     return chichi
 
+
+def sed_chichi_new(spectrum,sed,magnification=1):
+
+    chichi = 0
+    #breakpoint()
+    for obs in sed:
+    
+        filt = obs[0]
+        mag_ab = obs[1]
+        emag_ab = obs[2]
+        
+        flux = np.array(spectrum(filt._wavelength*u.AA)*1.99*10**-8/filt._wavelength)
+        predicted_mag_ab = filt.get_ab_magnitude(flux,filt._wavelength)
+        #breakpoint()
+        chichi += (mag_ab-predicted_mag_ab)**2/emag_ab**2
+        
+    return chichi
 
 def fit_spectra_one_star(spectras=[],seds=[],magnifications=[],catalog='k93models'):
 
@@ -128,13 +216,107 @@ def fit_spectra_one_star_chichi(params,spectras=[],seds=[],magnifications=[],tel
         sed = seds[ind]
         tobin = np.copy(model_spectrum)
         tobin[:,1] *= magnifications[ind]    
-
+       
         chichi_seds += sed_chichi(tobin,sed)
             
     chichi += chichi_seds
             
     return chichi      
             
+
+def fit_spectra_one_star_chichi_new(params,spectras=[],seds=[],magnifications=[],telluric_lines_mask=None,catalog='k93models'):
+
+    theta_s, Av,Teff,abundance,logg = params[:5]
+    
+    #model_spectrum = star_model(star_parameters,catalog=catalog)
+    try:
+        model_spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
+    except:
+        return np.inf
+
+    normalisation = (10**theta_s/UAS_TO_RAD)**2    
+  
+    try:
+    
+        rescale_flux_parameters = [params[5+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_flux_parameters = None 
+
+    try:
+    
+        rescale_errors_parameters = [params[5+len(spectras)+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_errors_parameters = None    
+    
+
+    chichi = 0
+    
+    for ind,data in enumerate(spectras):
+
+        flux = np.array(model_spectrum(data[:,0]*u.AA)*1.99*10**-8/data[:,0])
+    
+        wave = data[:,0] 
+        abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+        flux *= normalisation/abso
+        
+
+   
+        if rescale_flux_parameters is not None:
+        
+            rescale_flux = 10**rescale_flux_parameters[ind]
+            flux /= rescale_flux
+       
+        if telluric_lines_mask is not None:
+        
+            mask = telluric_lines_mask(data[:,0]).astype(bool)
+            
+        else:
+        
+            mask = [True]*len(data)
+        
+        errors = data[mask,2]**2
+        
+        if rescale_errors_parameters is not None:
+        
+            rescale_errors = 10**rescale_errors_parameters[ind]
+            errors *= rescale_errors**2
+       
+        res = ((data[mask,1]-flux))**2/errors+np.log(errors)+np.log(2*np.pi)
+
+        chichi += np.sum(res)
+     
+    chichi_seds = 0    
+    for ind,sed in enumerate(seds):
+        
+        sed = seds[ind]    
+        
+        chi = 0
+        for obs in sed:
+        
+            filt = obs[0]
+            mag_ab = obs[1]
+            emag_ab = obs[2]
+            
+            wave = filt._wavelength*u.AA
+            flux = np.array(model_spectrum(wave)*1.99*10**-8/wave)
+             
+            abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+            flux *= normalisation/abso
+            predicted_mag_ab = filt.get_ab_magnitude(flux,wave)
+            #breakpoint()
+            chi += (mag_ab-predicted_mag_ab)**2/emag_ab**2
+
+        chichi_seds += chi
+
+    chichi += chichi_seds
+            
+    return chichi      
+
+
 
 
 def source_blend_from_flux(specs,magnifications):
@@ -361,42 +543,58 @@ def bin_spectrum(data,lambda_ref):
     # match https://www.astrobetter.com/blog/2013/08/12/python-tip-re-sampling-spectra-with-pysynphot/ but gives errors
     steps = np.diff(lambda_ref)/2
     steps = np.r_[steps,steps[-1]]
+    
+    mask = (lambda_ref>=data[0,0]) & (lambda_ref<data[-1,0])
+    
     flux = []
-
+    errors = []
     cij = []
 
-    for ind,lamb in enumerate(lambda_ref):
+    for ind,lamb in enumerate(lambda_ref[mask]):
 
-        
-        index = np.argmin(np.abs(data[:,0]-lamb))
-        index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))    
-        index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
+        try:
+            index = np.argmin(np.abs(data[:,0]-lamb))
+
+            if np.abs(data[index,0]-lamb)>10**-10: 
+               
+                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))    
+                index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
 
 
 
-        winside = data[index_moins:index_plus+1,0]
-        einside = data[index_moins:index_plus+1,2]
-        finside = data[index_moins:index_plus+1,1]
-        bins = np.array([(data[i+1,0]-data[i-1,0])/2 for i in range(index_moins,index_plus+1)])
+                winside = data[index_moins:index_plus+1,0]
+                einside = data[index_moins:index_plus+1,2]
+                finside = data[index_moins:index_plus+1,1]
+                bins = np.array([(data[i+1,0]-data[i-1,0])/2 for i in range(index_moins,index_plus+1)])
 
-        efficiency = np.zeros(len(winside))
-        efficiency[1:-1] = 1
-            
-        efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
-        efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
+                efficiency = np.zeros(len(winside))
+                efficiency[1:-1] = 1
+                    
+                efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
+                efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
 
-        flux.append(np.sum(efficiency*bins*finside)/np.sum(bins*efficiency))
-        cij_line = np.zeros(len(data))
-        cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
-        cij.append(cij_line)
-
+                flux.append(np.sum(efficiency*bins*finside)/np.sum(bins*efficiency))
+                cij_line = np.zeros(len(data))
+                cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
+                cij.append(cij_line)
+                
+            else:
+                   
+                flux.append(data[index,1])
+                cij_line = np.zeros(len(data))
+                cij_line[index] = 1
+                cij.append(cij_line)
+                
+        except:
+                breakpoint()
+                     
     covariance = np.array(cij)
     
     #eflux = np.dot(covariance,data[:,2]**2)**0.5
     final_covariance = np.dot(covariance*data[:,2],(covariance*data[:,2]).T)
     eflux = final_covariance.diagonal()**0.5
 
-    return np.c_[lambda_ref,flux,eflux],final_covariance
+    return np.c_[lambda_ref[mask],flux,eflux],final_covariance
 
 
 def define_2MASS_filters():
@@ -422,7 +620,24 @@ def define_GAIA_filters():
     data = np.loadtxt( GAIA_filter_path+'G_GAIA_responses.dat')
     GAIA_G = speclite.filters.FilterResponse(wavelength = data[:,0]*u.nm , response = data[:,1], meta=dict(group_name='GAIA', band_name='G'))
   
+def define_SDSS_prime_filters():
 
+    SDSS_prime_filters_path = os.path.dirname(__file__)+'/data/'
+    #u'
+    data = np.loadtxt( SDSS_prime_filters_path+'SLOAN_SDSS.uprime_filter.dat')
+    SDSS_prime_u = speclite.filters.FilterResponse(wavelength = data[:,0]*u.AA , response = data[:,1], meta=dict(group_name='SDSS_prime', band_name='u'))
+    #g'
+    data = np.loadtxt( SDSS_prime_filters_path+'SLOAN_SDSS.gprime_filter.dat')
+    SDSS_prime_g = speclite.filters.FilterResponse(wavelength = data[:,0]*u.AA , response = data[:,1], meta=dict(group_name='SDSS_prime', band_name='g'))
+    #r'
+    data = np.loadtxt( SDSS_prime_filters_path+'SLOAN_SDSS.rprime_filter.dat')
+    SDSS_prime_r = speclite.filters.FilterResponse(wavelength = data[:,0]*u.AA , response = data[:,1], meta=dict(group_name='SDSS_prime', band_name='r'))
+    #i'
+    data = np.loadtxt( SDSS_prime_filters_path+'SLOAN_SDSS.iprime_filter.dat')
+    SDSS_prime_i = speclite.filters.FilterResponse(wavelength = data[:,0]*u.AA , response = data[:,1], meta=dict(group_name='SDSS_prime', band_name='i'))
+    #z'
+    data = np.loadtxt( SDSS_prime_filters_path+'SLOAN_SDSS.zprime_filter.dat')
+    SDSS_prime_z = speclite.filters.FilterResponse(wavelength = data[:,0]*u.AA , response = data[:,1], meta=dict(group_name='SDSS_prime', band_name='z'))
 
 def mag_to_fluxdens(mag,emag,ab_corr,wave):
 
