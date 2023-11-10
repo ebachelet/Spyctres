@@ -5,18 +5,37 @@ from scipy import interpolate
 import pysynphot as PS
 import astropy.units as u
 import astropy.constants as constantes
+import astropy.modeling.physical_models as apm
 import os
 import speclite.filters
 import speclite
 import scipy.interpolate as si
 
 
-
 import stsynphot
+from synphot import units, SourceSpectrum
+from synphot.models import BlackBodyNorm1D
 
 UAS_TO_RAD = 180*3600*10**6/np.pi
 
+class BlackBody(object):
 
+    def __init__(self,temperature=5778):
+    
+        self.temperature = temperature
+        #self.bb = apm.BlackBody(temperature=self.temperature*u.K)
+
+    def __call__(self,Lambda):
+    
+        lamb = Lambda.value
+
+        c1 = 1.1910429723971884e-16*10**50 #Angstrom to meter^-5
+        c2 = constantes.h.value*constantes.c.value/(lamb*constantes.k_B.value*self.temperature)*10**10
+        bb = c1/(lamb)**5/(np.exp(c2)-1)
+        
+        return bb*15.815130864774007*Lambda.value#photlam, 10**-7*np.pi/(1.98644746*10**-8/Lambda.value)
+        
+        
 def get_element_lines(wavelength_range = [2000,10000], require_elements=['H','HE','HG','CA','FE','MG','NA','O'],intensity_threshold=50):
 
     elements_lines_path  = os.path.dirname(__file__)+'/data/Reader_Corliss_Lines.fits' #http://cdsarc.u-strasbg.fr/viz-bin/cat/VI/16
@@ -69,14 +88,14 @@ def star_model_new(parameters,wave,catalog='k93models'):
     theta_s, Av,Teff,abundance,logg = parameters
     
     try:
-        model_spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
+        model_spectrum = star_spectrum_new(Teff,abundance,logg,catalog=catalog)
     except:
         return np.inf
 
     normalisation = (10**theta_s/UAS_TO_RAD)**2    
 
     abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
-    flux = np.array(model_spectrum(wave*u.AA)*1.99*10**-8/wave)
+    flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
     spectrum = flux*normalisation/abso
 
     model = np.c_[np.array(wave),np.array(spectrum),[1]*len(spectrum)]
@@ -426,7 +445,17 @@ def star_spectrum(Teff,abundance,logg,catalog='k93models'):
 
     return spectrum
 
+def star_spectrum_new(Teff,abundance,logg,catalog='k93models'):
 
+    if catalog == 'BlackBody':
+    
+        spectrum = BlackBody(temperature=Teff)
+        
+    else:
+
+        spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
+
+    return spectrum
 
 def bin_absorption(data,lambda_ref):
 
@@ -639,16 +668,31 @@ def define_SDSS_prime_filters():
     data = np.loadtxt( SDSS_prime_filters_path+'SLOAN_SDSS.zprime_filter.dat')
     SDSS_prime_z = speclite.filters.FilterResponse(wavelength = data[:,0]*u.AA , response = data[:,1], meta=dict(group_name='SDSS_prime', band_name='z'))
 
-def mag_to_fluxdens(mag,emag,ab_corr,wave):
+def mag_to_fluxdens(seds,mag_system='Vega'):
 
+    if mag_system=='Vega':
+    
+        ab_corr = derive_AB_correction(seds[:,0])
+        
+    else:
+    
+        ab_corr = 0
+        
+    mag = seds[:,1].astype(float)
+    emag = seds[:,2].astype(float)
+    pivots = np.array([i.effective_wavelength.value for i in seds[:,0]])
+    
     mag += ab_corr
     mag_to_jansky = 10**(-0.4*(mag+48.6))/10**-23
     
-    jansky_to_fluxdens = mag_to_jansky*1/(3.34*10**4)*1/wave**2
+    jansky_to_fluxdens = mag_to_jansky*1/(3.34*10**4)*1/pivots**2
 
     ejansky_to_fluxdens = emag*jansky_to_fluxdens*2.5/np.log(10)
 
-    return jansky_to_fluxdens,ejansky_to_fluxdens
+    fluxdens = np.c_[pivots.tolist(),jansky_to_fluxdens.tolist(),ejansky_to_fluxdens.tolist()]
+
+
+    return fluxdens
 
 
 def load_telluric_lines(threshold = 0.95):
