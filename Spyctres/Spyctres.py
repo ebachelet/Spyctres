@@ -11,10 +11,17 @@ import speclite.filters
 import speclite
 import scipy.interpolate as si
 
+from astropy.table import QTable
+from astropy.coordinates import SkyCoord, solar_system, EarthLocation, ICRS
+from astropy.coordinates import UnitSphericalRepresentation, CartesianRepresentation
 
 import stsynphot
 from synphot import units, SourceSpectrum
 from synphot.models import BlackBodyNorm1D
+
+
+
+VEGA = SourceSpectrum.from_vega()
 
 UAS_TO_RAD = 180*3600*10**6/np.pi
 
@@ -29,12 +36,77 @@ class BlackBody(object):
     
         lamb = Lambda.value
 
-        c1 = 1.1910429723971884e-16*10**50 #Angstrom to meter^-5
-        c2 = constantes.h.value*constantes.c.value/(lamb*constantes.k_B.value*self.temperature)*10**10
-        bb = c1/(lamb)**5/(np.exp(c2)-1)
+        c1 = 1.1910429723971885e+34 #Angstrom to meter^-5
+        c2 = 0.014387768775039337/(lamb*self.temperature)*10**10
+        c3 = lamb**4*(np.exp(c2)-1)
+        bb = c1/c3
+        #breakpoint()
+        return bb*15.815130864774007#*Lambda.value#photlam, 10**-7*np.pi/(1.98644746*10**-8/Lambda.value)
         
-        return bb*15.815130864774007*Lambda.value#photlam, 10**-7*np.pi/(1.98644746*10**-8/Lambda.value)
+def velocity_correction(spectrum,velocity):
+
+    new_lambda = spectrum[:,0]*(1-velocity/constantes.c.value*1000)        
+    
+    interpol = interpolate.interp1d(spectrum[:,0],spectrum[:,1],fill_value='extrapolate')
+    
+    new_spectrum = interpol(new_lambda)
+    
+    final_spectrum = np.c_[spectrum[:,0],new_spectrum]
+    
+    return final_spectrum
+    
+    
         
+def Barycentric_velocity(time, skycoord, location=None):
+  """Barycentric velocity correction.
+  
+  Uses the ephemeris set with  ``astropy.coordinates.solar_system_ephemeris.set`` for corrections. 
+  For more information see `~astropy.coordinates.solar_system_ephemeris`.
+  
+  Parameters
+  ----------
+  time : `~astropy.time.Time`
+    The time of observation.
+  skycoord: `~astropy.coordinates.SkyCoord`
+    The sky location to calculate the correction for.
+  location: `~astropy.coordinates.EarthLocation`, optional
+    The location of the observatory to calculate the correction for.
+    If no location is given, the ``location`` attribute of the Time
+    object is used
+  
+  
+  Credit https://gist.github.com/StuartLittlefair/5aaf476c5d7b52d20aa9544cfaa936a1  
+  
+  
+  Returns
+  -------
+  vel_corr : `~astropy.units.Quantity`
+    The velocity correction to convert to Barycentric velocities. Should be added to the original
+    velocity.
+  """
+  
+#  if location is None:
+#    if time.location is None:
+#        raise ValueError('An EarthLocation needs to be set or passed '
+#                         'in to calculate bary- or heliocentric '
+#                         'corrections')
+#    location = time.location
+#    
+  # ensure sky location is ICRS compatible
+  if not skycoord.is_transformable_to(ICRS()):
+    raise ValueError("Given skycoord is not transformable to the ICRS")
+  
+  ep, ev = solar_system.get_body_barycentric_posvel('earth', time) # ICRS position and velocity of Earth's geocenter
+  #op, ov = location.get_gcrs_posvel(t) # GCRS position and velocity of observatory
+  # ICRS and GCRS are axes-aligned. Can add the velocities
+  #velocity = ev + ov # relies on PR5434 being merged
+  
+  velocity = ev
+  # get unit ICRS vector in direction of SkyCoord
+  sc_cartesian = skycoord.icrs.represent_as(UnitSphericalRepresentation).represent_as(CartesianRepresentation)
+  return sc_cartesian.dot(velocity).to(u.km/u.s) # similarly requires PR5434
+  
+
         
 def get_element_lines(wavelength_range = [2000,10000], require_elements=['H','HE','HG','CA','FE','MG','NA','O'],intensity_threshold=50):
 
@@ -79,9 +151,141 @@ def plot_element_lines(figure_axe,lines):
         figure_axe.text(float(line[0]),0.8,line[1]+line[2],rotation='vertical',fontdict=dict(color='grey',fontsize=10),bbox=dict(alpha=0.0,facecolor='w',edgecolor='w'))
         
 
+def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93models'):
+
+    theta_s, Av, v_radial, log10_Teff, abundance,logg, = params[:6]
+    Teff = 10**log10_Teff
+    try:
+        model_spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
+    except:
+        return np.inf
+
+    normalisation = (10**theta_s/UAS_TO_RAD)**2    
+  
+    try:
+    
+        rescale_flux_parameters = [params[6+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_flux_parameters = None 
+
+    try:
+    
+        rescale_errors_parameters = [params[6+len(spectras)+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_errors_parameters = None    
+    
+
+    chichi = 0
+    
+    for ind,spectrum in enumerate(spectras.keys()):
+
+        data = spectras[spectrum]['spectrum']
+        magnification = spectras[spectrum]['magnification']
+        SED = spectras[spectrum]['SED']
+        
+        wave = data[:,0] 
+        
+        
+        model_flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
+        
+        speed_correction = spectras[spectrum]['barycentric_velocity'].value 
+        shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+        #sbreakpoint()
+        #shifted_flux= np.c_[wave,model_flux]
+        absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+        shifted_flux[:,1] *= normalisation/absorption*magnification
+    
+        shifted_flux_norm = np.copy(shifted_flux)
+        
+        if rescale_flux_parameters is not None:
+        
+            rescale_flux = 10**rescale_flux_parameters[ind]
+            shifted_flux_norm[:,1] /= rescale_flux
+       
+        if telluric_lines_mask is not None:
+        
+            mask = telluric_lines_mask(data[:,0]).astype(bool)
+            
+        else:
+        
+            mask = [False]*len(data)
+       
+        mask_errors = (data[:,2] != 0) & np.isfinite(data[:,2]) 
+        
+        mask_final = ~mask & mask_errors
+        #breakpoint()
+        if rescale_errors_parameters is not None:
+        
+            rescale_errors = 10**rescale_errors_parameters[ind]
+            errors = data[:,2]*rescale_errors
+        else:
+             errors = data[:,2]
+        residuals = (data[mask_final,1]-shifted_flux_norm[mask_final,1])**2/errors[mask_final]**2+2*np.log(errors[mask_final])+np.log(2*np.pi)
+
+        chichi += np.sum(residuals)
+        #chichi=0
+        #breakpoint()
+        for ind_sed,line_sed in enumerate(SED):
+       
+            filt,ab_mag,err_ab_mag = line_sed
+            
+            wave = filt._wavelength
+            absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+            model_flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
+            shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+            shifted_flux[:,1] *= normalisation/absorption*magnification
+            predicted_mag_ab = filt.get_ab_magnitude(shifted_flux[:,1],wave)
+            
+            #flux_obs = 10**((27.4-ab_mag)/2.5)
+            #flux_pred = 10**((27.4-predicted_mag_ab)/2.5)
+
+            chichi += (ab_mag-predicted_mag_ab)**2/err_ab_mag**2
+            #chichi += (flux_obs-flux_pred)**2/(flux_obs*err_ab_mag)**2
+            #breakpoint()
+            #if np.abs(ab_mag-predicted_mag_ab)>0.1:
+            #    return np.inf
+    
+    return 0.5*chichi    
 
 
+def model_spectra(params,spectras=[],catalog='k93models'):
+    
+    theta_s, Av, v_radial, log10_Teff, abundance,logg = params[:6]
+    Teff = 10**log10_Teff
+    
+    try:
+        model_spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
+    except:
+        return np.inf
 
+    normalisation = (10**theta_s/UAS_TO_RAD)**2   
+    spectra = []
+    
+    
+    for ind,spectrum in enumerate(spectras.keys()):
+
+        data = spectras[spectrum]['spectrum']
+        magnification = spectras[spectrum]['magnification']
+        wave = data[:,0] 
+        
+        
+        model_flux = np.array(model_spectrum(wave*u.AA)*1.99*10**-8/data[:,0])
+        
+        speed_correction = spectras[spectrum]['barycentric_velocity'].value 
+        shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+
+        absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+        shifted_flux[:,1] *= normalisation/absorption*magnification
+       
+       
+        spectra.append(shifted_flux)
+        
+    return spectra
+    
 def star_model_new(parameters,wave,catalog='k93models'):
 
 
@@ -97,10 +301,12 @@ def star_model_new(parameters,wave,catalog='k93models'):
     abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
     flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
     spectrum = flux*normalisation/abso
-
-    model = np.c_[np.array(wave),np.array(spectrum),[1]*len(spectrum)]
+    absolute_spectrum =  flux*normalisation
     
-    return model
+    model = np.c_[np.array(wave),np.array(spectrum),[1]*len(spectrum)]
+    absolute_model = np.c_[np.array(wave),np.array(absolute_spectrum),[1]*len(spectrum)]
+
+    return model,absolute_model
             
 
 def star_model(parameters,catalog='k93models'):
@@ -156,185 +362,6 @@ def sed_chichi_new(spectrum,sed,magnification=1):
         chichi += (mag_ab-predicted_mag_ab)**2/emag_ab**2
         
     return chichi
-
-def fit_spectra_one_star(spectras=[],seds=[],magnifications=[],catalog='k93models'):
-
-    pass
-    
-def fit_spectra_one_star_chichi(params,spectras=[],seds=[],magnifications=[],telluric_lines_mask=None,catalog='k93models'):
-
-    star_parameters = params[:5]
-    
-    model_spectrum = star_model(star_parameters,catalog=catalog)
-
-    if model_spectrum is None:
-        
-        return np.inf
-   
-    try:
-    
-        rescale_flux_parameters = [params[5+i] for i in range(len(spectras))]
-        
-    except:
-    
-        rescale_flux_parameters = None 
-
-    try:
-    
-        rescale_errors_parameters = [params[5+len(spectras)+i] for i in range(len(spectras))]
-        
-    except:
-    
-        rescale_errors_parameters = None    
-    
-
-    chichi = 0
-    
-    for ind,data in enumerate(spectras):
-
-        tobin = np.copy(model_spectrum)
-        tobin[:,1] *= magnifications[ind] 
-        
-        if rescale_flux_parameters is not None:
-        
-            rescale_flux = 10**rescale_flux_parameters[ind]
-            tobin[:,1] /= rescale_flux
-        
-        mask = (tobin[:,0]>=data[0,0]) & (tobin[:,0]<=data[-1,0])
-        
-        if  tobin[mask].shape == data.shape:
-        
-            bin_spec = tobin[mask]
-        
-        else:
-            
-            bin_spec,cov = bin_spectrum(tobin,data[:,0])
-        
-        if telluric_lines_mask is not None:
-        
-            mask = telluric_lines_mask(data[:,0]).astype(bool)
-            
-        else:
-        
-            mask = [True]*len(data)
-        
-        errors = data[mask,2]**2
-        
-        if rescale_errors_parameters is not None:
-        
-            rescale_errors = 10**rescale_errors_parameters[ind]
-            errors *= rescale_errors**2
-       
-        res = ((data[mask,1]-bin_spec[mask,1]))**2/errors+np.log(errors)+np.log(2*np.pi)
-
-        chichi += np.sum(res)
-     
-    chichi_seds = 0    
-    for ind,sed in enumerate(seds):
-        
-        sed = seds[ind]
-        tobin = np.copy(model_spectrum)
-        tobin[:,1] *= magnifications[ind]    
-       
-        chichi_seds += sed_chichi(tobin,sed)
-            
-    chichi += chichi_seds
-            
-    return chichi      
-            
-
-def fit_spectra_one_star_chichi_new(params,spectras=[],seds=[],magnifications=[],telluric_lines_mask=None,catalog='k93models'):
-
-    theta_s, Av,Teff,abundance,logg = params[:5]
-    
-    #model_spectrum = star_model(star_parameters,catalog=catalog)
-    try:
-        model_spectrum = stsynphot.grid_to_spec(catalog, Teff,abundance,logg) 
-    except:
-        return np.inf
-
-    normalisation = (10**theta_s/UAS_TO_RAD)**2    
-  
-    try:
-    
-        rescale_flux_parameters = [params[5+i] for i in range(len(spectras))]
-        
-    except:
-    
-        rescale_flux_parameters = None 
-
-    try:
-    
-        rescale_errors_parameters = [params[5+len(spectras)+i] for i in range(len(spectras))]
-        
-    except:
-    
-        rescale_errors_parameters = None    
-    
-
-    chichi = 0
-    
-    for ind,data in enumerate(spectras):
-
-        flux = np.array(model_spectrum(data[:,0]*u.AA)*1.99*10**-8/data[:,0])
-    
-        wave = data[:,0] 
-        abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
-        flux *= normalisation/abso
-        
-
-   
-        if rescale_flux_parameters is not None:
-        
-            rescale_flux = 10**rescale_flux_parameters[ind]
-            flux /= rescale_flux
-       
-        if telluric_lines_mask is not None:
-        
-            mask = telluric_lines_mask(data[:,0]).astype(bool)
-            
-        else:
-        
-            mask = [True]*len(data)
-        
-        errors = data[mask,2]**2
-        
-        if rescale_errors_parameters is not None:
-        
-            rescale_errors = 10**rescale_errors_parameters[ind]
-            errors *= rescale_errors**2
-       
-        res = ((data[mask,1]-flux))**2/errors+np.log(errors)+np.log(2*np.pi)
-
-        chichi += np.sum(res)
-     
-    chichi_seds = 0    
-    for ind,sed in enumerate(seds):
-        
-        sed = seds[ind]    
-        
-        chi = 0
-        for obs in sed:
-        
-            filt = obs[0]
-            mag_ab = obs[1]
-            emag_ab = obs[2]
-            
-            wave = filt._wavelength*u.AA
-            flux = np.array(model_spectrum(wave)*1.99*10**-8/wave)
-             
-            abso = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
-            flux *= normalisation/abso
-            predicted_mag_ab = filt.get_ab_magnitude(flux,wave)
-            #breakpoint()
-            chi += (mag_ab-predicted_mag_ab)**2/emag_ab**2
-
-        chichi_seds += chi
-
-    chichi += chichi_seds
-            
-    return chichi      
-
 
 
 
@@ -625,6 +652,19 @@ def bin_spectrum(data,lambda_ref):
 
     return np.c_[lambda_ref[mask],flux,eflux],final_covariance
 
+def define_ROMAN_filters():
+
+    ROMAN_FILTERS_RESPONSE = np.loadtxt( os.path.dirname(__file__)+'/data/Roman_Filters.dat')
+
+    ROMAN_FILTERS_RESPONSE =  QTable(ROMAN_FILTERS_RESPONSE, names=['wavelength']+['F062', 'F087', 'F106', 'F129', 'F158', 'F184', 'F146', 'F213'])
+
+    filter_names = [i for i in ROMAN_FILTERS_RESPONSE.columns.keys()][1:]
+    for key in filter_names:
+    
+         filt = speclite.filters.FilterResponse(wavelength = 
+ROMAN_FILTERS_RESPONSE['wavelength']*10**4*u.AA , response =
+ROMAN_FILTERS_RESPONSE[key], meta=dict(group_name='ROMAN', band_name=key))
+
 
 def define_2MASS_filters():
 
@@ -738,7 +778,7 @@ def load_telluric_lines(threshold = 0.95):
 #    return telluric_lines,np.c_[wave,telluric_mask]
 
     
-def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filters=None,gaia_filters=None):
+def SED_offset(sed,spectrum):
     #breakpoint()
     sorted_spec = spectrum[spectrum[:,0].argsort(),]
     unique,unique_index = np.unique(sorted_spec[:,0],return_index=True)
@@ -747,40 +787,21 @@ def SED_offset(sed,spectrum,bessel_filters=None,sdss_filters=None,twomass_filter
 
 
     interp_spec = interpolate.interp1d(unique_spec[:,0],unique_spec[:,1],bounds_error = False,fill_value =0)
-    #wave_temp = np.arange(np.min(np.round(spectrum[:,0])+1),np.max(np.round(spectrum[:,0])-1))
-    #spec_temp = interp_spec(wave_temp) 
+    
     waves_center = []
     spec_mags_ab = []
     wave_range = []
-    for ind,fil in enumerate(sed[:,-1]):
+    for ind,fil in enumerate(sed[:,0]):
         
-        if 'Bessel' in fil:
-
-            templates = bessel_filters
-
-        if 'SDSS' in fil:
-
-            templates = sdss_filters
-
-        if 'MASS' in fil:
-
-            templates = twomass_filters
-
-        if 'GAIA' in fil:
-
-            templates = gaia_filters
-
-        list_of_bands = [templates[i].meta['band_name'] for i in range(len(templates))]
-
-        index = np.where(fil.split('_')[-1] == np.array(list_of_bands))[0][0]
+        
         #import pdb; pdb.set_trace()   
         try:
-             spec_mag_ab = templates[index].get_ab_magnitude(unique_spec[:,1]* (u.erg / u.cm**2 / u.s / u.Angstrom),unique_spec[:,0]*u.Angstrom)
+             spec_mag_ab = fil.get_ab_magnitude(unique_spec[:,1]* (u.erg / u.cm**2 / u.s / u.Angstrom),unique_spec[:,0]*u.Angstrom)
         except:
-             spec_mag_ab = templates[index].get_ab_magnitude(interp_spec( templates[index].wavelength)* (u.erg / u.cm**2 / u.s / u.Angstrom),templates[index].wavelength*u.Angstrom)
-        waves_center.append(templates[index].effective_wavelength.value)
+             spec_mag_ab = fil.get_ab_magnitude(interp_spec( fil.wavelength)* (u.erg / u.cm**2 / u.s / u.Angstrom),fil.wavelength*u.Angstrom)
+        waves_center.append(fil.effective_wavelength.value)
         spec_mags_ab.append(spec_mag_ab)
-        wave_range.append(templates[index].wavelength[-1]-  templates[index].wavelength[0])
+        wave_range.append(fil.wavelength[-1]-  fil.wavelength[0])
         #import pdb; pdb.set_trace()   
     res =   spec_mags_ab-sed[:,1].astype(float)
 
@@ -818,10 +839,11 @@ def derive_AB_correction(filters):
 
     correction = []
     
-
+    wave = np.arange(1000,50000,1)
+    
     for fil in filters:
 
-        correction.append(fil.get_ab_magnitude(PS.Vega.flux,PS.Vega.wave))
+        correction.append(fil.get_ab_magnitude(VEGA(wave).value*1.98644746*10**-8/wave,wave))
         
     return np.array(correction)
 
