@@ -1,96 +1,145 @@
-from astropy.io import fits
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-os.environ['PYSYN_CDBS'] = '/home/ebachelet/cdbs/'
+
+os.environ['PYSYN_CDBS'] =  '/home/etienne/cdbs/'
 
 
 import scipy.optimize as so
-from scipy.stats import rv_continuous
-from matplotlib.patches import Ellipse
+
 import speclite.filters
 import speclite
 
+from astropy.io import fits
 import astropy.units as u
 import astropy.constants as constantes
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.time import Time
 
 from Spyctres import Spyctres
 
+def objective_function(params,spectrums,mask,catalog,bounds):
+    try:
+        for ind,bound in enumerate(bounds):
 
-spectra = {}
-uas_to_rad = 180*3600*10**6/np.pi
-solar_radii_to_parsec = 2.254*10**-8
+            if  (params[ind]<bound[0]) | (params[ind]>bound[1]):
+                return -np.inf
+
+        chichi = Spyctres.fit_spectra_chichi(params,spectrums,mask,catalog)
+
+        return -chichi
+
+    except:
+        return -np.inf
 
 
+
+
+#Initializing
 Spyctres.define_2MASS_filters()
 Spyctres.define_GAIA_filters()
+
 twomass_filters = speclite.filters.load_filters('MASS-J', 'MASS-H','MASS-K')
 sdss_filters = speclite.filters.load_filters('sdss2010-*')
 bessel_filters = speclite.filters.load_filters('bessell-*')
-gaia_filters = speclite.filters.load_filters('GAIA-G')
+
+gaia_filters = speclite.filters.load_filters('gaiadr2-*')
 
 
 
+#Event basics
+
+coord = SkyCoord(ra=277.56025*u.degree, dec=-8.22021*u.degree, frame='icrs')
+momo = Spyctres.star_spectrum_new(5000,0,4.5,catalog='k93models')
+wave = momo._model.points[0]
+mask = (wave<24500) & (wave>4000)
+wave_ref = wave[mask]
+
+seed = [ 1.04065605e+00,  8.31050919e+00, -3.10593017e+02,  3.63938949e+00,
+        3.74264615e-05,  3.15651712e-01,  2.83040782e-01,  1.94752823e-01,
+        1.85565475e+00,  1.87596383e+00]
 
 #Adding new spectra
+
+
 
 spectra = {}
 SEDS=[]
 ABS = []
 magnifications = []
 
-# SALT, time obs 06/06/2020, magnification ~ 1.8
-magnification = 1.8
-spectrum_SALT1 = np.loadtxt('/home/ebachelet/Work/Microlensing/OMEGA/Gaia20bof/Spectra/SALT_06_06_2020.dat')
-spectrum_SALT1 = np.c_[spectrum_SALT1,[10**-16]*len(spectrum_SALT1)]
+
+spec = './Gaia18ajz_allspec/Gaia18ajz_NIR_20180325_IDP.fits'
+NIR = np.c_[[fits.open(spec)[1].data['WAVE'].astype(float)[0],fits.open(spec)[1].data['FLUX'][0].astype(float),fits.open(spec)[1].data['ERR'][0].astype(float)]].T
+
+spec = './Gaia18ajz_allspec/Gaia18ajz_VIS_20180325_IDP.fits'
+VIS =np.c_[[fits.open(spec)[1].data['WAVE'].astype(float)[0],fits.open(spec)[1].data['FLUX'][0].astype(float),fits.open(spec)[1].data['ERR'][0].astype(float)]].T
+
+spec = './Gaia18ajz_allspec/Gaia18ajz_UVB_20180325_IDP.fits'
+UVB = np.c_[[fits.open(spec)[1].data['WAVE'].astype(float)[0],fits.open(spec)[1].data['FLUX'][0].astype(float),fits.open(spec)[1].data['ERR'][0].astype(float)]].T
 
 
 
-wave_obs = [7472,4670,6405]#,12355,16458,21603]#Angstrom
-#wave_obs = [5536.14809278,8086.39904467,6773.70451294]
-ab_corrections = Spyctres.derive_AB_correction([sdss_filters[1],sdss_filters[3],gaia_filters[0]])
-#ab_corrections = [0.37,-0.08,0.1]#,0.91,1.39,1.85] #http://www.astro.osu.edu/~martini/usefuldata.html
-obs_mags = [15,16,15.15]#,11.849-2.5*np.log10(magnification),10.862-2.5*np.log10(magnification),10.513-2.5*np.log10(magnification)] # J,H,K are faked from Vizier
-obs_emags = [0.1,0.1,0.1]#,0.1,0.1]
-filters = ['SDSS_i','SDSS_g','GAIA_G']#,'MASS_J','MASS_H','MASS_K']
+spectrum_XShooter = np.r_[UVB,VIS,NIR]
+spectrum_XShooter[:,0] *= 10#nm to Angstrom
 
 
-sed = np.c_[wave_obs,obs_mags,obs_emags,filters]
-SEDS.append(sed)
-ABS.append(ab_corrections)
-
-fake_spectrum = Spyctres.star_spectrum( 5.28401032e+03, -7.60922125e-01,
-        3.48377479e+00,catalog='k93models')
-wave = np.array(fake_spectrum.wave) #Angstrom 
-step = 50 #Angstrom
-global_mask = (wave>spectrum_SALT1[0,0]+step) & (wave<spectrum_SALT1[-1,0]-step)
-wave = wave[global_mask]
-
-
-bin_spec,cov = Spyctres.bin_spectrum(spectrum_SALT1,np.array(wave))
+bin_spec,cov = Spyctres.bin_spectrum(spectrum_XShooter,wave_ref)
 SNR = bin_spec[:,1]/bin_spec[:,2]
 #offset1 = 10**(offset1(bin_spec[:,0])/2.5)
-data_fit = np.c_[bin_spec[:,0],bin_spec[:,1],bin_spec[:,1]/SNR]
-data_fit1 = np.c_[bin_spec[:,0],bin_spec[:,1],bin_spec[:,1]/SNR]
+spectrum_XShooter  = np.c_[bin_spec[:,0],bin_spec[:,1],bin_spec[:,1]/SNR]
+#breakpoint()
+
+spectrum_XShooter = spectrum_XShooter[spectrum_XShooter[:,0].argsort(),]
+spectrum_XShooter = spectrum_XShooter[np.unique(spectrum_XShooter[:,0],return_index=True)[1]]
+
+mask = (spectrum_XShooter[:,1]>0) & (spectrum_XShooter[:,2]>0) #& (spectrum_XShooter[:,1]/spectrum_XShooter[:,2]>5) & (spectrum_XShooter[:,1]<10**-14)
+spectrum_XShooter = spectrum_XShooter[mask]
 
 
-SED_flux,SED_mag = Spyctres.derive_SED_from_obs_mag(wave_obs,obs_mags,obs_emags,ab_corrections,filters)
-offset1,eoffset1,quant1,equant1 = Spyctres.SED_offset(SED_mag,bin_spec,bessel_filters,sdss_filters,twomass_filters,gaia_filters)
-spectra['SALT_06_06_2020'] = data_fit
-magnifications.append(magnification)
+spectra['XShooter_25_03_2018'] = {}
+spectra['XShooter_25_03_2018']['spectrum'] = spectrum_XShooter
+spectra['XShooter_25_03_2018']['JD'] = Time(2458202.86309,format='jd')
+spectra['XShooter_25_03_2018']['magnification'] = 4.93
+spectra['XShooter_25_03_2018']['barycentric_velocity']  = Spyctres.Barycentric_velocity(spectra['XShooter_25_03_2018']['JD'],coord)
+spectra['XShooter_25_03_2018']['SED'] = [[gaia_filters[1],17.69,0.1],[bessel_filters[4],16.257+0.45,0.1]]
+offset1 = Spyctres.SED_offset(np.array(spectra['XShooter_25_03_2018']['SED']),spectrum_XShooter)
 
 
 #Find telluric lines
-
-telluric_lines = Spyctres.load_telluric_lines()
-telluric_lines,telluric_mask = Spyctres.telluric_lines(telluric_lines,fake_spectrum.wave,threshold=0.95)
+telluric_lines,telluric_mask = Spyctres.load_telluric_lines(0.90)
 
 # Plot
 plt.yscale('log')
-plt.errorbar(data_fit[:,0],data_fit[:,1],data_fit[:,2],fmt='.',label='SALT')
-plt.fill_between(telluric_lines[:,0],0,2*data_fit[:,1].max(),where=telluric_mask,color='grey',alpha=0.25)
+plt.errorbar(spectrum_XShooter[:,0], spectrum_XShooter[:,1], spectrum_XShooter[:,2],fmt='.',label='SALT')
+plt.fill_between(wave_ref,0,1,where=telluric_mask(wave_ref),color='grey',alpha=0.25)
 plt.show()
-import pdb; pdb.set_trace()
 
+
+#Fit
+bound = [[-2,2],[4,10],[-2000,2000],[3,4],[-0.9,-0.3],[0.0,3.0],[np.log10(0.5*offset1[0]),np.log10(1.5*offset1[0])],[np.log10(0.5*offset2[0]),np.log10(1.5*offset2[0])],[-2,2],[-2,2]]
+
+
+res = so.differential_evolution(Spyctres.fit_spectra_chichi, bound, args=(spectra,telluric_mask,'k93models'),disp=True,popsize=2,workers=4,polish=False)
+
+import emcee
+import multiprocessing as mul
+nwalkers = 2*len(seed)
+ndim = len(seed)
+nchains = 10000
+
+objective_function(seed,spectra,telluric_mask,'k93models',bound)
+
+with mul.Pool(processes=8) as pool:
+
+
+    pos = seed +  len(seed)*[1] * np.random.randn(nwalkers, len(seed))*10**-3
+            
+    nwalkers, ndim = pos.shape    
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, objective_function, args=(spectra,telluric_mask,'k93models',bound),pool = pool)
+    final_positions, final_probabilities, state = sampler.run_mcmc(pos, nchains, progress=True)
+
+   breakpoint()
 
 

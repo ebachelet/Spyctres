@@ -2,7 +2,7 @@ from setuptools import setup, find_packages, Extension
 
 setup(
     name="Spyctres",
-    version="0.2.0",
+    version="0.3.0",
     description="It fits your spectra!",
     keywords='Spectroscopy',
     author="Etienne Bachelet",
