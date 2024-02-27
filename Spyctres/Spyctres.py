@@ -45,7 +45,7 @@ class BlackBody(object):
         
 def velocity_correction(spectrum,velocity):
 
-    new_lambda = spectrum[:,0]*(1-velocity/constantes.c.value*1000)        
+    new_lambda = spectrum[:,0]*(1+velocity/constantes.c.value*1000)        
     
     interpol = interpolate.interp1d(spectrum[:,0],spectrum[:,1],fill_value='extrapolate')
     
