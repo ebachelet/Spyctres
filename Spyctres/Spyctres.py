@@ -10,6 +10,9 @@ import os
 import speclite.filters
 import speclite
 import scipy.interpolate as si
+from astropy.table import QTable
+import pkg_resources
+
 
 from astropy.table import QTable
 from astropy.coordinates import SkyCoord, solar_system, EarthLocation, ICRS
@@ -24,6 +27,13 @@ from synphot.models import BlackBodyNorm1D
 VEGA = SourceSpectrum.from_vega()
 
 UAS_TO_RAD = 180*3600*10**6/np.pi
+
+ISOCHRONES_HEADER = ['Fe', 'logAge', 'logMass', 'logL', 'logTe', 'logg', 'mbolmag',
+                     'Umag', 'Bmag', 'Vmag', 'Rmag', 'Imag', 'Jmag', 'Hmag', 'Kmag',
+                     'umag', 'gmag', 'rmag', 'imag', 'zmag', 'Gmag', 'G_BPmag',
+                     'G_RPmag', 'F062mag', 'F087mag', 'F106mag', 'F129mag', 'F158mag',
+                     'F184mag', 'F146mag', 'F213mag']
+
 
 class BlackBody(object):
 
@@ -42,6 +52,42 @@ class BlackBody(object):
         bb = c1/c3
         #breakpoint()
         return bb*15.815130864774007#*Lambda.value#photlam, 10**-7*np.pi/(1.98644746*10**-8/Lambda.value)
+
+def load_isochrones():
+
+    resource_path = '/'.join(('data', 'Bressan_Isochrones.dat'))
+    template = pkg_resources.resource_filename('pyLIMA', resource_path)
+
+    ISO = np.loadtxt(template, dtype=str)[1:].astype(float)
+    
+    ISO[:, 2] = np.log10(ISO[:, 2])
+
+    ISO = QTable(ISO, names=ISOCHRONES_HEADER)
+    
+    return ISO
+
+def plot_MCMC_chains_in_HR(mcmc_chains,isochrones):
+
+    #mask_age = isochrones['logAge']>=9\
+
+    for age in np.unique(isochrones['logAge'].value)[::3]:
+    
+        mask = (isochrones['logAge'].value==age) & (np.abs(isochrones['Fe']-np.median(mcmc_chains[:,:,4]))<0.1)
+        
+        plt.scatter(isochrones['logTe'].value[mask],isochrones['logg'].value[mask],label=str(age))
+   
+    
+    
+    #plt.scatter(mcmc_chains[:,:,3],mcmc_chains[:,:,5],c='k',s=1,label='MCMC chains')
+    plt.errorbar(np.median(mcmc_chains[:,:,3]),np.median(mcmc_chains[:,:,5]),xerr=np.std(mcmc_chains[:,:,3]),yerr=np.std(mcmc_chains[:,:,5]),fmt='.k',label='MCMC chains')
+    plt.legend()
+    plt.gca().invert_yaxis()
+    plt.gca().invert_xaxis()
+    plt.xlabel(r'$\log_{10}(T_{eff})$') 
+    plt.ylabel(r'$log g$')
+     
+    plt.show()
+    
         
 def velocity_correction(spectrum,velocity):
 
@@ -148,7 +194,13 @@ def plot_element_lines(figure_axe,lines):
     for line in lines:
 
         figure_axe.axvline(float(line[0]),linestyle=':',color='grey',alpha=0.5)
-        figure_axe.text(float(line[0]),0.8,line[1]+line[2],rotation='vertical',fontdict=dict(color='grey',fontsize=10),bbox=dict(alpha=0.0,facecolor='w',edgecolor='w'))
+        
+        import matplotlib.transforms as transforms
+
+        trans = transforms.blended_transform_factory(
+    figure_axe.transData, figure_axe.transAxes)
+    
+        figure_axe.text(float(line[0]),0.8,line[1]+line[2],rotation='vertical',fontdict=dict(color='grey',fontsize=10),bbox=dict(alpha=0.0,facecolor='w',edgecolor='w'), transform=trans)
         
 
 def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93models'):
