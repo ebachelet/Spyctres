@@ -56,7 +56,7 @@ class BlackBody(object):
 def load_isochrones():
 
     resource_path = '/'.join(('data', 'Bressan_Isochrones.dat'))
-    template = pkg_resources.resource_filename('pyLIMA', resource_path)
+    template = pkg_resources.resource_filename('Spyctres', resource_path)
 
     ISO = np.loadtxt(template, dtype=str)[1:].astype(float)
     
