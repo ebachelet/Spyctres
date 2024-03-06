@@ -53,6 +53,53 @@ class BlackBody(object):
         #breakpoint()
         return bb*15.815130864774007#*Lambda.value#photlam, 10**-7*np.pi/(1.98644746*10**-8/Lambda.value)
 
+
+def MCMC_photometric_distances(mcmc_chains,isochrones,filters):
+
+
+    Av = mcmc_chains[:,:,1].ravel()
+    Teff = mcmc_chains[:,:,3].ravel()
+    Fe = mcmc_chains[:,:,4].ravel()
+    logg = mcmc_chains[:,:,5].ravel()
+
+    absorptions = [np.sum(filt.response*Wang_absorption_law(1,filt.wavelength / 10000)) / np.sum(filt.response) for filt in filters[:,0]]
+    distances_filters = []
+    mags_abs = []
+    
+    for j in range(len(Av[::100])):
+    
+        dist_iso = (Teff[j]-isochrones['logTe'])**2+(logg[j]-isochrones['logg'])**2+(Fe[j]-isochrones['Fe'])**2
+        index_iso = dist_iso.argmin()
+        
+        distances = []
+        mags = []
+        
+        for ind,fil in enumerate(filters):
+        
+            mag_obs = np.random.normal(filters[ind][2],filters[ind][3])
+            mag_abs = isochrones[index_iso][fil[1]]
+
+            dist_modulus = mag_obs-mag_abs-Av[j]*absorptions[ind]
+            
+            dist = 10**((dist_modulus+5)/5)
+            
+            distances.append(dist/1000)
+        
+            mags.append(mag_abs)
+        
+        mags_abs.append(mags)               
+        distances_filters.append(distances)
+        
+    distances_filters = np.array(distances_filters)
+    mags_abs = np.array(mags_abs)
+
+    
+    return np.c_[[distances_filters,mags_abs]]        
+   
+
+   
+            
+
 def load_isochrones():
 
     resource_path = '/'.join(('data', 'Bressan_Isochrones.dat'))
@@ -74,7 +121,7 @@ def plot_MCMC_chains_in_HR(mcmc_chains,isochrones):
     
         mask = (isochrones['logAge'].value==age) & (np.abs(isochrones['Fe']-np.median(mcmc_chains[:,:,4]))<0.1)
         
-        plt.scatter(isochrones['logTe'].value[mask],isochrones['logg'].value[mask],label=str(age))
+        plt.scatter(isochrones['logTe'].value[mask],isochrones['logg'].value[mask],label='log(Age)='+str(age))
    
     
     
