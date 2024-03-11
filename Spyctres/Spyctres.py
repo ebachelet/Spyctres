@@ -54,7 +54,7 @@ class BlackBody(object):
         return bb*15.815130864774007#*Lambda.value#photlam, 10**-7*np.pi/(1.98644746*10**-8/Lambda.value)
 
 
-def MCMC_photometric_distances(mcmc_chains,isochrones,filters):
+def MCMC_photometric_distances(mcmc_chains,isochrones,filters,step = 1):
 
 
     Av = mcmc_chains[:,:,1].ravel()
@@ -65,14 +65,16 @@ def MCMC_photometric_distances(mcmc_chains,isochrones,filters):
     absorptions = [np.sum(filt.response*Wang_absorption_law(1,filt.wavelength / 10000)) / np.sum(filt.response) for filt in filters[:,0]]
     distances_filters = []
     mags_abs = []
+    iso_index = []
     
-    for j in range(len(Av[::100])):
+    for j in range(len(Av[::step])):
     
         dist_iso = (Teff[j]-isochrones['logTe'])**2+(logg[j]-isochrones['logg'])**2+(Fe[j]-isochrones['Fe'])**2
         index_iso = dist_iso.argmin()
         
         distances = []
         mags = []
+        indexes = []
         
         for ind,fil in enumerate(filters):
         
@@ -86,15 +88,18 @@ def MCMC_photometric_distances(mcmc_chains,isochrones,filters):
             distances.append(dist/1000)
         
             mags.append(mag_abs)
-        
+            
+            indexes.append(index_iso)
+            
         mags_abs.append(mags)               
         distances_filters.append(distances)
+        iso_index.append(indexes)
         
     distances_filters = np.array(distances_filters)
     mags_abs = np.array(mags_abs)
-
+    iso_index = np.array(iso_index).astype(int)
     
-    return np.c_[[distances_filters,mags_abs]]        
+    return np.c_[[distances_filters,mags_abs,iso_index]]        
    
 
    
@@ -351,6 +356,111 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
     return 0.5*chichi    
 
 
+def fit_spectra_with_constant_star_chichi(params,star_model,spectras=[],telluric_lines_mask=None):
+
+    log_D_s,log_Mass, Av, v_radial = params[:4]
+    Teff,Fe,logg = star_model[1]
+    
+    try:
+        model_spectrum = star_model[0] 
+    except:
+        return np.inf
+
+    radius = 10**((log_Mass-logg+4.4374)/2)
+    theta_s = radius/10**log_D_s*4.65066
+    
+    normalisation = (theta_s/UAS_TO_RAD)**2    
+  
+    try:
+    
+        rescale_flux_parameters = [params[4+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_flux_parameters = None 
+
+    try:
+    
+        rescale_errors_parameters = [params[4+len(spectras)+i] for i in range(len(spectras))]
+        
+    except:
+    
+        rescale_errors_parameters = None    
+    
+
+    chichi = 0
+    
+    for ind,spectrum in enumerate(spectras.keys()):
+
+        data = spectras[spectrum]['spectrum']
+        magnification = spectras[spectrum]['magnification']
+        SED = spectras[spectrum]['SED']
+        
+        wave = data[:,0] 
+        
+        
+        model_flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
+        
+        speed_correction = spectras[spectrum]['barycentric_velocity'].value 
+        shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+        #sbreakpoint()
+        #shifted_flux= np.c_[wave,model_flux]
+        absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+        #absorption = 1
+        shifted_flux[:,1] *= normalisation/absorption*magnification
+    
+        shifted_flux_norm = np.copy(shifted_flux)
+        
+        if rescale_flux_parameters is not None:
+        
+            rescale_flux = 10**rescale_flux_parameters[ind]
+            shifted_flux_norm[:,1] /= rescale_flux
+       
+        if telluric_lines_mask is not None:
+        
+            mask = telluric_lines_mask(data[:,0]).astype(bool)
+            
+        else:
+        
+            mask = [False]*len(data)
+       
+        mask_errors = (data[:,2] != 0) & np.isfinite(data[:,2]) 
+        
+        mask_final = ~mask & mask_errors
+        #breakpoint()
+        if rescale_errors_parameters is not None:
+        
+            rescale_errors = 10**rescale_errors_parameters[ind]
+            errors = data[:,2]*rescale_errors
+        else:
+             errors = data[:,2]
+        residuals = (data[mask_final,1]-shifted_flux_norm[mask_final,1])**2/errors[mask_final]**2+2*np.log(errors[mask_final])+np.log(2*np.pi)
+
+        chichi += np.sum(residuals)
+        #chichi=0
+        #breakpoint()
+        for ind_sed,line_sed in enumerate(SED):
+       
+            filt,ab_mag,err_ab_mag = line_sed
+            
+            wave = filt._wavelength
+            absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
+            model_flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
+            shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+            shifted_flux[:,1] *= normalisation/absorption*magnification
+            predicted_mag_ab = filt.get_ab_magnitude(shifted_flux[:,1],wave)
+            
+            #flux_obs = 10**((27.4-ab_mag)/2.5)
+            #flux_pred = 10**((27.4-predicted_mag_ab)/2.5)
+
+            chichi += (ab_mag-predicted_mag_ab)**2/err_ab_mag**2
+            #chichi += (flux_obs-flux_pred)**2/(flux_obs*err_ab_mag)**2
+            #breakpoint()
+            #if np.abs(ab_mag-predicted_mag_ab)>0.1:
+            #    return np.inf
+    
+    return 0.5*chichi   
+
 def model_spectra(params,spectras=[],catalog='k93models'):
     
     theta_s, Av, v_radial, log10_Teff, abundance,logg = params[:6]
@@ -563,8 +673,51 @@ def source_blend_from_flux2(specs,magnifications):
     efb = sigmas[len(specs[0]):]
 
     return fs,fb,efs,efb
+
+
+	
+def source_blend_from_flux3(specs,magnifications):
+
+    fs = []
+    fb = []
+    efs = []
+    efb = []
+
+    magnifications = np.array(magnifications)
     
-    
+    for ind,wave in enumerate(specs[0]):
+
+
+        #p,cov = np.polyfit(magnifications,[specs[i][ind,1] for i in range(len(specs))],1,w=[1/specs[i][ind,2] for i in range(len(specs))],cov=True)
+        #ffs,ffb = p
+
+        #ffs = (specs[1][ind][1]-specs[0][ind][1])/(magnifications[1]-magnifications[0])
+        #ffb = specs[0][ind][1]-ffs*magnifications[0]
+        
+        #effs = 1/np.abs(magnifications[1]-magnifications[0])*np.sqrt(specs[1][ind][2]**2+specs[0][ind][2]**2)
+        
+        fluxes = np.array([specs[i][ind,1] for i in range(len(specs))])
+        weights = np.array([1/specs[i][ind,2]**2 for i in range(len(specs))])
+        
+        weighted_mag = np.sum(weights*magnifications)/np.sum(weights)
+        weighted_flux = np.sum(weights*fluxes)/np.sum(weights)
+        
+        flux_source = np.sum(weights*(fluxes-weighted_flux)*(magnifications-weighted_mag))/np.sum(weights*(magnifications-weighted_mag)**2)
+        flux_blend = weighted_flux-flux_source*weighted_mag
+        
+        eflux_source = (1/np.sum(weights*(magnifications-weighted_mag)**2))**0.5
+        eflux_blend = (1/np.sum(weights)+weighted_mag**2/np.sum(weights*(magnifications-weighted_mag)**2))**0.5
+        
+        
+        fs.append(flux_source)
+        fb.append(flux_blend)
+        
+        efs.append(eflux_source)        
+        efb.append(eflux_blend)
+        #breakpoint()
+    return fs,fb,efs,efb
+   
+   
 def star_spectrum(Teff,abundance,logg,catalog='k93models'):
 
     spectrum = PS.Icat(catalog,Teff,abundance,logg)
