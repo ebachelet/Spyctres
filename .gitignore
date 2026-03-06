@@ -1,0 +1,11 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# Notebooks
+.ipynb_checkpoints/
