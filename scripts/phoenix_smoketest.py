@@ -37,3 +37,38 @@ lib.build_interpolator(
 
 f_mid = lib.evaluate(5050, -0.25, 4.25)
 print("Interpolated spectrum shape=", f_mid.shape, "finite=", np.isfinite(f_mid).all(), "min/max=", float(np.min(f_mid)), float(np.max(f_mid)))
+
+cache_path = "/tmp/spyctres_phoenix_cache_test.npz"
+try:
+    os.remove(cache_path)
+except OSError:
+    pass
+
+lib.build_interpolator(
+    observed_wave=wave_small,
+    teff_grid=teff_grid,
+    feh_grid=feh_grid,
+    logg_grid=logg_grid,
+    cache_path=cache_path,
+    allow_missing=False
+)
+f1 = lib.evaluate(5050, -0.25, 4.25)
+
+lib2 = PhoenixLibrary(PHOENIX_DIR, verbose=True)
+lib2.build_interpolator(
+    observed_wave=wave_small,
+    teff_grid=teff_grid,
+    feh_grid=feh_grid,
+    logg_grid=logg_grid,
+    cache_path=cache_path,
+    allow_missing=False
+)
+f2 = lib2.evaluate(5050, -0.25, 4.25)
+
+diff = f1 - f2
+max_abs = float(np.max(np.abs(diff)))
+max_rel = float(max_abs / np.max(np.abs(f1)))
+
+print("Max |Δ|:", max_abs)
+print("Max rel Δ:", max_rel)
+print("Cache allclose:", np.allclose(f1, f2, rtol=1e-6, atol=0.0))

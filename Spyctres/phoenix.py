@@ -99,6 +99,7 @@ class PhoenixLibrary(object):
                  wave_filename="WAVE_PHOENIX-ACES-AGSS-COND-2011.fits",
                  model_tag="PHOENIX-ACES-AGSS-COND-2011-HiRes",
                  verbose=True):
+        self._flux_grid = None
         self.base_dir = os.path.abspath(os.path.expanduser(base_dir))
         self.wave_filename = wave_filename
         self.model_tag = model_tag
@@ -108,7 +109,7 @@ class PhoenixLibrary(object):
         if not os.path.exists(wave_path):
             raise FileNotFoundError("PHOENIX wavelength file not found: {0}".format(wave_path))
 
-        self.phoenix_wave = fits.open(wave_path)[0].data.astype(float)
+        self.phoenix_wave = fits.getdata(wave_path).astype(float)
         self._interp = None
         self._grid = None
         self.wave = None  # the wave grid of the interpolator, usually observed_wave
@@ -125,9 +126,9 @@ class PhoenixLibrary(object):
         path = self.template_path(teff, logg, feh)
         if not os.path.exists(path):
             raise FileNotFoundError("PHOENIX template not found: {0}".format(path))
-
-        flux = fits.open(path)[0].data.astype(float)
-
+        
+        flux = fits.getdata(path).astype(float)
+        
         if wave is None:
             return self.phoenix_wave.copy(), flux
 
@@ -174,12 +175,13 @@ class PhoenixLibrary(object):
         if cache_path is not None:
             cache_path = os.path.abspath(os.path.expanduser(cache_path))
             if os.path.exists(cache_path):
-                self.load_cache(cache_path)
+                self.load_cache(cache_path, expected_wave=observed_wave)
                 return self._interp
 
         flux_grid = np.full((len(teff_grid), len(feh_grid), len(logg_grid), len(observed_wave)),
                             np.nan, dtype=float)
-
+        
+        
         for it, teff in enumerate(teff_grid):
             for iz, feh in enumerate(feh_grid):
                 for ig, logg in enumerate(logg_grid):
@@ -191,7 +193,9 @@ class PhoenixLibrary(object):
                             raise
                         if self.verbose:
                             print("Skipping missing template teff={0} feh={1} logg={2}: {3}".format(teff, feh, logg, str(e)))
-
+        
+        self._flux_grid = flux_grid
+        
         if np.isnan(flux_grid).any() and not allow_missing:
             raise RuntimeError("NaNs present in flux_grid but allow_missing=False.")
 
@@ -213,44 +217,51 @@ class PhoenixLibrary(object):
             raise RuntimeError("Interpolator not built. Call build_interpolator() first.")
         p = (float(teff), float(feh), float(logg))
         return self._interp(p)
-
-    def save_cache(self, cache_path):
-        if self._interp is None or self._grid is None or self.wave is None:
+    
+    def save_cache(self, cache_path, dtype=np.float32):
+        if self._grid is None or self.wave is None or self._flux_grid is None:
             raise RuntimeError("Nothing to save. Build interpolator first.")
+
         teff_grid, feh_grid, logg_grid = self._grid
-        # Rebuild flux_grid from the interpolator values on the grid points (safe, but potentially slow).
-        # We assume users cache right after build_interpolator, so we kept the grid during build.
-        # For zero overhead, keep flux_grid as an attribute instead.
+
+        flux = self._flux_grid
+        if dtype is not None:
+            flux = flux.astype(dtype, copy=False)
+
         np.savez_compressed(
             cache_path,
             teff_grid=np.asarray(teff_grid, dtype=float),
             feh_grid=np.asarray(feh_grid, dtype=float),
             logg_grid=np.asarray(logg_grid, dtype=float),
             wave=np.asarray(self.wave, dtype=float),
-            # The interpolator stores the values internally, so we cannot directly serialize it.
-            # Users should cache right after build_interpolator; for now we rebuild by sampling.
-            flux_grid=None,
-            base_dir=self.base_dir,
+            flux_grid=flux,
             model_tag=self.model_tag,
-            wave_filename=self.wave_filename
+            wave_filename=self.wave_filename,
         )
         if self.verbose:
-            print("Saved PHOENIX cache metadata to {0}".format(cache_path))
+            print("Saved PHOENIX cache to {0}".format(cache_path))
+    
+    def load_cache(self, cache_path, expected_wave=None):
+        d = np.load(cache_path, allow_pickle=False)
 
-    def load_cache(self, cache_path):
-        # Minimal loader: only loads grids and wave, but does not restore flux_grid yet.
-        # For now, the cache is mainly used as a “fingerprint” and metadata store.
-        # We will extend this in the next commit to store flux_grid properly.
-        d = np.load(cache_path, allow_pickle=True)
         teff_grid = d["teff_grid"].astype(float)
         feh_grid = d["feh_grid"].astype(float)
         logg_grid = d["logg_grid"].astype(float)
         wave = d["wave"].astype(float)
+        flux_grid = d["flux_grid"]
+
+        if expected_wave is not None:
+            expected_wave = _as_float_array(expected_wave)
+            if len(expected_wave) != len(wave) or not np.allclose(expected_wave, wave, rtol=0, atol=0):
+                raise ValueError("Cached wavelength grid does not match requested observed_wave.")
 
         self.wave = wave
         self._grid = (teff_grid, feh_grid, logg_grid)
+        self._flux_grid = flux_grid.astype(float, copy=False)
 
-        # Because flux_grid is not stored yet, we cannot rebuild _interp from cache alone.
-        raise NotImplementedError(
-            "Cache currently stores metadata only. Next commit will store flux_grid so cache loads fully."
-        )
+        self._interp = RegularGridInterpolator(self._grid, self._flux_grid, method="linear", bounds_error=True)
+
+        if self.verbose:
+            print("Loaded PHOENIX cache from {0}".format(cache_path))
+
+        return self._interp
