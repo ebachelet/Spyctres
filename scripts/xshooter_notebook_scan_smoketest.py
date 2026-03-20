@@ -12,7 +12,7 @@ warnings.filterwarnings(
 import numpy as np
 import matplotlib.pyplot as plt
 
-from Spyctres.io import read_spectrum, SpectrumSegment
+from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segments
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
 from Spyctres.Spyctres import load_telluric_lines
@@ -87,96 +87,6 @@ def resample_flux(w_src, f_src, w_tgt):
     )
     return np.asarray(f(w_tgt), dtype=float)
     
-    
-def clip_segment(seg, wmin=None, wmax=None, clip_left=0, clip_right=0, name_suffix=None):
-    wave = np.asarray(seg.wave, dtype=float)
-    flux = np.asarray(seg.flux, dtype=float)
-    err = None if seg.err is None else np.asarray(seg.err, dtype=float)
-    mask = np.asarray(seg.mask, dtype=bool)
-
-    keep = np.ones_like(wave, dtype=bool)
-    if wmin is not None:
-        keep &= (wave >= float(wmin))
-    if wmax is not None:
-        keep &= (wave <= float(wmax))
-
-    idx = np.where(keep)[0]
-    if idx.size == 0:
-        raise ValueError("No points remain after wavelength windowing.")
-
-    i0 = idx[0]
-    i1 = idx[-1] + 1
-
-    wave = wave[i0:i1]
-    flux = flux[i0:i1]
-    mask = mask[i0:i1]
-    if err is not None:
-        err = err[i0:i1]
-
-    if clip_left > 0 or clip_right > 0:
-        n = len(wave)
-        j0 = int(max(0, clip_left))
-        j1 = int(n - max(0, clip_right))
-        if j1 <= j0:
-            raise ValueError("Edge clipping removed all points.")
-        wave = wave[j0:j1]
-        flux = flux[j0:j1]
-        mask = mask[j0:j1]
-        if err is not None:
-            err = err[j0:j1]
-
-    name = seg.name
-    if name_suffix:
-        name = f"{seg.name}_{name_suffix}"
-
-    return SpectrumSegment(
-        wave=wave,
-        flux=flux,
-        err=err,
-        mask=mask,
-        meta=dict(seg.meta),
-        wave_medium=seg.wave_medium,
-        wave_frame=seg.wave_frame,
-        name=name,
-    )
-
-
-def make_padded_window_segments(seg, windows, pad=5.0, name_prefix=None):
-    wave = np.asarray(seg.wave, dtype=float)
-    flux = np.asarray(seg.flux, dtype=float)
-    err = None if seg.err is None else np.asarray(seg.err, dtype=float)
-    base_mask = np.asarray(seg.mask, dtype=bool)
-
-    out = []
-    for i, (lo, hi) in enumerate(windows):
-        support_lo = float(lo) - float(pad)
-        support_hi = float(hi) + float(pad)
-
-        keep = (wave >= support_lo) & (wave <= support_hi)
-        if not np.any(keep):
-            continue
-
-        fit_mask = base_mask[keep] & (wave[keep] >= float(lo)) & (wave[keep] <= float(hi))
-        name = f"{seg.name}_{name_prefix}_win{i}" if name_prefix else f"{seg.name}_win{i}"
-
-        out.append(
-            SpectrumSegment(
-                wave=wave[keep],
-                flux=flux[keep],
-                err=None if err is None else err[keep],
-                mask=fit_mask,
-                meta=dict(seg.meta),
-                wave_medium=seg.wave_medium,
-                wave_frame=seg.wave_frame,
-                name=name,
-            )
-        )
-
-    if len(out) == 0:
-        raise ValueError("No points remain after applying padded windows.")
-
-    return out
-
 
 def _build_sideband_mask(seg, wave, fit_mask, sideband_width=10.0):
     wave = np.asarray(wave, dtype=float)
@@ -547,9 +457,28 @@ def evaluate_template_on_segments(
 
     return out
     
-
+def build_parser():
+    return argparse.ArgumentParser(
+        description=(
+            "Notebook-faithful discrete PHOENIX grid scan for X-SHOOTER UVB Balmer windows.\n"
+            "This is a validation reference script, not the generic package fitter.\n"
+            "It expects a reduced X-SHOOTER UVB FITS file and a local PHOENIXv2 installation."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n"
+            "  python scripts/xshooter_notebook_scan_smoketest.py path/to/xshooter_uvb.fits\n\n"
+            "  python scripts/xshooter_notebook_scan_smoketest.py \\\n"
+            "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
+            "    --use-telluric-mask --use-barycorr \\\n"
+            "    path/to/xshooter_uvb.fits\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    
+    
 def main():
-    parser = argparse.ArgumentParser()
+    parser = build_parser()
     parser.add_argument("file", help="Input X-SHOOTER UVB FITS file")
     parser.add_argument(
         "--phoenix-dir",
@@ -587,20 +516,30 @@ def main():
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument("--verbose", type=int, default=1)
     args = parser.parse_args()
+    
+    if not os.path.isfile(args.file):
+        parser.error("Input file not found: {0}".format(args.file))
 
     if args.phoenix_dir is None:
-        raise ValueError("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
+        parser.error("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
 
+    if not os.path.isdir(args.phoenix_dir):
+        parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
+    
     seg0 = read_spectrum(args.file, instrument="xshooter")
-    seg_clip = clip_segment(
-        seg0,
+    arm = str(seg0.meta.get("arm", "")).strip().upper()
+    if arm and arm != "UVB":
+        parser.error(
+            "This script expects an X-SHOOTER UVB file, but the reader reported arm={0!r}.".format(arm)
+        )
+    seg_clip = seg0.window(
         wmin=args.wmin,
         wmax=args.wmax,
         clip_left=args.clip_left,
         clip_right=args.clip_right,
         name_suffix="fitwin",
     )
-
+    
     balmer_windows = [
         ("Hδ", 3980.0, 4220.0),
         ("Hγ", 4220.0, 4480.0),

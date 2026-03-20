@@ -1,11 +1,9 @@
 import os
+import argparse
 import tempfile
+import warnings
 import numpy as np
 
-from Spyctres.phoenix import PhoenixLibrary
-from Spyctres.fitting import fit_phoenix_full_spectrum
-from Spyctres.io import SpectrumSegment
-import warnings
 # pysynphot is legacy and emits a pkg_resources deprecation warning.
 # Suppress it in smoke-test scripts to keep output readable.
 warnings.filterwarnings(
@@ -15,9 +13,33 @@ warnings.filterwarnings(
     module=r"pysynphot.*",
 )
 
+from Spyctres.phoenix import PhoenixLibrary
+from Spyctres.fitting import fit_phoenix_full_spectrum
+from Spyctres.io import SpectrumSegment
+
+
+def build_parser():
+    return argparse.ArgumentParser(
+        description=(
+            "PHOENIX interpolator cache-rebuild smoke test.\n"
+            "This creates a synthetic spectrum, runs the fitter once to write a cache, "
+            "then runs it again with the same wavelength grid but a different Teff grid. "
+            "The second run should rebuild the cache and still succeed."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n"
+            "  python scripts/cache_rebuild_smoketest.py\n\n"
+            "  python scripts/cache_rebuild_smoketest.py \\\n"
+            "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
+            "    --cache-path /tmp/spyctres_cache_rebuild_test.npz\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
 def make_synthetic_segment(phoenix_dir):
-    # Truth close to your existing fitting smoke test
-    truth = dict(teff=5050.0, feh=-0.25, logg=4.25, rv=12.3)
+    truth = dict(teff=5050.0, feh=-0.25, logg=4.25, rv=0.0)
 
     wave = np.linspace(5000.0, 5300.0, 2000)
 
@@ -43,7 +65,7 @@ def make_synthetic_segment(phoenix_dir):
         mask=np.isfinite(noisy_flux) & np.isfinite(err) & (err > 0),
         meta={"instrument": "synthetic"},
         wave_medium="vacuum",
-        wave_frame="rest",
+        wave_frame="stellar_rest",
         name="synthetic_cache_rebuild_test",
     )
     return seg
@@ -56,7 +78,7 @@ def run_fit(seg, phoenix_dir, cache_path, teff_grid, label):
     result = fit_phoenix_full_spectrum(
         segments=[seg],
         phoenix_lib=lib,
-        p0=(5050.0, -0.25, 4.25, 12.0),
+        p0=(5050.0, -0.25, 4.25, 0.0),
         teff_grid=np.asarray(teff_grid, dtype=float),
         feh_grid=np.array([-0.5, 0.0]),
         logg_grid=np.array([4.0, 4.5]),
@@ -65,7 +87,7 @@ def run_fit(seg, phoenix_dir, cache_path, teff_grid, label):
         mdeg=2,
         verbose=False,
     )
-    
+
     print(
         "best:",
         {
@@ -79,28 +101,43 @@ def run_fit(seg, phoenix_dir, cache_path, teff_grid, label):
 
 
 def main():
-    phoenix_dir = os.environ["SPYCTRES_PHOENIX_DIR"]
-    cache_path = os.path.join(tempfile.gettempdir(), "spyctres_cache_rebuild_test.npz")
+    parser = build_parser()
+    parser.add_argument(
+        "--phoenix-dir",
+        default=os.environ.get("SPYCTRES_PHOENIX_DIR", None),
+        help="Path to local PHOENIXv2 directory. Defaults to SPYCTRES_PHOENIX_DIR.",
+    )
+    parser.add_argument(
+        "--cache-path",
+        default=os.path.join(tempfile.gettempdir(), "spyctres_cache_rebuild_test.npz"),
+        help="Cache path used for the rebuild test.",
+    )
+    args = parser.parse_args()
+
+    if args.phoenix_dir is None:
+        parser.error("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
+
+    if not os.path.isdir(args.phoenix_dir):
+        parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
+
+    cache_path = args.cache_path
 
     if os.path.exists(cache_path):
         os.remove(cache_path)
 
-    seg = make_synthetic_segment(phoenix_dir)
+    seg = make_synthetic_segment(args.phoenix_dir)
 
-    # First run writes cache
     run_fit(
         seg,
-        phoenix_dir,
+        args.phoenix_dir,
         cache_path,
         teff_grid=[4800.0, 5000.0, 5200.0, 5400.0],
         label="FIRST RUN",
     )
 
-    # Second run uses same wavelength grid but a different Teff subgrid.
-    # This should trigger "Cache mismatch, rebuilding" and then succeed.
     run_fit(
         seg,
-        phoenix_dir,
+        args.phoenix_dir,
         cache_path,
         teff_grid=[4700.0, 4900.0, 5100.0, 5300.0],
         label="SECOND RUN WITH DIFFERENT TEFF GRID",

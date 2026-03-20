@@ -112,6 +112,56 @@ def _exclude_region(wave, exclude_regions):
     return m
     
 
+def build_effective_fit_mask(seg, regions=None, exclude_regions=None, exclude_mask=None):
+    """
+    Build the effective boolean fit mask for a single SpectrumSegment.
+
+    This reproduces the point-selection logic used by fit_phoenix_full_spectrum
+    for a single segment, except that if seg.err is None it does not invent a
+    synthetic error array. In that case only finite wave/flux and the supplied
+    mask/region logic are applied.
+    """
+    wave = np.asarray(seg.wave, dtype=float)
+    flux = np.asarray(seg.flux, dtype=float)
+
+    m = np.asarray(seg.mask, dtype=bool)
+    m &= np.isfinite(wave) & np.isfinite(flux)
+
+    if seg.err is not None:
+        err = np.asarray(seg.err, dtype=float)
+        m &= np.isfinite(err) & (err > 0)
+
+    m &= _select_region(wave, regions)
+    m &= _exclude_region(wave, exclude_regions)
+
+    if exclude_mask is not None:
+        m &= ~_to_bool_mask(exclude_mask(wave))
+
+    return m
+
+
+def build_excluded_mask(seg, regions=None, exclude_regions=None, exclude_mask=None):
+    """
+    Build a boolean mask of pixels explicitly excluded by region/exclude rules.
+
+    This is intended for plotting diagnostics. It does not mark pixels excluded
+    only because they are NaN, have non-positive errors, or lie outside seg.mask.
+    """
+    wave = np.asarray(seg.wave, dtype=float)
+    m = np.zeros_like(wave, dtype=bool)
+
+    if regions is not None:
+        m |= ~_select_region(wave, regions)
+
+    if exclude_regions is not None:
+        m |= ~_exclude_region(wave, exclude_regions)
+
+    if exclude_mask is not None:
+        m |= _to_bool_mask(exclude_mask(wave))
+
+    return m
+
+
 def _estimate_sigma(flux):
     """Rough robust sigma estimate for flux if no errors are provided."""
     f = np.asarray(flux, dtype=float)
@@ -180,20 +230,20 @@ def _build_data_vectors(segments, regions=None, exclude_regions=None, exclude_ma
             reg = regions.get(i, regions.get(seg.name, None))
         else:
             reg = regions
-
-        fit_m = np.asarray(seg.mask, dtype=bool)
-        fit_m &= support_ok
-        fit_m &= _select_region(w_full, reg)
-
+            
         if isinstance(exclude_regions, dict):
             ex = exclude_regions.get(i, exclude_regions.get(seg.name, None))
         else:
             ex = exclude_regions
-        fit_m &= _exclude_region(w_full, ex)
-
-        if exclude_mask is not None:
-            fit_m &= ~_to_bool_mask(exclude_mask(w_full))
-
+               
+        fit_m = build_effective_fit_mask(
+            seg,
+            regions=reg,
+            exclude_regions=ex,
+            exclude_mask=exclude_mask,
+        )
+        fit_m &= support_ok
+        
         n_support = int(np.sum(support_ok))
         n_fit = int(np.sum(fit_m))
 
@@ -468,8 +518,205 @@ def _solve_multiplicative_legendre(wave, flux, err, model_flux, mdeg):
         poly = V_all @ coeffs
 
     return model_flux * poly, coeffs
+    
 
+def evaluate_legendre_continuum(wave_eval, wave_ref, coeffs):
+    """
+    Evaluate a Legendre continuum on wave_eval using the same wavelength
+    normalization that was defined by wave_ref during the fit.
 
+    Parameters
+    ----------
+    wave_eval : array-like
+        Wavelength grid where the continuum should be evaluated.
+    wave_ref : array-like
+        Reference wavelength grid that defined the [-1, 1] normalization used
+        when fitting coeffs.
+    coeffs : array-like
+        Legendre coefficients.
+
+    Returns
+    -------
+    poly : ndarray
+        Continuum multiplicative factor on wave_eval.
+    """
+    wave_eval = np.asarray(wave_eval, dtype=float)
+    wave_ref = np.asarray(wave_ref, dtype=float)
+    coeffs = np.asarray(coeffs, dtype=float)
+
+    if coeffs.ndim != 1 or coeffs.size == 0:
+        raise ValueError("coeffs must be a non-empty 1D array.")
+
+    if wave_ref.size == 0:
+        return np.ones_like(wave_eval, dtype=float)
+
+    wmin = float(np.min(wave_ref))
+    wmax = float(np.max(wave_ref))
+    denom = wmax - wmin
+
+    if (not np.isfinite(denom)) or (denom <= 0):
+        return np.ones_like(wave_eval, dtype=float) * float(coeffs[0])
+
+    x = 2.0 * (wave_eval - wmin) / denom - 1.0
+    V = legvander(x, coeffs.size - 1)
+    return V @ coeffs
+    
+
+def reconstruct_phoenix_legendre_models_for_segments(
+    segments,
+    phoenix_lib,
+    fit_result,
+    exclude_mask=None,
+    mdeg=2,
+    rv_bary_kms=0.0,
+    R=None,
+    fwhm_kms=None,
+    forward_model=None,
+    model_margin_A=None,
+):
+    """
+    Reconstruct per-segment fitted PHOENIX model arrays on the full pixel grid
+    of each segment using the standard multiplicative Legendre continuum model.
+
+    This is intended for plotting and fit diagnostics. It mirrors the poly-mode
+    behavior of fit_phoenix_full_spectrum, but evaluates the final continuum-
+    corrected model on each segment's full wavelength grid rather than only on
+    the fit pixels.
+
+    Returns
+    -------
+    model_full_list : list[ndarray]
+        Continuum-corrected model on the full grid of each input segment.
+    coeffs_list : list[ndarray]
+        Legendre coefficients for each segment.
+    used_masks : list[ndarray(bool)]
+        Effective fit masks actually used for each segment.
+    excluded_masks : list[ndarray(bool)]
+        Explicit exclusion masks for plotting diagnostics.
+    """
+    teff = float(fit_result["teff"])
+    feh = float(fit_result["feh"])
+    logg = float(fit_result["logg"])
+    rv_kms = float(fit_result["rv_kms"])
+
+    if forward_model is None:
+        forward_model = str(fit_result.get("forward_model", "interp_observed"))
+    if model_margin_A is None:
+        model_margin_A = float(fit_result.get("model_margin_A", 200.0))
+
+    used_masks = [build_effective_fit_mask(seg, exclude_mask=exclude_mask) for seg in segments]
+    excluded_masks = [build_excluded_mask(seg, exclude_mask=exclude_mask) for seg in segments]
+
+    model_full_list = []
+    coeffs_list = []
+
+    if forward_model == "interp_observed":
+        support_lengths = [len(seg.wave) for seg in segments]
+        n_support_total = int(sum(support_lengths))
+
+        model_support_all = np.asarray(phoenix_lib.evaluate(teff, feh, logg), dtype=float)
+        if len(model_support_all) != n_support_total:
+            raise ValueError(
+                "Model grid length does not match total support wavelength grid: "
+                "{0} vs {1}".format(len(model_support_all), n_support_total)
+            )
+
+        broadening_fwhm_kms = _resolve_broadening_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
+
+        i0 = 0
+        for seg, used_mask in zip(segments, used_masks):
+            wave_full = np.asarray(seg.wave, dtype=float)
+            flux_full = np.asarray(seg.flux, dtype=float)
+
+            if seg.err is None:
+                sigma = _estimate_sigma(flux_full[used_mask] if np.any(used_mask) else flux_full)
+                err_full = np.ones_like(flux_full, dtype=float) * sigma
+            else:
+                err_full = np.asarray(seg.err, dtype=float)
+
+            n_support = len(wave_full)
+            i1 = i0 + n_support
+
+            model0_full = model_support_all[i0:i1]
+            shifted_full = velocity_correction(np.c_[wave_full, model0_full], rv_bary_kms + rv_kms)[:, 1]
+            model_broad_full = _gaussian_broaden_velocity(
+                wave_full, shifted_full, fwhm_kms=broadening_fwhm_kms
+            )
+
+            if np.any(used_mask):
+                w_used = wave_full[used_mask]
+                f_used = flux_full[used_mask]
+                e_used = err_full[used_mask]
+                m_used = model_broad_full[used_mask]
+
+                _model_corr_used, coeffs = _solve_multiplicative_legendre(
+                    w_used, f_used, e_used, m_used, mdeg=mdeg
+                )
+                poly_full = evaluate_legendre_continuum(wave_full, w_used, coeffs)
+                model_full = np.asarray(model_broad_full, dtype=float) * poly_full
+            else:
+                coeffs = np.r_[1.0, np.zeros(int(mdeg), dtype=float)]
+                model_full = np.asarray(model_broad_full, dtype=float)
+
+            model_full_list.append(model_full)
+            coeffs_list.append(np.asarray(coeffs, dtype=float))
+            i0 = i1
+
+    elif forward_model == "native_interp":
+        model_dense = np.asarray(phoenix_lib.evaluate(teff, feh, logg), dtype=float)
+
+        model_wave_medium = infer_segments_wave_medium(
+            segments,
+            default=getattr(phoenix_lib, "phoenix_wave_medium", "vacuum"),
+        )
+
+        model_raw_list = build_phoenix_native_models_for_segments(
+            segments=segments,
+            phoenix_wave_native=np.asarray(phoenix_lib.wave, dtype=float),
+            template_flux_native=model_dense,
+            rv_kms=rv_kms,
+            rv_bary_kms=rv_bary_kms,
+            R=R,
+            phoenix_wave_medium=model_wave_medium,
+            model_margin_A=model_margin_A,
+            bounds_use_fit_mask=True,
+            extrapolate=True,
+        )
+
+        for seg, used_mask, model_broad_full in zip(segments, used_masks, model_raw_list):
+            wave_full = np.asarray(seg.wave, dtype=float)
+            flux_full = np.asarray(seg.flux, dtype=float)
+
+            if seg.err is None:
+                sigma = _estimate_sigma(flux_full[used_mask] if np.any(used_mask) else flux_full)
+                err_full = np.ones_like(flux_full, dtype=float) * sigma
+            else:
+                err_full = np.asarray(seg.err, dtype=float)
+
+            if np.any(used_mask):
+                w_used = wave_full[used_mask]
+                f_used = flux_full[used_mask]
+                e_used = err_full[used_mask]
+                m_used = np.asarray(model_broad_full, dtype=float)[used_mask]
+
+                _model_corr_used, coeffs = _solve_multiplicative_legendre(
+                    w_used, f_used, e_used, m_used, mdeg=mdeg
+                )
+                poly_full = evaluate_legendre_continuum(wave_full, w_used, coeffs)
+                model_full = np.asarray(model_broad_full, dtype=float) * poly_full
+            else:
+                coeffs = np.r_[1.0, np.zeros(int(mdeg), dtype=float)]
+                model_full = np.asarray(model_broad_full, dtype=float)
+
+            model_full_list.append(model_full)
+            coeffs_list.append(np.asarray(coeffs, dtype=float))
+
+    else:
+        raise ValueError("forward_model must be 'interp_observed' or 'native_interp'.")
+
+    return model_full_list, coeffs_list, used_masks, excluded_masks
+    
+    
 def default_telluric_regions_optical_angstrom():
     """
     Very small default set of strong O2 bands in the optical.

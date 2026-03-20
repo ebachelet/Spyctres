@@ -55,23 +55,125 @@ class SpectrumSegment(object):
                 raise ValueError("mask must be 1D and match wave length.")
 
         self.meta = {} if meta is None else dict(meta)
-        self.wave_medium = str(wave_medium)
-        self.wave_frame = str(wave_frame)
+        self.wave_medium = str(wave_medium).strip().lower()
+        self.wave_frame = str(wave_frame).strip().lower()
         self.name = name
+
+    def copy(
+        self,
+        wave=None,
+        flux=None,
+        err=None,
+        mask=None,
+        meta=None,
+        wave_medium=None,
+        wave_frame=None,
+        name=None,
+    ):
+        return SpectrumSegment(
+            self.wave if wave is None else wave,
+            self.flux if flux is None else flux,
+            self.err if err is None else err,
+            self.mask if mask is None else mask,
+            meta=self.meta if meta is None else meta,
+            wave_medium=self.wave_medium if wave_medium is None else wave_medium,
+            wave_frame=self.wave_frame if wave_frame is None else wave_frame,
+            name=self.name if name is None else name,
+        )
 
     def sorted(self):
         idx = np.argsort(self.wave)
-        return SpectrumSegment(
-            self.wave[idx],
-            self.flux[idx],
-            None if self.err is None else self.err[idx],
-            self.mask[idx],
-            meta=self.meta,
-            wave_medium=self.wave_medium,
-            wave_frame=self.wave_frame,
-            name=self.name,
+        return self.copy(
+            wave=self.wave[idx],
+            flux=self.flux[idx],
+            err=None if self.err is None else self.err[idx],
+            mask=self.mask[idx],
         )
 
+    def subset(self, selector, name=None, name_suffix=None):
+        """
+        Return a subsetted copy of the segment.
+
+        selector may be:
+        - a boolean mask with the same length as the segment, or
+        - an integer/slice indexer understood by NumPy.
+        """
+        if isinstance(selector, slice):
+            idx = selector
+        else:
+            selector = np.asarray(selector)
+            if selector.dtype == bool:
+                if selector.ndim != 1 or selector.shape[0] != self.wave.shape[0]:
+                    raise ValueError("Boolean selector must be 1D and match wave length.")
+                idx = selector
+            else:
+                idx = selector
+
+        out_name = self.name if name is None else name
+        if name_suffix is not None:
+            base = "" if out_name is None else str(out_name)
+            out_name = "{0}_{1}".format(base, name_suffix) if base else str(name_suffix)
+
+        return self.copy(
+            wave=self.wave[idx],
+            flux=self.flux[idx],
+            err=None if self.err is None else self.err[idx],
+            mask=self.mask[idx],
+            meta=dict(self.meta),
+            name=out_name,
+        )
+
+    def window(self, wmin=None, wmax=None, clip_left=0, clip_right=0, name=None, name_suffix=None):
+        """
+        Return a wavelength-windowed copy of the segment.
+
+        The wavelength cut is inclusive in [wmin, wmax]. After that, optional
+        pixel clipping is applied on the left/right edges of the retained block.
+        """
+        keep = np.ones_like(self.wave, dtype=bool)
+        if wmin is not None:
+            keep &= (self.wave >= float(wmin))
+        if wmax is not None:
+            keep &= (self.wave <= float(wmax))
+
+        idx = np.where(keep)[0]
+        if idx.size == 0:
+            raise ValueError("No points remain after wavelength windowing.")
+
+        i0 = idx[0]
+        i1 = idx[-1] + 1
+
+        out = self.subset(slice(i0, i1), name=name, name_suffix=name_suffix)
+
+        if clip_left > 0 or clip_right > 0:
+            n = len(out.wave)
+            j0 = int(max(0, clip_left))
+            j1 = int(n - max(0, clip_right))
+            if j1 <= j0:
+                raise ValueError("Edge clipping removed all points.")
+            out = out.subset(slice(j0, j1), name=out.name)
+
+        return out
+
+    def with_wave(self, wave, wave_medium=None, wave_frame=None, name=None, name_suffix=None):
+        """
+        Return a copy with a replaced wavelength array and optionally updated
+        wavelength metadata. Flux, err, and mask are preserved.
+        """
+        out_name = self.name if name is None else name
+        if name_suffix is not None:
+            base = "" if out_name is None else str(out_name)
+            out_name = "{0}_{1}".format(base, name_suffix) if base else str(name_suffix)
+
+        return self.copy(
+            wave=np.asarray(wave, dtype=float),
+            meta=dict(self.meta),
+            wave_medium=self.wave_medium if wave_medium is None else wave_medium,
+            wave_frame=self.wave_frame if wave_frame is None else wave_frame,
+            name=out_name,
+        )
+        
+        
 def concatenate_segments(segments, sort=True, name=None):
     """Concatenate multiple SpectrumSegment objects into one."""
     wave = np.concatenate([s.wave for s in segments])
@@ -87,6 +189,126 @@ def concatenate_segments(segments, sort=True, name=None):
     meta = {"n_segments": len(segments), "segment_names": [s.name for s in segments]}
     out = SpectrumSegment(wave, flux, err=err, mask=mask, meta=meta, name=name)
     return out.sorted() if sort else out
+
+
+def make_window_segments(seg, windows, pad=0.0, name_prefix=None):
+    """
+    Build one SpectrumSegment per wavelength window.
+
+    Parameters
+    ----------
+    seg : SpectrumSegment
+        Input segment.
+    windows : sequence
+        Each entry may be either (wmin, wmax) or (label, wmin, wmax).
+    pad : float, optional
+        Extra wavelength padding added on both sides of each window.
+    name_prefix : str, optional
+        Prefix used when a window does not provide its own label.
+
+    Returns
+    -------
+    list of SpectrumSegment
+    """
+    out = []
+    for i, item in enumerate(windows):
+        if len(item) == 2:
+            wmin, wmax = item
+            label = None
+        elif len(item) == 3:
+            label, wmin, wmax = item
+        else:
+            raise ValueError("Each window must be (wmin, wmax) or (label, wmin, wmax).")
+
+        wmin_pad = float(wmin) - float(pad)
+        wmax_pad = float(wmax) + float(pad)
+
+        if label is not None:
+            name = str(label)
+        elif name_prefix is not None:
+            name = "{0}_{1}".format(name_prefix, i + 1)
+        else:
+            name = seg.name
+
+        out.append(seg.window(wmin=wmin_pad, wmax=wmax_pad, name=name))
+
+    return out
+
+
+def make_padded_window_segments(seg, windows, pad=5.0, name_prefix=None):
+    """
+    Build one SpectrumSegment per wavelength window with padded support.
+
+    The returned segment covers the support region [wmin-pad, wmax+pad], but
+    seg.mask is True only on the inner fit window [wmin, wmax]. This lets the
+    fitter evaluate models on a padded support region while computing chi-square
+    only on the inner fit pixels.
+
+    Parameters
+    ----------
+    seg : SpectrumSegment
+        Input segment.
+    windows : sequence
+        Each entry may be either (wmin, wmax) or (label, wmin, wmax).
+    pad : float, optional
+        Extra wavelength padding added on both sides of each fit window.
+    name_prefix : str, optional
+        Prefix used when a window does not provide its own label.
+
+    Returns
+    -------
+    list of SpectrumSegment
+    """
+    wave = np.asarray(seg.wave, dtype=float)
+    flux = np.asarray(seg.flux, dtype=float)
+    err = None if seg.err is None else np.asarray(seg.err, dtype=float)
+    base_mask = np.asarray(seg.mask, dtype=bool)
+
+    out = []
+    for i, item in enumerate(windows):
+        if len(item) == 2:
+            wmin, wmax = item
+            label = None
+        elif len(item) == 3:
+            label, wmin, wmax = item
+        else:
+            raise ValueError("Each window must be (wmin, wmax) or (label, wmin, wmax).")
+
+        support_lo = float(wmin) - float(pad)
+        support_hi = float(wmax) + float(pad)
+
+        keep = (wave >= support_lo) & (wave <= support_hi)
+        if not np.any(keep):
+            continue
+
+        fit_mask = base_mask[keep] & (wave[keep] >= float(wmin)) & (wave[keep] <= float(wmax))
+
+        if label is not None:
+            name = str(label)
+        elif name_prefix is not None:
+            base = "" if seg.name is None else str(seg.name)
+            name = "{0}_{1}_win{2}".format(base, name_prefix, i) if base else "{0}_win{1}".format(name_prefix, i)
+        else:
+            base = "" if seg.name is None else str(seg.name)
+            name = "{0}_win{1}".format(base, i) if base else "win{0}".format(i)
+
+        out.append(
+            SpectrumSegment(
+                wave=wave[keep],
+                flux=flux[keep],
+                err=None if err is None else err[keep],
+                mask=fit_mask,
+                meta=dict(seg.meta),
+                wave_medium=seg.wave_medium,
+                wave_frame=seg.wave_frame,
+                name=name,
+            )
+        )
+
+    if len(out) == 0:
+        raise ValueError("No points remain after applying padded windows.")
+
+    return out
 
 
 def _header_get(hdr, key, default=None):
@@ -110,6 +332,7 @@ def _pepsi_fiber_to_resolution(fiber):
         "300": 50000.0,
     }
     return mapping.get(digits, None)
+
 
 def _normalize_hdu_token(value):
     """
@@ -304,6 +527,7 @@ def _xshooter_telluric_corrected(hdr):
 
     return ("TELLURIC" in prodcatg) or ("TELLURIC" in pipefile)
 
+
 def read_pepsi_nor(
     path,
     ext=1,
@@ -401,6 +625,7 @@ def read_pepsi_nor(
             wave_frame=wave_frame,
             name=name,
         ).sorted()
+
 
 def read_xshooter_1d(
     path,
@@ -514,6 +739,7 @@ def read_xshooter_1d(
             wave_frame=wave_frame,
             name=name,
         ).sorted()
+
 
 def read_spectrum(path, instrument=None, **kwargs):
     """

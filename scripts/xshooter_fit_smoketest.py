@@ -14,11 +14,14 @@ warnings.filterwarnings(
 import numpy as np
 import matplotlib.pyplot as plt
 
-from Spyctres.io import read_spectrum, SpectrumSegment
+from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segments
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
 from Spyctres.fitting import (
     fit_phoenix_full_spectrum,
+    build_effective_fit_mask,
+    build_excluded_mask,
+    reconstruct_phoenix_legendre_models_for_segments,
     _resolve_broadening_fwhm_kms,
     _gaussian_broaden_velocity,
     _solve_multiplicative_legendre,
@@ -32,107 +35,6 @@ from Spyctres.phoenix_forward import (
     fit_bounds_from_segments,
     prepare_phoenix_native_template,
 )
-
-def clip_segment(seg, wmin=None, wmax=None, clip_left=0, clip_right=0, name_suffix=None):
-    wave = np.asarray(seg.wave, dtype=float)
-    flux = np.asarray(seg.flux, dtype=float)
-    err = None if seg.err is None else np.asarray(seg.err, dtype=float)
-    mask = np.asarray(seg.mask, dtype=bool)
-
-    keep = np.ones_like(wave, dtype=bool)
-    if wmin is not None:
-        keep &= (wave >= float(wmin))
-    if wmax is not None:
-        keep &= (wave <= float(wmax))
-
-    idx = np.where(keep)[0]
-    if idx.size == 0:
-        raise ValueError("No points remain after wavelength windowing.")
-
-    i0 = idx[0]
-    i1 = idx[-1] + 1
-
-    wave = wave[i0:i1]
-    flux = flux[i0:i1]
-    mask = mask[i0:i1]
-    if err is not None:
-        err = err[i0:i1]
-
-    if clip_left > 0 or clip_right > 0:
-        n = len(wave)
-        j0 = int(max(0, clip_left))
-        j1 = int(n - max(0, clip_right))
-        if j1 <= j0:
-            raise ValueError("Edge clipping removed all points.")
-        wave = wave[j0:j1]
-        flux = flux[j0:j1]
-        mask = mask[j0:j1]
-        if err is not None:
-            err = err[j0:j1]
-
-    name = seg.name
-    if name_suffix:
-        name = "{0}_{1}".format(seg.name, name_suffix)
-
-    return SpectrumSegment(
-        wave=wave,
-        flux=flux,
-        err=err,
-        mask=mask,
-        meta=dict(seg.meta),
-        wave_medium=seg.wave_medium,
-        wave_frame=seg.wave_frame,
-        name=name,
-    )
-
-
-def make_padded_window_segments(seg, windows, pad=5.0, name_prefix=None):
-    """
-    Build one SpectrumSegment per window.
-
-    The segment wavelength grid includes support padding on both sides, but
-    seg.mask is True only on the inner fit window. This lets the fitter build
-    and broaden the model on the padded support while evaluating chi-square only
-    on the inner region.
-    """
-    wave = np.asarray(seg.wave, dtype=float)
-    flux = np.asarray(seg.flux, dtype=float)
-    err = None if seg.err is None else np.asarray(seg.err, dtype=float)
-    base_mask = np.asarray(seg.mask, dtype=bool)
-
-    out = []
-    for i, (lo, hi) in enumerate(windows):
-        support_lo = float(lo) - float(pad)
-        support_hi = float(hi) + float(pad)
-
-        keep = (wave >= support_lo) & (wave <= support_hi)
-        if not np.any(keep):
-            continue
-
-        fit_mask = base_mask[keep] & (wave[keep] >= float(lo)) & (wave[keep] <= float(hi))
-
-        if name_prefix is None:
-            name = "{0}_win{i}".format(seg.name, i=i)
-        else:
-            name = "{0}_{1}_win{i}".format(seg.name, name_prefix, i=i)
-
-        out.append(
-            SpectrumSegment(
-                wave=wave[keep],
-                flux=flux[keep],
-                err=None if err is None else err[keep],
-                mask=fit_mask,
-                meta=dict(seg.meta),
-                wave_medium=seg.wave_medium,
-                wave_frame=seg.wave_frame,
-                name=name,
-            )
-        )
-
-    if len(out) == 0:
-        raise ValueError("No points remain after applying padded windows.")
-
-    return out
 
 
 def ensure_phoenix_interpolator_for_segments(
@@ -258,8 +160,11 @@ def fit_phoenix_sideband_symmetric(
         
     if forward_model not in ("interp_observed", "native_interp"):
         raise ValueError("forward_model must be 'interp_observed' or 'native_interp'.")
-        
-    used_masks = [build_used_mask(seg, exclude_mask=exclude_mask) for seg in segments]
+       
+    used_masks = [
+        build_effective_fit_mask(seg, exclude_mask=exclude_mask)
+        for seg in segments
+    ]
     if not any(np.any(m) for m in used_masks):
         raise ValueError("No usable points remain after masking.")
     
@@ -715,30 +620,6 @@ def make_balmer_core_exclude_mask(core_halfwidth=3.0, wave_medium="vacuum"):
         return m
 
     return _mask
-    
-    
-def build_used_mask(seg, exclude_mask=None):
-    """
-    Reproduce the effective point-selection logic used by fit_phoenix_full_spectrum
-    for a single already-clipped segment.
-    """
-    m = np.asarray(seg.mask, dtype=bool)
-    m &= np.isfinite(seg.wave) & np.isfinite(seg.flux)
-
-    if seg.err is not None:
-        m &= np.isfinite(seg.err) & (seg.err > 0)
-
-    if exclude_mask is not None:
-        m &= ~(np.asarray(exclude_mask(seg.wave)) > 0.5)
-
-    return m
-
-
-def build_excluded_mask(seg, exclude_mask=None):
-    m = np.zeros_like(seg.wave, dtype=bool)
-    if exclude_mask is not None:
-        m |= (np.asarray(exclude_mask(seg.wave)) > 0.5)
-    return m
 
 
 def build_plot_models_for_segments(
@@ -769,13 +650,35 @@ def build_plot_models_for_segments(
         forward_model = str(fit_result.get("forward_model", "interp_observed"))
     if model_margin_A is None:
         model_margin_A = float(fit_result.get("model_margin_A", 200.0))
-
-    used_masks = [build_used_mask(seg, exclude_mask=exclude_mask) for seg in segments]
-
+    if norm_mode == "poly":
+        return reconstruct_phoenix_legendre_models_for_segments(
+            segments=segments,
+            phoenix_lib=phoenix_lib,
+            fit_result=fit_result,
+            exclude_mask=exclude_mask,
+            mdeg=mdeg,
+            rv_bary_kms=rv_bary_kms,
+            R=R,
+            fwhm_kms=fwhm_kms,
+            forward_model=forward_model,
+            model_margin_A=model_margin_A,
+        )
+    
+    if norm_mode != "sideband":
+        raise ValueError("norm_mode must be 'poly' or 'sideband'.")
+        
+    used_masks = [
+        build_effective_fit_mask(seg, exclude_mask=exclude_mask)
+        for seg in segments
+    ]
+    excluded_masks = [
+        build_excluded_mask(seg, exclude_mask=exclude_mask)
+        for seg in segments
+    ]
+    
     model_full_list = []
     coeffs_list = []
-    excluded_masks = []
-
+    
     if forward_model == "interp_observed":
         support_lengths = [len(seg.wave) for seg in segments]
         n_support_total = int(sum(support_lengths))
@@ -788,7 +691,7 @@ def build_plot_models_for_segments(
             )
 
         broadening_fwhm_kms = _resolve_broadening_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
-
+        
         i0 = 0
         for seg, used_mask in zip(segments, used_masks):
             wave_full = np.asarray(seg.wave, dtype=float)
@@ -824,42 +727,10 @@ def build_plot_models_for_segments(
                 )
 
                 model_full = model_corr_full.copy()
-            else:
-                w = wave_full[used_mask]
-                f = flux_full[used_mask]
-                e = err_full[used_mask]
-                m = model_broad_full[used_mask]
-
-                model_corr_used, coeffs = _solve_multiplicative_legendre(
-                    w, f, e, m, mdeg=mdeg
-                )
-                
-                # Rebuild the same multiplicative polynomial on the full segment grid for plotting.
-                # This is only for visualization; the fit still uses used_mask pixels only.
-                x0 = float(np.mean(w))
-                xscale = float(np.ptp(w))
-                if (not np.isfinite(xscale)) or (xscale <= 0):
-                    xscale = 1.0
-
-                x_used = (w - x0) / xscale
-                A_used = np.polynomial.legendre.legvander(x_used, mdeg)
-
-                ratio = np.ones_like(w, dtype=float)
-                good = np.isfinite(m) & (np.abs(m) > 0)
-                ratio[good] = model_corr_used[good] / m[good]
-
-                coeff_poly, *_ = np.linalg.lstsq(A_used, ratio, rcond=None)
-
-                x_full = (wave_full - x0) / xscale
-                A_full = np.polynomial.legendre.legvander(x_full, mdeg)
-                poly_full = A_full @ coeff_poly
-
-                model_full = np.asarray(model_broad_full, dtype=float) * poly_full
                 
             model_full_list.append(model_full)
             coeffs_list.append(coeffs)
-            excluded_masks.append(build_excluded_mask(seg, exclude_mask=exclude_mask))
-
+            
             i0 = i1
 
     elif forward_model == "native_interp":
@@ -906,41 +777,9 @@ def build_plot_models_for_segments(
                 )
 
                 model_full = model_corr_full.copy()
-            else:
-                w = wave_full[used_mask]
-                f = flux_full[used_mask]
-                e = err_full[used_mask]
-                m = np.asarray(model_broad_full, dtype=float)[used_mask]
-                
-                model_corr_used, coeffs = _solve_multiplicative_legendre(
-                    w, f, e, m, mdeg=mdeg
-                )
-
-                # Rebuild the same multiplicative polynomial on the full segment grid for plotting.
-                # This is only for visualization; the fit still uses used_mask pixels only.
-                x0 = float(np.mean(w))
-                xscale = float(np.ptp(w))
-                if (not np.isfinite(xscale)) or (xscale <= 0):
-                    xscale = 1.0
-
-                x_used = (w - x0) / xscale
-                A_used = np.polynomial.legendre.legvander(x_used, mdeg)
-
-                ratio = np.ones_like(w, dtype=float)
-                good = np.isfinite(m) & (np.abs(m) > 0)
-                ratio[good] = model_corr_used[good] / m[good]
-
-                coeff_poly, *_ = np.linalg.lstsq(A_used, ratio, rcond=None)
-
-                x_full = (wave_full - x0) / xscale
-                A_full = np.polynomial.legendre.legvander(x_full, mdeg)
-                poly_full = A_full @ coeff_poly
-
-                model_full = np.asarray(model_broad_full, dtype=float) * poly_full
-                
+                         
             model_full_list.append(model_full)
             coeffs_list.append(coeffs)
-            excluded_masks.append(build_excluded_mask(seg, exclude_mask=exclude_mask))
     else:
         raise ValueError("Unknown forward_model: {0}".format(forward_model))
 
@@ -1321,9 +1160,41 @@ def evaluate_region_quality(segments, model_corr_list, used_masks):
         "reasons": reasons,
         "per_window": per_window,
     }
+
+
+def build_parser():
+    return argparse.ArgumentParser(
+        description=(
+            "PHOENIX full-spectrum fitting smoke test for reduced X-SHOOTER 1D spectra.\n"
+            "Use this to exercise the generic package fitter on a real X-SHOOTER file.\n"
+            "For the validated Balmer-wing benchmark, use --balmer-only --forward-model native_interp "
+            "--window-mode notebook --core-mask 12."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n\n"
+            "  Validated Balmer-wing benchmark:\n"
+            "    python scripts/xshooter_fit_smoketest.py \\\n"
+            "      --balmer-only \\\n"
+            "      --forward-model native_interp \\\n"
+            "      --window-mode notebook \\\n"
+            "      --core-mask 12 \\\n"
+            "      path/to/xshooter_uvb.fits\n\n"
+            "  Sideband-normalized Balmer fit:\n"
+            "    python scripts/xshooter_fit_smoketest.py \\\n"
+            "      --balmer-only \\\n"
+            "      --norm-mode sideband \\\n"
+            "      --forward-model native_interp \\\n"
+            "      --window-mode notebook \\\n"
+            "      --core-mask 12 \\\n"
+            "      path/to/xshooter_uvb.fits\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    
     
 def main():
-    parser = argparse.ArgumentParser()
+    parser = build_parser()
     parser.add_argument("file", help="Input X-SHOOTER FITS file")
     parser.add_argument(
         "--phoenix-dir",
@@ -1369,7 +1240,7 @@ def main():
         "--forward-model",
         choices=["interp_observed", "native_interp"],
         default="interp_observed",
-        help="Wavelength-space forward-model path for fit_phoenix_full_spectrum",
+        help="Forward-model path. 'native_interp' is the validated wavelength-space reference; 'interp_observed' is the legacy observed-grid path.",
     )
     parser.add_argument(
         "--model-margin",
@@ -1396,15 +1267,15 @@ def main():
     parser.add_argument("--balmer-only", action="store_true",
                         help="Fit only Balmer windows instead of the full selected wavelength range")
     parser.add_argument("--core-mask", type=float, default=3.0,
-                        help="Half-width in Angstrom to mask around Balmer line centers in --balmer-only mode")
+                        help="Half-width in Angstrom to mask around Balmer line centers in --balmer-only mode. The validated notebook-style benchmark uses 12.")
     parser.add_argument("--window-pad", type=float, default=5.0,
                         help="Padding in Angstrom added on each side of Balmer fit windows")
     parser.add_argument(
         "--window-mode",
         choices=["current", "notebook"],
         default="current",
-        help="Use the current narrow Balmer windows or the broader notebook-style windows",
-    )   
+        help="Use the current narrow Balmer windows or the broader notebook-style windows. The validated benchmark uses 'notebook'.",
+    )
     parser.add_argument("--mdeg", type=int, default=2, help="Legendre continuum degree")
     parser.add_argument("--teff0", type=float, default=5000.0, help="Initial Teff")
     parser.add_argument("--feh0", type=float, default=-0.5, help="Initial [Fe/H]")
@@ -1419,22 +1290,35 @@ def main():
     parser.add_argument("--verbose", type=int, default=1)
     args = parser.parse_args()
     
-    if args.norm_mode == "sideband" and not args.balmer_only:
-        raise ValueError("--norm-mode sideband currently requires --balmer-only.")
-        
-    if args.phoenix_dir is None:
-        raise ValueError("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
+    if not os.path.isfile(args.file):
+        parser.error("Input file not found: {0}".format(args.file))
 
+    if args.norm_mode == "sideband" and not args.balmer_only:
+        parser.error("--norm-mode sideband currently requires --balmer-only.")
+
+    if args.phoenix_dir is None:
+        parser.error("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
+
+    if not os.path.isdir(args.phoenix_dir):
+        parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
+
+    if args.wmax <= args.wmin:
+        parser.error("--wmax must be greater than --wmin.")
+    
     seg0 = read_spectrum(args.file, instrument="xshooter")
-    seg_clip = clip_segment(
-        seg0,
+    arm = str(seg0.meta.get("arm", "")).strip().upper()
+    if arm and arm != "UVB":
+        parser.error(
+            "This script is currently configured for X-SHOOTER UVB fitting, but the reader reported arm={0!r}.".format(arm)
+        )
+    seg_clip = seg0.window(
         wmin=args.wmin,
         wmax=args.wmax,
         clip_left=args.clip_left,
         clip_right=args.clip_right,
         name_suffix="fitwin",
     )
-
+    
     if args.window_mode == "notebook":
         balmer_windows = [
             ("Hδ", 3980.0, 4220.0),
@@ -1524,9 +1408,12 @@ def main():
             for fn in exclude_mask_list:
                 m |= (np.asarray(fn(wave)) > 0.5)
             return m
-
-    used_masks_plot = [build_used_mask(seg, exclude_mask=exclude_mask) for seg in segments]
-
+    
+    used_masks_plot = [
+        build_effective_fit_mask(seg, exclude_mask=exclude_mask)
+        for seg in segments
+    ]
+    
     if not any(np.any(m) for m in used_masks_plot):
         raise ValueError("No usable points remain after masking.")
         
