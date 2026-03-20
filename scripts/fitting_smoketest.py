@@ -3,12 +3,24 @@ import numpy as np
 
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.io import SpectrumSegment
-from Spyctres.fitting import fit_phoenix_full_spectrum, _solve_multiplicative_legendre
+from Spyctres.fitting import fit_phoenix_full_spectrum, _solve_multiplicative_legendre, _gaussian_broaden_velocity
 from Spyctres.Spyctres import velocity_correction
+import warnings
+# pysynphot is legacy and emits a pkg_resources deprecation warning.
+# Suppress it in smoke-test scripts to keep output readable.
+warnings.filterwarnings(
+    "ignore",
+    message=r"pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+    module=r"pysynphot.*",
+)
 
 PHOENIX_DIR = os.environ.get("SPYCTRES_PHOENIX_DIR", None)
 if PHOENIX_DIR is None:
     raise SystemExit("Set SPYCTRES_PHOENIX_DIR to your PHOENIXv2 directory first.")
+
+R_TEST = 50000.0
+FWHM_TEST = 299792.458 / R_TEST
 
 # Build a small wavelength chunk for a fast test
 lib = PhoenixLibrary(PHOENIX_DIR, verbose=True)
@@ -36,6 +48,7 @@ truth = dict(teff=5050.0, feh=-0.25, logg=4.25, rv=12.3)
 # Generate synthetic data using the same shift operator used in fitting
 model0 = lib.evaluate(truth["teff"], truth["feh"], truth["logg"])
 shifted = velocity_correction(np.c_[wave, model0], truth["rv"])[:, 1]
+shifted = _gaussian_broaden_velocity(wave, shifted, fwhm_kms=FWHM_TEST)
 
 # Mild multiplicative continuum tilt
 x = 2.0 * (wave - wave.min()) / (wave.max() - wave.min()) - 1.0
@@ -53,6 +66,7 @@ seg = SpectrumSegment(wave, flux_n, err=err, name="synthetic")
 def chi2_red_with_poly(teff, feh, logg, rv, mdeg=2):
     m0 = lib.evaluate(teff, feh, logg)
     sh = velocity_correction(np.c_[wave, m0], rv)[:, 1]
+    sh = _gaussian_broaden_velocity(wave, sh, fwhm_kms=FWHM_TEST)
     m_corr, coeffs = _solve_multiplicative_legendre(wave, flux_n, err, sh, mdeg=mdeg)
     r = (flux_n - m_corr) / err
     chi2 = float(np.sum(r * r))
@@ -76,6 +90,7 @@ out = fit_phoenix_full_spectrum(
     [seg],
     phoenix_lib=lib,
     p0=p0,
+    R=R_TEST,
     bounds=bounds,
     regions=None,
     mdeg=2,
