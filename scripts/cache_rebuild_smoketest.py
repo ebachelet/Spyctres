@@ -16,7 +16,7 @@ warnings.filterwarnings(
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.fitting import fit_phoenix_full_spectrum
 from Spyctres.io import SpectrumSegment
-
+from Spyctres.config import load_user_config, get_config_value, resolve_setting
 
 def build_parser():
     return argparse.ArgumentParser(
@@ -33,6 +33,9 @@ def build_parser():
             "  python scripts/cache_rebuild_smoketest.py \\\n"
             "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
             "    --cache-path /tmp/spyctres_cache_rebuild_test.npz\n"
+            "  ~/.config/spyctres/config.toml:\n"
+            "    [paths]\n"
+            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -104,8 +107,8 @@ def main():
     parser = build_parser()
     parser.add_argument(
         "--phoenix-dir",
-        default=os.environ.get("SPYCTRES_PHOENIX_DIR", None),
-        help="Path to local PHOENIXv2 directory. Defaults to SPYCTRES_PHOENIX_DIR.",
+        default=None,
+        help="Path to local PHOENIXv2 directory. Precedence: CLI > SPYCTRES_PHOENIX_DIR > config file.",
     )
     parser.add_argument(
         "--cache-path",
@@ -113,10 +116,21 @@ def main():
         help="Cache path used for the rebuild test.",
     )
     args = parser.parse_args()
-
+    config = load_user_config()
+    phoenix_dir_cfg = get_config_value(config, "paths", "phoenix_dir", default=None)
+    
+    args.phoenix_dir = resolve_setting(
+        args.phoenix_dir,
+        env_var_name="SPYCTRES_PHOENIX_DIR",
+        config_value=phoenix_dir_cfg,
+        default=None,
+    )
     if args.phoenix_dir is None:
-        parser.error("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
-
+        parser.error(
+        "No PHOENIX directory supplied. Set --phoenix-dir, SPYCTRES_PHOENIX_DIR, "
+        "or [paths].phoenix_dir in ~/.config/spyctres/config.toml."
+    )
+    
     if not os.path.isdir(args.phoenix_dir):
         parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
 

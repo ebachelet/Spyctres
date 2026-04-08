@@ -16,6 +16,7 @@ from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segme
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
 from Spyctres.Spyctres import load_telluric_lines
+from Spyctres.config import load_user_config, get_config_value, resolve_setting
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 
@@ -472,6 +473,9 @@ def build_parser():
             "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
             "    --use-telluric-mask --use-barycorr \\\n"
             "    path/to/xshooter_uvb.fits\n"
+            "  ~/.config/spyctres/config.toml:\n"
+            "    [paths]\n"
+            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -482,8 +486,8 @@ def main():
     parser.add_argument("file", help="Input X-SHOOTER UVB FITS file")
     parser.add_argument(
         "--phoenix-dir",
-        default=os.environ.get("SPYCTRES_PHOENIX_DIR", None),
-        help="Path to local PHOENIXv2 directory. Defaults to SPYCTRES_PHOENIX_DIR.",
+        default=None,
+        help="Path to local PHOENIXv2 directory. Precedence: CLI > SPYCTRES_PHOENIX_DIR > config file.",
     )
     parser.add_argument("--wmin", type=float, default=3980.0)
     parser.add_argument("--wmax", type=float, default=5500.0)
@@ -516,13 +520,24 @@ def main():
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument("--verbose", type=int, default=1)
     args = parser.parse_args()
+    config = load_user_config()
+    phoenix_dir_cfg = get_config_value(config, "paths", "phoenix_dir", default=None)
     
+    args.phoenix_dir = resolve_setting(
+        args.phoenix_dir,
+        env_var_name="SPYCTRES_PHOENIX_DIR",
+        config_value=phoenix_dir_cfg,
+        default=None,
+    )    
     if not os.path.isfile(args.file):
         parser.error("Input file not found: {0}".format(args.file))
 
     if args.phoenix_dir is None:
-        parser.error("No PHOENIX directory supplied. Set --phoenix-dir or SPYCTRES_PHOENIX_DIR.")
-
+        parser.error(
+            "No PHOENIX directory supplied. Set --phoenix-dir, SPYCTRES_PHOENIX_DIR, "
+            "or [paths].phoenix_dir in ~/.config/spyctres/config.toml."
+        )
+    
     if not os.path.isdir(args.phoenix_dir):
         parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
     
