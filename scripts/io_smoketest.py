@@ -44,7 +44,16 @@ def summarize(seg):
         msg.append("slit={0}".format(seg.meta.get("slit_name")))
         msg.append("telluric_corrected={0}".format(seg.meta.get("telluric_corrected")))
         msg.append("barycorr_kms={0}".format(seg.meta.get("barycorr_kms")))
-
+        
+    if instrument == "FLOYDS":
+        msg.append("facility={0}".format(seg.meta.get("facility")))
+        msg.append("date_obs={0}".format(seg.meta.get("date_obs")))
+        
+    if instrument in ["GMOS", "GEMINI"]:
+        msg.append("object={0}".format(seg.meta.get("object")))
+        msg.append("filename={0}".format(seg.meta.get("filename")))
+        msg.append("origin={0}".format(seg.meta.get("origin")))
+              
     return "  ".join(msg)
 
 
@@ -59,6 +68,8 @@ def build_parser():
             "Examples:\n"
             "  python scripts/io_smoketest.py --instrument xshooter path/to/xshooter_1d.fits\n"
             "  python scripts/io_smoketest.py --instrument pepsi path/to/seg1.dxt.nor path/to/seg2.dxt.nor path/to/seg3.dxt.nor --join\n"
+            "  python scripts/io_smoketest.py --instrument floyds path/to/FLOYDS.csv\n"
+            "  python scripts/io_smoketest.py --instrument gemini path/to/gmos_ascii.dat\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -74,7 +85,7 @@ def main():
     parser.add_argument(
         "--instrument",
         required=True,
-        choices=["pepsi", "xshooter"],
+        choices=["pepsi", "xshooter", "floyds", "gemini"],
         help="Instrument reader to use",
     )
     parser.add_argument(

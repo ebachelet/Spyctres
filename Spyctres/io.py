@@ -1,4 +1,5 @@
 # Spyctres/io.py
+import io as _pyio
 import os
 import re
 import numpy as np
@@ -740,19 +741,262 @@ def read_xshooter_1d(
             name=name,
         ).sorted()
 
+def read_floyds_csv(path, name=None):
+    """
+    Read a reduced 1D FLOYDS spectrum from a simple ASCII/CSV export.
 
+    Expected format:
+    - optional comment lines beginning with '#'
+    - one header line with column names such as 'wavelength flux'
+    - numeric rows thereafter
+
+    Returns
+    -------
+    SpectrumSegment
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+
+    comments = {}
+    for line in lines:
+        if not line.lstrip().startswith("#"):
+            continue
+        body = line.lstrip()[1:].strip()
+        if ":" in body:
+            k, v = body.split(":", 1)
+            comments[k.strip().lower()] = v.strip()
+
+    data_text = "".join(
+        ln for ln in lines
+        if ln.strip() and not ln.lstrip().startswith("#")
+    )
+    if not data_text.strip():
+        raise ValueError("No tabular data found in FLOYDS file: {0}".format(path))
+
+    arr = np.genfromtxt(
+        _pyio.StringIO(data_text),
+        names=True,
+        dtype=float,
+        encoding=None,
+    )
+
+    if arr.dtype.names is None:
+        raise ValueError(
+            "Could not parse named columns from FLOYDS file: {0}".format(path)
+        )
+
+    names = list(arr.dtype.names)
+    names_l = [n.lower() for n in names]
+
+    wave_candidates = ["wavelength", "wave", "lambda", "lam"]
+    flux_candidates = ["flux", "f_lambda", "flam", "fnu"]
+    err_candidates = ["err", "error", "uncertainty", "sigma", "flux_err", "fluxerror"]
+
+    def _pick(candidates):
+        for c in candidates:
+            if c in names_l:
+                return names[names_l.index(c)]
+        return None
+
+    wave_col = _pick(wave_candidates)
+    flux_col = _pick(flux_candidates)
+    err_col = _pick(err_candidates)
+
+    if wave_col is None or flux_col is None:
+        raise ValueError(
+            "Need wavelength and flux columns in FLOYDS file: {0}. "
+            "Found columns: {1}".format(path, names)
+        )
+
+    wave = np.asarray(arr[wave_col], dtype=float)
+    flux = np.asarray(arr[flux_col], dtype=float)
+    err = None if err_col is None else np.asarray(arr[err_col], dtype=float)
+
+    mask = np.isfinite(wave) & np.isfinite(flux)
+    if err is not None:
+        mask &= np.isfinite(err) & (err > 0)
+
+    meta = {
+        "path": path,
+        "instrument": "FLOYDS",
+        "facility": comments.get("facility"),
+        "date_obs": comments.get("date-obs"),
+        "resolution_R": 500.0,
+        "resolution_note": "Approximate nominal FLOYDS merged-spectrum value; actual R varies with wavelength and slit.",
+        "wave_medium": "unknown",
+        "wave_frame": "unknown",
+    }
+
+    seg_name = (
+        name
+        or comments.get("object")
+        or comments.get("target")
+        or os.path.basename(path)
+    )
+
+    return SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium="unknown",
+        wave_frame="unknown",
+        name=seg_name,
+    ).sorted()
+    
+
+def read_gemini_gmos_ascii(path, name=None):
+    """
+    Read a reduced 1D Gemini/GMOS spectrum from an IRAF wspectext-like ASCII export.
+
+    Expected format:
+    - optional FITS-like header cards at the top
+    - optional END line terminating the header
+    - numeric rows thereafter, typically wavelength flux
+    - an optional third numeric column is treated as err
+
+    Returns
+    -------
+    SpectrumSegment
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+
+    header = {}
+    data_lines = []
+    in_header = True
+
+    for line in lines:
+        s = line.strip()
+
+        if not s:
+            continue
+
+        if in_header:
+            if s == "END":
+                in_header = False
+                continue
+
+            # FITS-like header card, e.g. KEYWORD = value / comment
+            if "=" in line and not re.match(r"^[+-]?[0-9]", s):
+                key, rest = line.split("=", 1)
+                key = key.strip()
+                value = rest.split("/", 1)[0].strip()
+
+                if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+                    value = value[1:-1].strip()
+
+                header[key] = value
+                continue
+
+            # No explicit END: if the line begins numerically, data start here.
+            if re.match(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[Ee][+-]?\d+)?", s):
+                in_header = False
+                data_lines.append(line)
+                continue
+
+            # Otherwise ignore stray non-data lines in the header block.
+            continue
+
+        data_lines.append(line)
+
+    if len(data_lines) == 0:
+        raise ValueError("No numeric spectral data found in Gemini/GMOS ASCII file: {0}".format(path))
+
+    arr = np.genfromtxt(_pyio.StringIO("".join(data_lines)), dtype=float)
+
+    if arr.ndim == 1:
+        if arr.size < 2:
+            raise ValueError("Need at least two numeric columns (wave, flux) in: {0}".format(path))
+        arr = arr.reshape(1, -1)
+
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        raise ValueError(
+            "Could not parse Gemini/GMOS ASCII spectrum with at least two columns: {0}".format(path)
+        )
+
+    wave = np.asarray(arr[:, 0], dtype=float)
+    flux = np.asarray(arr[:, 1], dtype=float)
+    err = None
+    if arr.shape[1] >= 3:
+        err = np.asarray(arr[:, 2], dtype=float)
+
+    mask = np.isfinite(wave) & np.isfinite(flux)
+    if err is not None:
+        mask &= np.isfinite(err) & (err > 0)
+
+    meta = {
+        "path": path,
+        "instrument": "GMOS",
+        "facility": "Gemini",
+        "object": header.get("OBJECT"),
+        "filename": header.get("FILENAME"),
+        "origin": header.get("ORIGIN"),
+        "iraf_type": header.get("IRAFTYPE"),
+        "wave_unit_input": "angstrom",
+        "resolution_R": None,
+        "wave_medium": "unknown",
+        "wave_frame": "unknown",
+        "header_cards": dict(header),
+    }
+
+    seg_name = (
+        name
+        or header.get("OBJECT")
+        or header.get("FILENAME")
+        or os.path.basename(path)
+    )
+
+    return SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium="unknown",
+        wave_frame="unknown",
+        name=seg_name,
+    ).sorted()
+    
+
+READERS = {}
+
+
+def register_reader(names, func):
+    """
+    Register one reader function under one or more instrument aliases.
+    """
+    if isinstance(names, str):
+        names = [names]
+
+    for name in names:
+        key = str(name).strip().lower()
+        if not key:
+            continue
+        READERS[key] = func
+
+
+register_reader(["pepsi", "pepsi_nor", "pepsi-1d", "pepsi1d"], read_pepsi_nor)
+register_reader(["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"], read_xshooter_1d)
+register_reader(["floyds", "floyds_csv", "lco_floyds"], read_floyds_csv)
+register_reader(["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"], read_gemini_gmos_ascii)
+
+  
 def read_spectrum(path, instrument=None, **kwargs):
     """
     Dispatcher for supported 1D spectrum readers.
     """
     inst = (instrument or "").strip().lower()
+    func = READERS.get(inst, None)
 
-    if inst in ["pepsi", "pepsi_nor", "pepsi-1d", "pepsi1d"]:
-        return read_pepsi_nor(path, **kwargs)
+    if func is None:
+        raise ValueError(
+            "Unknown instrument '{0}'. Supported: pepsi, xshooter, floyds, gemini".format(instrument)
+        )
 
-    if inst in ["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"]:
-        return read_xshooter_1d(path, **kwargs)
-
-    raise ValueError(
-        "Unknown instrument '{0}'. Supported: pepsi, xshooter".format(instrument)
-    )
+    return func(path, **kwargs)
