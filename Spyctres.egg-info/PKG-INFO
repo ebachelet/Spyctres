@@ -1,0 +1,33 @@
+Metadata-Version: 2.4
+Name: Spyctres
+Version: 0.4.0
+Summary: It fits your spectra!
+Home-page: https://github.com/ebachelet/Spyctres
+Download-URL: 
+Author: Etienne Bachelet
+Author-email: etibachelet@gmail.com
+License: GPL-3.0
+Keywords: Spectroscopy
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.6,<4
+License-File: LICENSE
+Requires-Dist: scipy
+Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: astropy
+Requires-Dist: speclite
+Requires-Dist: pysynphot
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
