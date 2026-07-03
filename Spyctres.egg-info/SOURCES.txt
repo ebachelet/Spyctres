@@ -2,7 +2,16 @@ LICENSE
 README.md
 setup.py
 Spyctres/Spyctres.py
+Spyctres/Spyctres_old.py
 Spyctres/__init__.py
+Spyctres/config.py
+Spyctres/fitting.py
+Spyctres/io.py
+Spyctres/phoenix.py
+Spyctres/phoenix_forward.py
+Spyctres/plotting.py
+Spyctres/recipes.py
+Spyctres/waveutils.py
 Spyctres.egg-info/PKG-INFO
 Spyctres.egg-info/SOURCES.txt
 Spyctres.egg-info/dependency_links.txt

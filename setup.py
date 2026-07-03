@@ -10,7 +10,18 @@ setup(
     license='GPL-3.0',
     url="https://github.com/ebachelet/Spyctres",
     download_url = '',
-    install_requires=['scipy','numpy','matplotlib','astropy','speclite','pysynphot'],
+    install_requires=[
+        'numpy>=1.26,<2',
+        'scipy>=1.11,<1.17',
+        'matplotlib',
+        'astropy>=6,<8',
+        'speclite',
+        'pysynphot',
+        'synphot>=1.1',
+        'stsynphot>=1.5',
+        # pysynphot imports pkg_resources at runtime.
+        'setuptools<81',
+    ],
     python_requires='>=3.12,<4',
     test_suite="nose.collector",
     classifiers=[

@@ -16,12 +16,15 @@ Classifier: Programming Language :: Python :: 3
 Classifier: Programming Language :: Python :: 3.12
 Requires-Python: >=3.12,<4
 License-File: LICENSE
-Requires-Dist: scipy
-Requires-Dist: numpy
+Requires-Dist: numpy<2,>=1.26
+Requires-Dist: scipy<1.17,>=1.11
 Requires-Dist: matplotlib
-Requires-Dist: astropy
+Requires-Dist: astropy<8,>=6
 Requires-Dist: speclite
 Requires-Dist: pysynphot
+Requires-Dist: synphot>=1.1
+Requires-Dist: stsynphot>=1.5
+Requires-Dist: setuptools<81
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier

@@ -140,6 +140,5 @@ with mul.Pool(processes=8) as pool:
     sampler = emcee.EnsembleSampler(nwalkers, ndim, objective_function, args=(spectra,telluric_mask,'k93models',bound),pool = pool)
     final_positions, final_probabilities, state = sampler.run_mcmc(pos, nchains, progress=True)
 
-   breakpoint()
-
+    breakpoint()
 

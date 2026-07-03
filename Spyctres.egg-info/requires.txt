@@ -1,6 +1,9 @@
-scipy
-numpy
+numpy<2,>=1.26
+scipy<1.17,>=1.11
 matplotlib
-astropy
+astropy<8,>=6
 speclite
 pysynphot
+synphot>=1.1
+stsynphot>=1.5
+setuptools<81
