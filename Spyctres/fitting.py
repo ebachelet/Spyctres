@@ -13,6 +13,7 @@ from .phoenix_forward import (
     build_phoenix_native_models_for_segments,
     build_native_interp_wave_grid_for_segments,
     convolve_to_resolution_loglam,
+    resolve_gaussian_lsf_fwhm_kms,
 )
 # Why multiplicative polynomial: it is a standard way to absorb low-frequency continuum differences and calibration mismatches during full-spectrum fitting.
 
@@ -82,22 +83,7 @@ def _resolve_broadening_fwhm_kms(R=None, fwhm_kms=None):
     Resolve the effective Gaussian FWHM in km/s.
     Exactly one of R or fwhm_kms may be provided.
     """
-    if (R is not None) and (fwhm_kms is not None):
-        raise ValueError("Provide only one of R or fwhm_kms, not both.")
-
-    if fwhm_kms is not None:
-        fwhm_kms = float(fwhm_kms)
-        if fwhm_kms <= 0:
-            raise ValueError("fwhm_kms must be > 0.")
-        return fwhm_kms
-
-    if R is None:
-        return None
-
-    R = float(R)
-    if R <= 0:
-        raise ValueError("R must be > 0.")
-    return C_KMS / R
+    return resolve_gaussian_lsf_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
 
 
 def _resolve_segment_fwhm_kms(seg, R=None, fwhm_kms=None):
@@ -118,21 +104,28 @@ def _resolve_segment_fwhm_kms(seg, R=None, fwhm_kms=None):
         val = meta.get(key, None)
         if val is None:
             continue
-        val = float(val)
-        if val <= 0:
+        try:
+            return resolve_gaussian_lsf_fwhm_kms(fwhm_kms=val)
+        except ValueError as exc:
             raise ValueError(
-                "{0} must be > 0 for segment {1}".format(key, getattr(seg, "name", None))
-            )
-        return val
+                "Invalid {0} for segment {1}: {2}".format(
+                    key,
+                    getattr(seg, "name", None),
+                    exc,
+                )
+            ) from exc
 
     val = meta.get("resolution_R", None)
     if val is not None:
-        val = float(val)
-        if val <= 0:
+        try:
+            return resolve_gaussian_lsf_fwhm_kms(R=val)
+        except ValueError as exc:
             raise ValueError(
-                "resolution_R must be > 0 for segment {0}".format(getattr(seg, "name", None))
-            )
-        return C_KMS / val
+                "Invalid resolution_R for segment {0}: {1}".format(
+                    getattr(seg, "name", None),
+                    exc,
+                )
+            ) from exc
 
     return _resolve_broadening_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
     

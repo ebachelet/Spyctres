@@ -1,9 +1,14 @@
 # Spyctres/phoenix_forward.py
+import warnings
+
 import numpy as np
-from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter1d
+from scipy.fft import irfft, next_fast_len, rfft, rfftfreq
+from scipy.interpolate import CubicSpline, interp1d
 
 from .waveutils import convert_wavelength_medium, C_KMS
+
+
+GAUSSIAN_FWHM_TO_SIGMA = 2.3548200450309493
 
 def _coerce_segment_list(segments):
     """
@@ -203,13 +208,63 @@ def doppler_shift_wave(wave_A, rv_kms):
     return wave_A * (1.0 + float(rv_kms) / C_KMS)
 
 
-def convolve_to_resolution_loglam(wave_A, flux, R=None, fwhm_kms=None):
+def resolve_gaussian_lsf_fwhm_kms(R=None, fwhm_kms=None):
+    """Resolve a Gaussian LSF specification to a velocity FWHM in km/s."""
+    if (R is not None) and (fwhm_kms is not None):
+        raise ValueError("Provide only one of R or fwhm_kms, not both.")
+
+    if R is None and fwhm_kms is None:
+        return None
+
+    if fwhm_kms is None:
+        R = float(R)
+        if not np.isfinite(R) or R <= 0:
+            raise ValueError("R must be finite and > 0.")
+        return C_KMS / R
+
+    fwhm_kms = float(fwhm_kms)
+    if not np.isfinite(fwhm_kms) or fwhm_kms <= 0:
+        raise ValueError("fwhm_kms must be finite and > 0.")
+    return fwhm_kms
+
+
+def _pixel_edges_from_centers(x):
+    """Return pixel edges for a strictly increasing 1D coordinate array."""
+    edges = np.empty(len(x) + 1, dtype=float)
+    edges[1:-1] = 0.5 * (x[:-1] + x[1:])
+    edges[0] = x[0] - 0.5 * (x[1] - x[0])
+    edges[-1] = x[-1] + 0.5 * (x[-1] - x[-2])
+    return edges
+
+
+def _rebin_flux_density_piecewise_constant(old_edges, old_flux, new_edges):
+    """Flux-conserving rebin of pixel-averaged samples onto new pixel edges."""
+    cumulative = np.concatenate(
+        ([0.0], np.cumsum(old_flux * np.diff(old_edges), dtype=float))
+    )
+    cumulative_new = np.interp(new_edges, old_edges, cumulative)
+    return np.diff(cumulative_new) / np.diff(new_edges)
+
+
+def convolve_to_resolution_loglam(
+    wave_A,
+    flux,
+    R=None,
+    fwhm_kms=None,
+    padding_sigma=6.0,
+):
     """
-    Convolve a spectrum with a Gaussian LSF on a log-lambda grid.
+    Convolve a spectrum with a Gaussian LSF on a uniform log-lambda grid.
+
+    The log-grid velocity step is set by the target LSF with approximately
+    one pixel per Gaussian sigma. Convolution uses the analytic Fourier
+    transform of the Gaussian, avoiding a directly sampled kernel near the
+    Nyquist limit.
 
     The returned array always has the same shape and ordering as the input flux.
     Exactly one of ``R`` or ``fwhm_kms`` may be supplied. If both are None,
-    the input flux is returned unchanged.
+    the input flux is returned unchanged. ``padding_sigma`` controls the FFT
+    edge padding in Gaussian-sigma units and must be at least 3.
     """
     wave_A = np.asarray(wave_A, dtype=np.float64)
     flux = np.asarray(flux, dtype=np.float64)
@@ -217,21 +272,16 @@ def convolve_to_resolution_loglam(wave_A, flux, R=None, fwhm_kms=None):
     if wave_A.shape != flux.shape:
         raise ValueError("wave_A and flux must have the same shape.")
 
-    if (R is not None) and (fwhm_kms is not None):
-        raise ValueError("Provide only one of R or fwhm_kms, not both.")
+    if wave_A.ndim != 1:
+        raise ValueError("wave_A and flux must be 1D arrays.")
 
-    if fwhm_kms is None and R is None:
+    fwhm_kms = resolve_gaussian_lsf_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
+    if fwhm_kms is None:
         return flux.copy()
 
-    if fwhm_kms is None:
-        R = float(R)
-        if R <= 0:
-            raise ValueError("R must be > 0.")
-        fwhm_kms = C_KMS / R
-    else:
-        fwhm_kms = float(fwhm_kms)
-        if fwhm_kms <= 0:
-            raise ValueError("fwhm_kms must be > 0.")
+    padding_sigma = float(padding_sigma)
+    if not np.isfinite(padding_sigma) or padding_sigma < 3.0:
+        raise ValueError("padding_sigma must be finite and >= 3.")
 
     good = np.isfinite(wave_A) & (wave_A > 0) & np.isfinite(flux)
     if np.sum(good) < 5:
@@ -245,17 +295,71 @@ def convolve_to_resolution_loglam(wave_A, flux, R=None, fwhm_kms=None):
     f_sorted = f_good[order]
 
     loglam = np.log(w_sorted)
-    dloglam = np.nanmedian(np.diff(loglam))
-    if (not np.isfinite(dloglam)) or (dloglam <= 0):
-        return flux.copy()
+    dlog_input = np.diff(loglam)
+    if np.any(dlog_input <= 0):
+        raise ValueError("Valid wavelengths must be unique.")
 
-    sigma_v = fwhm_kms / 2.3548200450309493
-    sigma_pix = (sigma_v / C_KMS) / dloglam
+    sigma_v = fwhm_kms / GAUSSIAN_FWHM_TO_SIGMA
+    median_dv_input = C_KMS * float(np.median(dlog_input))
+    if median_dv_input > sigma_v:
+        warnings.warn(
+            "Input wavelength sampling is coarser than the requested Gaussian "
+            "LSF sigma; the broadened result may be undersampled.",
+            UserWarning,
+            stacklevel=2,
+        )
 
-    if (not np.isfinite(sigma_pix)) or (sigma_pix < 0.3):
-        return flux.copy()
+    input_edges = _pixel_edges_from_centers(loglam)
+    target_dlog = sigma_v / C_KMS
+    log_span = float(input_edges[-1] - input_edges[0])
+    n_bins = max(2, int(np.ceil(log_span / target_dlog)))
+    uniform_edges = np.linspace(input_edges[0], input_edges[-1], n_bins + 1)
+    log_uniform = 0.5 * (uniform_edges[:-1] + uniform_edges[1:])
+    dlog_uniform = log_span / n_bins
 
-    f_conv_sorted = gaussian_filter1d(f_sorted, sigma_pix, mode="nearest")
+    # Flux-conserving rebinning averages over a top-hat pixel whose variance is
+    # dv**2 / 12. Subtract that known pixel response in quadrature so the total
+    # effective broadening remains the user-requested Gaussian sigma.
+    dv_uniform = C_KMS * dlog_uniform
+    pixel_sigma_v = dv_uniform / np.sqrt(12.0)
+    kernel_sigma_v = np.sqrt(max(0.0, sigma_v**2 - pixel_sigma_v**2))
+    sigma_pix = (kernel_sigma_v / C_KMS) / dlog_uniform
+
+    f_uniform = _rebin_flux_density_piecewise_constant(
+        input_edges,
+        f_sorted,
+        uniform_edges,
+    )
+
+    # Edge-value padding preserves the previous nearest-edge behavior while
+    # placing the periodic FFT seam far enough away to avoid wraparound.
+    pad_min = max(1, int(np.ceil(padding_sigma * sigma_pix)))
+    n_fft = next_fast_len(len(f_uniform) + 2 * pad_min)
+    pad_left = pad_min
+    pad_right = n_fft - len(f_uniform) - pad_left
+    f_padded = np.pad(f_uniform, (pad_left, pad_right), mode="edge")
+
+    frequency = rfftfreq(n_fft)
+    gaussian_ft = np.exp(-0.5 * (2.0 * np.pi * sigma_pix * frequency) ** 2)
+    f_conv_padded = irfft(rfft(f_padded) * gaussian_ft, n=n_fft)
+    f_conv_uniform = f_conv_padded[pad_left:pad_left + len(f_uniform)]
+
+    # Cubic reconstruction is materially more accurate than linear/PCHIP when
+    # returning a Nyquist-sampled broadened profile to the original grid. The
+    # physical range guard below removes the tiny edge overshoot a cubic can
+    # otherwise introduce.
+    return_interp = CubicSpline(
+        log_uniform,
+        f_conv_uniform,
+        bc_type="natural",
+        extrapolate=True,
+    )
+    f_conv_sorted = np.asarray(return_interp(loglam), dtype=float)
+    f_conv_sorted = np.clip(
+        f_conv_sorted,
+        float(np.min(f_sorted)),
+        float(np.max(f_sorted)),
+    )
 
     f_conv_good = np.empty_like(f_good)
     f_conv_good[order] = f_conv_sorted
@@ -412,18 +516,18 @@ def build_phoenix_native_models_for_segments(
     f_native = f_native[m]
 
     if segment_fwhm_kms is None:
-        if (R is not None) and (fwhm_kms is not None):
-            raise ValueError("Provide only one of R or fwhm_kms, not both.")
-        if fwhm_kms is None and R is None:
-            segment_fwhm_kms = [None] * len(segments)
-        elif fwhm_kms is not None:
-            segment_fwhm_kms = [float(fwhm_kms)] * len(segments)
-        else:
-            segment_fwhm_kms = [C_KMS / float(R)] * len(segments)
+        resolved_fwhm = resolve_gaussian_lsf_fwhm_kms(
+            R=R,
+            fwhm_kms=fwhm_kms,
+        )
+        segment_fwhm_kms = [resolved_fwhm] * len(segments)
     else:
         if len(segment_fwhm_kms) != len(segments):
             raise ValueError("segment_fwhm_kms must match the number of segments.")
-        segment_fwhm_kms = [None if x is None else float(x) for x in segment_fwhm_kms]
+        segment_fwhm_kms = [
+            resolve_gaussian_lsf_fwhm_kms(fwhm_kms=x)
+            for x in segment_fwhm_kms
+        ]
 
     conv_cache = {}
     model_list = []
