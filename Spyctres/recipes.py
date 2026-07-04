@@ -20,7 +20,11 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .io import SpectrumSegment, make_padded_window_segments
-from .waveutils import convert_wavelength_medium, C_KMS
+from .waveutils import (
+    C_KMS,
+    convert_segment_wavelength_medium,
+    convert_wavelength_medium,
+)
 from .fitting import (
     build_effective_fit_mask,
     build_excluded_mask,
@@ -1060,17 +1064,18 @@ def apply_pepsi_wave_hypothesis(seg, hypothesis):
         return seg.copy(meta=meta, wave_medium="vacuum", name=(seg.name or "seg") + "_vacuum")
 
     if hypothesis == "air_to_vac":
-        wave_new = convert_wavelength_medium(
-            np.asarray(seg.wave, dtype=float),
-            from_medium="air",
-            to_medium="vacuum",
-        )
         meta = dict(seg.meta)
-        meta["wave_medium"] = "vacuum"
-        return seg.copy(
-            wave=wave_new,
+        meta["wave_medium"] = "air"
+        assumed_air = seg.copy(
             meta=meta,
-            wave_medium="vacuum",
+            wave_medium="air",
+        )
+        converted = convert_segment_wavelength_medium(
+            assumed_air,
+            to_medium="vacuum",
+            method="ciddor1996",
+        )
+        return converted.copy(
             name=(seg.name or "seg") + "_air2vac",
         ).sorted()
 

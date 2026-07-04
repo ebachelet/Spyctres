@@ -22,10 +22,17 @@ https://doi.org/10.1051/0004-6361/201219058.
 Ciddor, P. E. (1996), Refractive index of air: new equations for the visible
 and near infrared, Applied Optics, 35, 1566-1573,
 https://doi.org/10.1364/AO.35.001566.
+
+Morton, D. C. (2000), Atomic Data for Resonance Absorption Lines. II,
+https://doi.org/10.1086/317349; Birch, K. P. & Downs, M. J. (1994),
+https://doi.org/10.1088/0026-1394/31/4/006. These support the VALD3
+vacuum-to-air convention. VALD3's reversible air-to-vacuum inverse is
+documented at https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion.
 """
 import numpy as np
 
 C_KMS = 299792.458
+AIR_VACUUM_MIN_A = 2000.0
 
 def _as_float_array(x):
     """Return x as a NumPy float array."""
@@ -150,7 +157,12 @@ def vacuum_to_air_ciddor(wave_vac):
         Air wavelengths in Angstrom.
     """
     wave_vac = _as_float_array(wave_vac)
-    return wave_vac / _ciddor_factor_from_vacuum_angstrom(wave_vac)
+    converted = wave_vac.copy()
+    use = wave_vac > AIR_VACUUM_MIN_A
+    converted[use] = wave_vac[use] / _ciddor_factor_from_vacuum_angstrom(
+        wave_vac[use]
+    )
+    return converted
 
 
 def air_to_vacuum_ciddor(wave_air, n_iter=3):
@@ -171,13 +183,84 @@ def air_to_vacuum_ciddor(wave_air, n_iter=3):
         Vacuum wavelengths in Angstrom.
     """
     wave_air = _as_float_array(wave_air)
+    n_iter = int(n_iter)
+    if n_iter < 1:
+        raise ValueError("n_iter must be >= 1.")
     wave_vac = wave_air.copy()
-    for _ in range(int(n_iter)):
-        wave_vac = wave_air * _ciddor_factor_from_vacuum_angstrom(wave_vac)
+    use = wave_air > AIR_VACUUM_MIN_A
+    for _ in range(n_iter):
+        wave_vac[use] = wave_air[use] * _ciddor_factor_from_vacuum_angstrom(
+            wave_vac[use]
+        )
     return wave_vac
 
 
-def convert_wavelength_medium(wave, from_medium, to_medium):
+def vacuum_to_air_vald(wave_vac):
+    """Convert vacuum to air wavelengths using the VALD3/Morton convention.
+
+    The Morton (2000) relation follows Birch & Downs (1994). Primary papers:
+    https://doi.org/10.1086/317349 and
+    https://doi.org/10.1088/0026-1394/31/4/006
+    """
+    wave_vac = _as_float_array(wave_vac)
+    converted = wave_vac.copy()
+    use = wave_vac > AIR_VACUUM_MIN_A
+    sigma2 = (1.0e4 / wave_vac[use]) ** 2
+    refractive_index = (
+        1.0
+        + 0.0000834254
+        + 0.02406147 / (130.0 - sigma2)
+        + 0.00015998 / (38.9 - sigma2)
+    )
+    converted[use] = wave_vac[use] / refractive_index
+    return converted
+
+
+def air_to_vacuum_vald(wave_air):
+    """Convert air to vacuum wavelengths with VALD3's reversible inverse.
+
+    These are the coefficients historically embedded in ``get_element_lines``.
+    The exact Piskunov inverse and its validity range are documented by VALD3:
+    https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion
+    """
+    wave_air = _as_float_array(wave_air)
+    converted = wave_air.copy()
+    use = wave_air > AIR_VACUUM_MIN_A
+    sigma2 = (1.0e4 / wave_air[use]) ** 2
+    refractive_index = (
+        1.0
+        + 0.00008336624212083
+        + 0.02408926869968 / (130.1065924522 - sigma2)
+        + 0.0001599740894897 / (38.92568793293 - sigma2)
+    )
+    converted[use] = wave_air[use] * refractive_index
+    return converted
+
+
+def _normalize_air_vacuum_method(method):
+    method = str(method).strip().lower()
+    aliases = {
+        "ciddor": "ciddor1996",
+        "ciddor1996": "ciddor1996",
+        "vald": "vald3",
+        "vald3": "vald3",
+        "morton": "vald3",
+        "morton2000": "vald3",
+    }
+    if method not in aliases:
+        raise ValueError(
+            "Unknown wavelength conversion method '{0}'. Supported methods are "
+            "'ciddor1996' and 'vald3'.".format(method)
+        )
+    return aliases[method]
+
+
+def convert_wavelength_medium(
+    wave,
+    from_medium,
+    to_medium,
+    method="ciddor1996",
+):
     """
     Convert wavelength medium between 'air', 'vacuum', and 'unknown'.
     
@@ -192,6 +275,9 @@ def convert_wavelength_medium(wave, from_medium, to_medium):
         'air', 'vacuum', or 'unknown'
     to_medium : str
         'air', 'vacuum', or 'unknown'
+    method : {'ciddor1996', 'vald3'}
+        Explicit refractive-index convention. The default preserves the current
+        PHOENIX workflow; ``vald3`` preserves Etienne's legacy line-list path.
 
     Returns
     -------
@@ -206,6 +292,7 @@ def convert_wavelength_medium(wave, from_medium, to_medium):
     wave = _as_float_array(wave)
     from_medium = str(from_medium).lower()
     to_medium = str(to_medium).lower()
+    method = _normalize_air_vacuum_method(method)
 
     if from_medium == to_medium:
         return wave.copy()
@@ -216,13 +303,70 @@ def convert_wavelength_medium(wave, from_medium, to_medium):
         )
 
     if from_medium == "vacuum" and to_medium == "air":
-        return vacuum_to_air_ciddor(wave)
+        if method == "ciddor1996":
+            return vacuum_to_air_ciddor(wave)
+        return vacuum_to_air_vald(wave)
 
     if from_medium == "air" and to_medium == "vacuum":
-        return air_to_vacuum_ciddor(wave)
+        if method == "ciddor1996":
+            return air_to_vacuum_ciddor(wave)
+        return air_to_vacuum_vald(wave)
 
     raise ValueError(
         "Unsupported wavelength-medium conversion: {0} -> {1}".format(
             from_medium, to_medium
         )
+    )
+
+
+def convert_segment_wavelength_medium(segment, to_medium, method="ciddor1996"):
+    """Return a converted segment copy with wavelength-conversion provenance."""
+    from_medium = str(segment.wave_medium).strip().lower()
+    to_medium = str(to_medium).strip().lower()
+    method = _normalize_air_vacuum_method(method)
+    converted_wave = convert_wavelength_medium(
+        segment.wave,
+        from_medium=from_medium,
+        to_medium=to_medium,
+        method=method,
+    )
+
+    resolution = getattr(segment, "resolution", None)
+    if resolution is not None and resolution.mode == "tabulated":
+        from .io import ResolutionDescriptor
+
+        resolution = ResolutionDescriptor(
+            quantity=resolution.quantity,
+            mode="tabulated",
+            wave_A=convert_wavelength_medium(
+                resolution.wave_A,
+                from_medium=from_medium,
+                to_medium=to_medium,
+                method=method,
+            ),
+            values=resolution.values,
+            source=resolution.source,
+        )
+
+    meta = dict(segment.meta)
+    history = list(meta.get("wavelength_conversions", []))
+    history.append(
+        {
+            "from_medium": from_medium,
+            "to_medium": to_medium,
+            "method": method,
+            "air_vacuum_boundary_A": AIR_VACUUM_MIN_A,
+        }
+    )
+    meta["wavelength_conversions"] = history
+    meta["wave_medium"] = to_medium
+    meta["resolution"] = (
+        None if resolution is None else resolution.to_metadata()
+    )
+
+    return segment.copy(
+        wave=converted_wave,
+        meta=meta,
+        wave_medium=to_medium,
+        resolution=resolution,
     )

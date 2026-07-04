@@ -21,7 +21,7 @@
       "url": "https://doi.org/10.1051/0004-6361/201219058",
       "validated_via": "Publisher article and Crossref metadata",
       "validated_on": "2026-07-04",
-      "description": "Describes the PHOENIX synthetic spectral library used by the template backend, including its parameter coverage and wavelength conventions. It is the primary scientific reference for the model spectra loaded, interpolated, and fitted by the PHOENIX workflow.",
+      "description": "Describes the PHOENIX synthetic spectral library used by the template backend, including its 2300-12000 K parameter coverage, LTE assumptions, and wavelength conventions. It is the primary scientific reference for the model spectra loaded, interpolated, and fitted by the PHOENIX workflow, and supports the hard guard against using this grid above 12000 K.",
       "affected_code": [
         "Spyctres/phoenix.py",
         "Spyctres/phoenix_forward.py",
@@ -54,6 +54,43 @@
         "Spyctres/Spyctres.py:bin_spectrum",
         "Spyctres/Spyctres_old.py:bin_spectrum",
         "Spyctres/phoenix_forward.py:_rebin_flux_density_piecewise_constant"
+      ]
+    },
+    {
+      "id": "morton2000_atomic_wavelengths",
+      "citation": "Morton, D. C. (2000), Atomic Data for Resonance Absorption Lines. II. Wavelengths Longward of the Lyman Limit for Heavy Elements, The Astrophysical Journal Supplement Series, 130, 403-436.",
+      "doi": "10.1086/317349",
+      "url": "https://doi.org/10.1086/317349",
+      "validated_via": "IOP DOI resolution and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Documents the vacuum-to-air refractive-index convention adopted by VALD3 for wavelengths above 2000 Angstrom. Spyctres exposes this convention as the vacuum-to-air half of the explicitly selected vald3 conversion method rather than silently mixing it with the Ciddor implementation.",
+      "affected_code": [
+        "Spyctres/waveutils.py:vacuum_to_air_vald",
+        "Spyctres/waveutils.py:convert_wavelength_medium"
+      ]
+    },
+    {
+      "id": "birch_downs1994_refractive_index",
+      "citation": "Birch, K. P. & Downs, M. J. (1994), Correction to the Updated Edlen Equation for the Refractive Index of Air, Metrologia, 31, 315-316.",
+      "doi": "10.1088/0026-1394/31/4/006",
+      "url": "https://doi.org/10.1088/0026-1394/31/4/006",
+      "validated_via": "IOP DOI resolution and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Provides the corrected refractive-index basis cited by Morton and the VALD3 wavelength-conversion documentation. It establishes the physical dry-air conditions underlying the vald3 conversion, which are distinct from the separately available Ciddor method.",
+      "affected_code": [
+        "Spyctres/waveutils.py:vacuum_to_air_vald"
+      ]
+    },
+    {
+      "id": "vald3_air_vacuum_documentation",
+      "citation": "VALD3 Documentation, Wavelength conversion air <-> vacuum, including the reversible air-to-vacuum inverse derived by N. Piskunov.",
+      "url": "https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion",
+      "validated_via": "Official VALD documentation page and coefficient comparison",
+      "validated_on": "2026-07-04",
+      "description": "This is the authoritative technical source for the exact Piskunov inverse coefficients historically embedded in Etienne's get_element_lines implementation. The formula is paired with the Morton vacuum-to-air relation, is defined only above 2000 Angstrom, and is retained as an explicitly named compatibility method.",
+      "affected_code": [
+        "Spyctres/waveutils.py:air_to_vacuum_vald",
+        "Spyctres/Spyctres.py:get_element_lines"
       ]
     }
   ]

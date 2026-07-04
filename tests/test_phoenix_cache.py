@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from Spyctres.phoenix import PhoenixLibrary
+from Spyctres.phoenix import (
+    PHOENIX_MAX_TEFF_K,
+    PhoenixLibrary,
+    validate_phoenix_teff,
+)
 
 
 def make_library(tmp_path):
@@ -33,3 +37,10 @@ def test_cache_rejects_changed_wavelength_grid(tmp_path):
             cache_path,
             expected_wave=np.array([5000.0, 5001.0, 5003.0]),
         )
+
+
+def test_phoenix_temperature_guard_accepts_boundary_and_rejects_hotter_models():
+    assert validate_phoenix_teff(PHOENIX_MAX_TEFF_K) == PHOENIX_MAX_TEFF_K
+
+    with pytest.raises(ValueError, match="appropriate physics"):
+        validate_phoenix_teff(PHOENIX_MAX_TEFF_K + 0.1)

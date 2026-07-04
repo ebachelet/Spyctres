@@ -9,11 +9,17 @@ from Spyctres.phoenix_forward import (
     resolve_gaussian_lsf_fwhm_kms,
 )
 from Spyctres.waveutils import (
+    AIR_VACUUM_MIN_A,
     air_to_vacuum_ciddor,
+    air_to_vacuum_vald,
+    convert_segment_wavelength_medium,
+    convert_wavelength_medium,
     doppler_factor,
     shift_wavelength_velocity,
     vacuum_to_air_ciddor,
+    vacuum_to_air_vald,
 )
+from Spyctres.io import ResolutionDescriptor, SpectrumSegment
 
 
 def test_positive_velocity_redshifts_wavelengths():
@@ -31,6 +37,111 @@ def test_air_vacuum_round_trip():
 
     assert np.all(wave_vacuum > wave_air)
     assert np.allclose(recovered_air, wave_air, rtol=0.0, atol=1.0e-8)
+
+
+def test_vald_reference_values_match_documented_coefficients():
+    wave_air = np.array([2000.1, 5000.0, 10000.0, 100000.0])
+    expected_vacuum = np.array(
+        [2000.748103141021, 5001.394848638070, 10002.741686781708, 100027.26415149611]
+    )
+    wave_vacuum = np.array([2000.1, 5000.0, 10000.0, 100000.0])
+    expected_air = np.array(
+        [1999.452009425855, 4998.605522013399, 9997.259056168934, 99972.74327898231]
+    )
+
+    assert np.allclose(
+        air_to_vacuum_vald(wave_air),
+        expected_vacuum,
+        rtol=0.0,
+        atol=5.0e-11,
+    )
+    assert np.allclose(
+        vacuum_to_air_vald(wave_vacuum),
+        expected_air,
+        rtol=0.0,
+        atol=5.0e-11,
+    )
+
+
+@pytest.mark.parametrize("method", ["ciddor1996", "vald3"])
+def test_air_vacuum_boundary_and_round_trip(method):
+    wave_air = np.array([1500.0, AIR_VACUUM_MIN_A, 2000.1, 5000.0, 10000.0])
+    wave_vacuum = convert_wavelength_medium(
+        wave_air,
+        from_medium="air",
+        to_medium="vacuum",
+        method=method,
+    )
+    recovered = convert_wavelength_medium(
+        wave_vacuum,
+        from_medium="vacuum",
+        to_medium="air",
+        method=method,
+    )
+
+    assert np.array_equal(wave_vacuum[:2], wave_air[:2])
+    assert np.all(wave_vacuum[2:] > wave_air[2:])
+    assert np.allclose(recovered, wave_air, rtol=0.0, atol=2.0e-8)
+
+
+def test_conversion_method_is_explicit_and_validated():
+    wave = np.array([5000.0])
+    ciddor = convert_wavelength_medium(wave, "air", "vacuum")
+    explicit_ciddor = convert_wavelength_medium(
+        wave, "air", "vacuum", method="ciddor1996"
+    )
+    vald = convert_wavelength_medium(wave, "air", "vacuum", method="vald3")
+
+    assert np.array_equal(ciddor, explicit_ciddor)
+    assert not np.array_equal(ciddor, vald)
+    with pytest.raises(ValueError, match="Unknown wavelength conversion method"):
+        convert_wavelength_medium(wave, "air", "air", method="unspecified")
+
+    with pytest.raises(ValueError, match="n_iter"):
+        air_to_vacuum_ciddor(wave, n_iter=0)
+
+
+def test_segment_conversion_preserves_data_and_converts_tabulated_lsf_grid():
+    resolution = ResolutionDescriptor(
+        quantity="sigma_kms",
+        mode="tabulated",
+        wave_A=[4000.0, 5000.0, 6000.0],
+        values=[13.0, 11.0, 12.0],
+        source="test",
+    )
+    segment = SpectrumSegment(
+        wave=[4000.0, 5000.0, 6000.0],
+        flux=[1.0, 0.8, 1.1],
+        err=[0.1, 0.1, 0.2],
+        mask=[True, False, True],
+        wave_medium="air",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=resolution,
+    )
+
+    converted = convert_segment_wavelength_medium(
+        segment,
+        to_medium="vacuum",
+        method="vald3",
+    )
+
+    assert converted is not segment
+    assert np.array_equal(segment.wave, [4000.0, 5000.0, 6000.0])
+    assert np.all(converted.wave > segment.wave)
+    assert np.array_equal(converted.flux, segment.flux)
+    assert np.array_equal(converted.err, segment.err)
+    assert np.array_equal(converted.mask, segment.mask)
+    assert converted.observer_frame == "barycentric"
+    assert converted.stellar_rest_status == "observed"
+    assert np.all(converted.resolution.wave_A > resolution.wave_A)
+    assert converted.meta["resolution"]["wave_A"] == pytest.approx(
+        converted.resolution.wave_A.tolist()
+    )
+    record = converted.meta["wavelength_conversions"][-1]
+    assert record["method"] == "vald3"
+    assert record["from_medium"] == "air"
+    assert record["to_medium"] == "vacuum"
 
 
 def test_no_broadening_is_exact_noop():

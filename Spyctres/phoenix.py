@@ -14,6 +14,28 @@ from scipy.interpolate import RegularGridInterpolator
 from .waveutils import convert_wavelength_medium
 
 
+PHOENIX_MAX_TEFF_K = 12000.0
+
+
+def validate_phoenix_teff(teff):
+    """Reject temperatures outside the supported PHOENIX HiRes LTE grid.
+
+    The Husser et al. (2013) library ends at 12,000 K and is an LTE grid; using
+    it above that limit would silently omit important hot-star physics.
+    https://doi.org/10.1051/0004-6361/201219058
+    """
+    value = float(teff)
+    if not np.isfinite(value) or value > PHOENIX_MAX_TEFF_K:
+        raise ValueError(
+            "PHOENIX HiRes supports finite Teff <= {0:.0f} K; got {1}. "
+            "Use a hot-star atmosphere backend with appropriate physics instead.".format(
+                PHOENIX_MAX_TEFF_K,
+                teff,
+            )
+        )
+    return value
+
+
 def _as_float_array(x):
     x = np.asarray(x, dtype=float)
     if x.ndim != 1:
@@ -279,6 +301,7 @@ class PhoenixLibrary(object):
         The PHOENIX wavelength grid is first converted from `self.phoenix_wave_medium`
         into `wave_medium` when needed.
         """
+        teff = validate_phoenix_teff(teff)
         path = self.template_path(teff, logg, feh)
         if not os.path.exists(path):
             raise FileNotFoundError("PHOENIX template not found: {0}".format(path))
@@ -407,6 +430,8 @@ class PhoenixLibrary(object):
         teff_grid = self.DEFAULT_TEFF_GRID if teff_grid is None else _as_float_array(teff_grid)
         feh_grid = self.DEFAULT_FEH_GRID if feh_grid is None else _as_float_array(feh_grid)
         logg_grid = self.DEFAULT_LOGG_GRID if logg_grid is None else _as_float_array(logg_grid)
+        for teff in teff_grid:
+            validate_phoenix_teff(teff)
          
         if cache_path is not None:
             cache_path = os.path.abspath(os.path.expanduser(cache_path))
@@ -488,7 +513,7 @@ class PhoenixLibrary(object):
         """
         if self._interp is None or self.wave is None:
             raise RuntimeError("Interpolator not built. Call build_interpolator() first.")
-        p = (float(teff), float(feh), float(logg))
+        p = (validate_phoenix_teff(teff), float(feh), float(logg))
         return self._interp(p)
     
     def save_cache(self, cache_path, observed_wave_medium):
@@ -525,6 +550,8 @@ class PhoenixLibrary(object):
         d = np.load(cache_path, allow_pickle=False)
 
         teff_grid = d["teff_grid"].astype(float)
+        for teff in teff_grid:
+            validate_phoenix_teff(teff)
         feh_grid = d["feh_grid"].astype(float)
         logg_grid = d["logg_grid"].astype(float)
         wave = d["wave"].astype(float)

@@ -103,6 +103,11 @@ Scientific references supporting implemented algorithms are maintained in
 `references.json`, together with their affected code paths and validation
 notes.
 
+Air/vacuum conversion conventions are explicit. `ciddor1996` remains the
+PHOENIX workflow default, while `vald3` preserves the historical Spyctres line-
+list conversion. Both leave wavelengths at or below 2000 Angstrom unchanged
+and record the selected method when converting a `SpectrumSegment`.
+
 ## Project structure
 
 Spyctres is organized around four layers:
