@@ -17,10 +17,11 @@ References
 Husser, T.-O., Wende-von Berg, S., Dreizler, S., Homeier, D., Reiners, A.,
 Barman, T., & Hauschildt, P. H. (2013), A new extensive library of PHOENIX
 stellar atmospheres and synthetic spectra, Astronomy & Astrophysics, 553, A6,
-doi:10.1051/0004-6361/201219058.
+https://doi.org/10.1051/0004-6361/201219058.
 
 Ciddor, P. E. (1996), Refractive index of air: new equations for the visible
-and near infrared, Applied Optics, 35, 1566-1573.
+and near infrared, Applied Optics, 35, 1566-1573,
+https://doi.org/10.1364/AO.35.001566.
 """
 import numpy as np
 

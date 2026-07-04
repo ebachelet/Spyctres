@@ -90,6 +90,19 @@ Current reader coverage includes:
 
 Readers return a generic `SpectrumSegment` object so that fitting code can remain instrument-agnostic.
 
+All `read_spectrum()` results pass through a versioned common-format boundary.
+Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
+deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion
+frame and stellar-rest correction status are tracked independently. Instrumental
+resolution is represented explicitly as constant or wavelength-dependent
+`R`, Gaussian FWHM, or Gaussian sigma. Ingestion sorts but never resamples,
+normalizes, coadds, or merges overlapping orders; use a `SpectrumCollection`
+for separate arms or orders.
+
+Scientific references supporting implemented algorithms are maintained in
+`references.json`, together with their affected code paths and validation
+notes.
+
 ## Project structure
 
 Spyctres is organized around four layers:

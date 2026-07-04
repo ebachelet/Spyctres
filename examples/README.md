@@ -111,9 +111,14 @@ Spyctres uses a generic internal spectrum container: `SpectrumSegment`
 A new instrument reader should return a `SpectrumSegment` with:
 - `wave`
 - `flux`
-- optional `err`
-- default boolean `mask`
-- metadata such as `wave_medium`, `wave_frame`, and `resolution_R` where available
+- optional 1-sigma `err`
+- boolean `mask` where `True` means valid/use
+- `wave_medium`
+- independent `observer_frame` and `stellar_rest_status`
+- an optional `ResolutionDescriptor` for constant or wavelength-dependent LSF
+
+`read_spectrum()` canonicalizes reader output to Angstrom and records ingestion
+provenance. It does not normalize, resample, or merge the uploaded spectrum.
 
 To add a new instrument:
 - add a new reader function in `Spyctres/io.py`

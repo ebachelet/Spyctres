@@ -2,8 +2,95 @@
 import io as _pyio
 import os
 import re
+import warnings
+from dataclasses import dataclass
 import numpy as np
 from astropy.io import fits
+
+
+COMMON_SPECTRUM_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class ResolutionDescriptor:
+    """Instrumental-resolution description for a spectrum segment.
+
+    ``quantity`` is one of ``R``, ``fwhm_kms``, or ``sigma_kms``. ``mode`` is
+    either ``constant`` or ``tabulated``. A collection represents per-order or
+    per-arm resolution by assigning a descriptor to each of its segments;
+    wavelength-dependent resolution within one segment uses ``tabulated``.
+    """
+
+    quantity: str
+    mode: str = "constant"
+    value: float = None
+    wave_A: object = None
+    values: object = None
+    source: str = None
+
+    def __post_init__(self):
+        quantity = str(self.quantity).strip()
+        mode = str(self.mode).strip().lower()
+        if quantity not in {"R", "fwhm_kms", "sigma_kms"}:
+            raise ValueError("resolution quantity must be R, fwhm_kms, or sigma_kms.")
+        if mode not in {"constant", "tabulated"}:
+            raise ValueError("resolution mode must be constant or tabulated.")
+
+        object.__setattr__(self, "quantity", quantity)
+        object.__setattr__(self, "mode", mode)
+
+        if mode == "constant":
+            value = float(self.value)
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError("constant resolution value must be finite and > 0.")
+            if self.wave_A is not None or self.values is not None:
+                raise ValueError("constant resolution must not define wave_A or values.")
+            object.__setattr__(self, "value", value)
+            return
+
+        if self.value is not None:
+            raise ValueError("tabulated resolution must use values, not value.")
+        wave = np.asarray(self.wave_A, dtype=float)
+        values = np.asarray(self.values, dtype=float)
+        if wave.ndim != 1 or values.ndim != 1 or wave.shape != values.shape:
+            raise ValueError(
+                "tabulated resolution wave_A and values must be matching 1D arrays."
+            )
+        if wave.size < 2 or not np.all(np.isfinite(wave)) or np.any(wave <= 0):
+            raise ValueError("tabulated resolution requires at least two positive wavelengths.")
+        if not np.all(np.diff(wave) > 0):
+            raise ValueError("tabulated resolution wavelengths must be unique and increasing.")
+        if not np.all(np.isfinite(values)) or np.any(values <= 0):
+            raise ValueError("tabulated resolution values must be finite and > 0.")
+        wave = wave.copy()
+        values = values.copy()
+        wave.setflags(write=False)
+        values.setflags(write=False)
+        object.__setattr__(self, "wave_A", wave)
+        object.__setattr__(self, "values", values)
+
+    def to_metadata(self):
+        record = {
+            "quantity": self.quantity,
+            "mode": self.mode,
+            "source": self.source,
+        }
+        if self.mode == "constant":
+            record["value"] = float(self.value)
+        else:
+            record["wave_A"] = self.wave_A.tolist()
+            record["values"] = self.values.tolist()
+        return record
+
+
+def _coerce_resolution_descriptor(value):
+    if value is None or isinstance(value, ResolutionDescriptor):
+        return value
+    if isinstance(value, dict):
+        return ResolutionDescriptor(**value)
+    if np.isscalar(value):
+        return ResolutionDescriptor(quantity="R", value=value, source="scalar_R")
+    raise TypeError("resolution must be a ResolutionDescriptor, mapping, scalar R, or None.")
 
 
 class SpectrumSegment(object):
@@ -13,10 +100,18 @@ class SpectrumSegment(object):
     wave: 1D array (Angstrom by convention unless specified)
     flux: 1D array
     err:  1D array (1-sigma), optional
-    mask: boolean array (True = use), optional
+    mask: boolean array (True = valid/use; False = excluded), optional
     meta: dict, optional
     wave_medium: "air", "vacuum", or "unknown"
-    wave_frame: "topocentric", "heliocentric", "barycentric", "stellar_rest", or "unknown"
+    observer_frame: "topocentric", "heliocentric", "barycentric", or "unknown"
+    stellar_rest_status: "observed", "corrected", or "unknown"
+    stellar_rv_applied_kms: RV removed to reach the stellar rest frame, optional
+    resolution: optional ResolutionDescriptor for the instrumental LSF
+
+    ``wave_frame`` remains as a compatibility field. New code should use the
+    independent observer-frame and stellar-rest fields because a spectrum can,
+    for example, be both barycentric and corrected to the stellar rest frame.
+    ``err`` is always a 1-sigma standard deviation in the common format.
     """
 
     def __init__(
@@ -29,6 +124,10 @@ class SpectrumSegment(object):
         wave_medium="unknown",
         wave_frame="unknown",
         name=None,
+        observer_frame=None,
+        stellar_rest_status=None,
+        stellar_rv_applied_kms=None,
+        resolution=None,
     ):
         self.wave = np.asarray(wave, dtype=float)
         self.flux = np.asarray(flux, dtype=float)
@@ -58,6 +157,28 @@ class SpectrumSegment(object):
         self.meta = {} if meta is None else dict(meta)
         self.wave_medium = str(wave_medium).strip().lower()
         self.wave_frame = str(wave_frame).strip().lower()
+        if observer_frame is None:
+            if self.wave_frame in {"topocentric", "heliocentric", "barycentric"}:
+                observer_frame = self.wave_frame
+            else:
+                observer_frame = "unknown"
+        if stellar_rest_status is None:
+            if self.wave_frame == "stellar_rest":
+                stellar_rest_status = "corrected"
+            elif self.wave_frame in {"topocentric", "heliocentric", "barycentric"}:
+                stellar_rest_status = "observed"
+            else:
+                stellar_rest_status = "unknown"
+        self.observer_frame = str(observer_frame).strip().lower()
+        self.stellar_rest_status = str(stellar_rest_status).strip().lower()
+        if stellar_rv_applied_kms is None:
+            self.stellar_rv_applied_kms = None
+        else:
+            value = float(stellar_rv_applied_kms)
+            if not np.isfinite(value):
+                raise ValueError("stellar_rv_applied_kms must be finite.")
+            self.stellar_rv_applied_kms = value
+        self.resolution = _coerce_resolution_descriptor(resolution)
         self.name = name
 
     def copy(
@@ -70,7 +191,39 @@ class SpectrumSegment(object):
         wave_medium=None,
         wave_frame=None,
         name=None,
+        observer_frame=None,
+        stellar_rest_status=None,
+        stellar_rv_applied_kms=None,
+        resolution=None,
     ):
+        target_wave_frame = self.wave_frame if wave_frame is None else wave_frame
+        if observer_frame is None:
+            if wave_frame is None:
+                observer_frame = self.observer_frame
+            elif str(wave_frame).strip().lower() in {
+                "topocentric",
+                "heliocentric",
+                "barycentric",
+            }:
+                observer_frame = str(wave_frame).strip().lower()
+            elif str(wave_frame).strip().lower() == "stellar_rest":
+                observer_frame = self.observer_frame
+            else:
+                observer_frame = "unknown"
+        if stellar_rest_status is None:
+            if wave_frame is None:
+                stellar_rest_status = self.stellar_rest_status
+            elif str(wave_frame).strip().lower() == "stellar_rest":
+                stellar_rest_status = "corrected"
+            elif str(wave_frame).strip().lower() in {
+                "topocentric",
+                "heliocentric",
+                "barycentric",
+            }:
+                stellar_rest_status = "observed"
+            else:
+                stellar_rest_status = "unknown"
+
         return SpectrumSegment(
             self.wave if wave is None else wave,
             self.flux if flux is None else flux,
@@ -78,8 +231,16 @@ class SpectrumSegment(object):
             self.mask if mask is None else mask,
             meta=self.meta if meta is None else meta,
             wave_medium=self.wave_medium if wave_medium is None else wave_medium,
-            wave_frame=self.wave_frame if wave_frame is None else wave_frame,
+            wave_frame=target_wave_frame,
             name=self.name if name is None else name,
+            observer_frame=observer_frame,
+            stellar_rest_status=stellar_rest_status,
+            stellar_rv_applied_kms=(
+                self.stellar_rv_applied_kms
+                if stellar_rv_applied_kms is None
+                else stellar_rv_applied_kms
+            ),
+            resolution=self.resolution if resolution is None else resolution,
         )
 
     def sorted(self):
@@ -245,6 +406,273 @@ class SpectrumCollection(object):
     @property
     def names(self):
         return [seg.name for seg in self.segments]
+
+
+_VALID_WAVE_MEDIA = {"air", "vacuum", "unknown"}
+_VALID_OBSERVER_FRAMES = {"topocentric", "heliocentric", "barycentric", "unknown"}
+_VALID_STELLAR_REST_STATUS = {"observed", "corrected", "unknown"}
+
+
+def _normalize_spectral_label(value, valid, field):
+    label = "unknown" if value is None else str(value).strip().lower()
+    if label not in valid:
+        raise ValueError(
+            "Unsupported {0} '{1}'. Valid values are: {2}.".format(
+                field,
+                value,
+                ", ".join(sorted(valid)),
+            )
+        )
+    return label
+
+
+def canonicalize_segment(
+    segment,
+    wave_unit="angstrom",
+    uncertainty_kind="sigma",
+    sort=True,
+    duplicate_policy="raise",
+    warn_unknown=True,
+    source="user",
+):
+    """Return a validated ``SpectrumSegment`` in Spyctres' common format.
+
+    The common representation uses wavelength in Angstrom, 1D float arrays,
+    optional 1-sigma errors, a boolean use-mask (True means use), an explicit
+    resolution descriptor, and independent wavelength-medium, observer-frame,
+    and stellar-rest labels. Flux values and units are preserved: ingestion
+    never normalizes, merges orders, or resamples a spectrum.
+    """
+    if not isinstance(segment, SpectrumSegment):
+        raise TypeError("canonicalize_segment requires a SpectrumSegment.")
+
+    wave = _wave_to_angstrom(segment.wave, wave_unit)
+    flux = np.asarray(segment.flux, dtype=float).copy()
+    err = None if segment.err is None else np.asarray(segment.err, dtype=float).copy()
+    mask = np.asarray(segment.mask, dtype=bool).copy()
+
+    if wave.ndim != 1 or flux.ndim != 1 or wave.shape != flux.shape:
+        raise ValueError("wave and flux must be matching 1D arrays.")
+    if err is not None and (err.ndim != 1 or err.shape != wave.shape):
+        raise ValueError("err must be 1D and match wave length.")
+    if mask.ndim != 1 or mask.shape != wave.shape:
+        raise ValueError("mask must be 1D and match wave length.")
+    if wave.size == 0:
+        raise ValueError("A spectrum must contain at least one pixel.")
+
+    uncertainty_kind = str(uncertainty_kind).strip().lower()
+    if uncertainty_kind not in {"sigma", "variance", "inverse_variance"}:
+        raise ValueError(
+            "uncertainty_kind must be sigma, variance, or inverse_variance."
+        )
+    if err is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            if uncertainty_kind == "variance":
+                err = np.sqrt(err)
+            elif uncertainty_kind == "inverse_variance":
+                err = 1.0 / np.sqrt(err)
+
+    duplicate_policy = str(duplicate_policy).strip().lower()
+    if duplicate_policy != "raise":
+        raise ValueError(
+            "duplicate_policy currently supports only 'raise'; use separate "
+            "SpectrumCollection segments for overlapping orders."
+        )
+
+    medium = _normalize_spectral_label(
+        segment.wave_medium,
+        _VALID_WAVE_MEDIA,
+        "wave_medium",
+    )
+    observer_frame = _normalize_spectral_label(
+        segment.observer_frame,
+        _VALID_OBSERVER_FRAMES,
+        "observer_frame",
+    )
+    stellar_rest_status = _normalize_spectral_label(
+        segment.stellar_rest_status,
+        _VALID_STELLAR_REST_STATUS,
+        "stellar_rest_status",
+    )
+    if warn_unknown and medium == "unknown":
+        warnings.warn(
+            "Spectrum wavelength medium is unknown; set wave_medium before "
+            "medium-sensitive modeling.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if warn_unknown and observer_frame == "unknown":
+        warnings.warn(
+            "Spectrum observer frame is unknown; set observer_frame before "
+            "applying observer-to-barycentre corrections.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if warn_unknown and stellar_rest_status == "unknown":
+        warnings.warn(
+            "Spectrum stellar-rest status is unknown; state whether stellar RV "
+            "has already been removed before interpreting fitted rv_kms.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    finite_positive_wave = np.isfinite(wave) & (wave > 0)
+    valid = finite_positive_wave & np.isfinite(flux)
+    if err is not None:
+        valid &= np.isfinite(err) & (err > 0)
+    mask &= valid
+
+    finite_wave = np.sort(wave[finite_positive_wave])
+    if finite_wave.size > 1 and np.any(np.diff(finite_wave) == 0):
+        raise ValueError(
+            "Spectrum wavelengths must be unique within a segment; represent "
+            "overlapping echelle orders as separate SpectrumCollection segments."
+        )
+
+    was_sorted = bool(np.all(np.diff(wave[finite_positive_wave]) > 0))
+    if sort:
+        order = np.argsort(wave, kind="stable")
+        wave = wave[order]
+        flux = flux[order]
+        mask = mask[order]
+        if err is not None:
+            err = err[order]
+
+    meta = dict(segment.meta)
+    history = list(meta.get("ingestion", []))
+    history.append(
+        {
+            "operation": "canonicalize_spectrum",
+            "schema_version": COMMON_SPECTRUM_SCHEMA_VERSION,
+            "source": str(source),
+            "wave_unit_input": str(wave_unit),
+            "wave_unit_output": "angstrom",
+            "uncertainty_kind_input": uncertainty_kind,
+            "uncertainty_kind_output": "sigma",
+            "mask_true_means": "use",
+            "sorted": bool(sort and not was_sorted),
+            "duplicate_policy": duplicate_policy,
+            "n_pixels": int(wave.size),
+            "n_valid": int(np.count_nonzero(valid)),
+            "n_masked": int(wave.size - np.count_nonzero(mask)),
+        }
+    )
+    meta["ingestion"] = history
+    meta["wave_unit"] = "angstrom"
+    meta["wave_medium"] = medium
+    meta["observer_frame"] = observer_frame
+    meta["stellar_rest_status"] = stellar_rest_status
+    meta["stellar_rv_applied_kms"] = segment.stellar_rv_applied_kms
+    meta["mask_true_means"] = "use"
+    meta["spectrum_schema_version"] = COMMON_SPECTRUM_SCHEMA_VERSION
+    if err is not None:
+        meta["error_kind"] = "sigma"
+
+    resolution = segment.resolution
+    if resolution is None:
+        resolution_R = meta.get("resolution_R", None)
+        if resolution_R is not None:
+            resolution = ResolutionDescriptor(
+                quantity="R",
+                value=resolution_R,
+                source="legacy metadata resolution_R",
+            )
+    meta["resolution"] = None if resolution is None else resolution.to_metadata()
+
+    return SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium=medium,
+        wave_frame=segment.wave_frame,
+        name=segment.name,
+        observer_frame=observer_frame,
+        stellar_rest_status=stellar_rest_status,
+        stellar_rv_applied_kms=segment.stellar_rv_applied_kms,
+        resolution=resolution,
+    )
+
+
+def spectrum_from_arrays(
+    wave,
+    flux,
+    err=None,
+    mask=None,
+    meta=None,
+    wave_unit="angstrom",
+    uncertainty_kind="sigma",
+    wave_medium="unknown",
+    wave_frame="unknown",
+    observer_frame=None,
+    stellar_rest_status=None,
+    stellar_rv_applied_kms=None,
+    resolution=None,
+    name=None,
+    **canonicalize_kwargs
+):
+    """Build and canonicalize a spectrum supplied as arrays."""
+    segment = SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium=wave_medium,
+        wave_frame=wave_frame,
+        name=name,
+        observer_frame=observer_frame,
+        stellar_rest_status=stellar_rest_status,
+        stellar_rv_applied_kms=stellar_rv_applied_kms,
+        resolution=resolution,
+    )
+    return canonicalize_segment(
+        segment,
+        wave_unit=wave_unit,
+        uncertainty_kind=uncertainty_kind,
+        source="arrays",
+        **canonicalize_kwargs
+    )
+
+
+def coerce_spectrum(data, **kwargs):
+    """Coerce supported user input into the common spectrum container.
+
+    Accepted inputs are ``SpectrumSegment``, ``SpectrumCollection``, mappings
+    with ``wave``/``flux`` keys, or tuple-like ``(wave, flux[, err[, mask]])``.
+    Collections are preserved rather than concatenated or resampled.
+    """
+    if isinstance(data, SpectrumSegment):
+        return canonicalize_segment(data, **kwargs)
+
+    if isinstance(data, SpectrumCollection):
+        segments = [canonicalize_segment(seg, **kwargs) for seg in data]
+        meta = dict(data.meta)
+        meta["common_format"] = "SpectrumCollection"
+        meta["spectrum_schema_version"] = COMMON_SPECTRUM_SCHEMA_VERSION
+        return data.copy(segments=segments, meta=meta)
+
+    if isinstance(data, dict):
+        if "wave" not in data or "flux" not in data:
+            raise ValueError("Spectrum mappings require 'wave' and 'flux' keys.")
+        fields = dict(data)
+        fields.update(kwargs)
+        return spectrum_from_arrays(**fields)
+
+    if isinstance(data, (tuple, list)) and 2 <= len(data) <= 4:
+        fields = {"wave": data[0], "flux": data[1]}
+        if len(data) >= 3:
+            fields["err"] = data[2]
+        if len(data) == 4:
+            fields["mask"] = data[3]
+        fields.update(kwargs)
+        return spectrum_from_arrays(**fields)
+
+    raise TypeError(
+        "Spectrum input must be a SpectrumSegment, SpectrumCollection, mapping, "
+        "or (wave, flux[, err[, mask]]) tuple."
+    )
         
         
 def concatenate_segments(segments, sort=True, name=None):
@@ -722,6 +1150,29 @@ def read_pepsi_nor(
             wave_medium=wave_medium,
             wave_frame=wave_frame,
             name=name,
+            observer_frame=(
+                wave_frame
+                if wave_frame in {"topocentric", "heliocentric", "barycentric"}
+                else "unknown"
+            ),
+            stellar_rest_status=(
+                "corrected"
+                if wave_frame == "stellar_rest"
+                else (
+                    "observed"
+                    if wave_frame in {"topocentric", "heliocentric", "barycentric"}
+                    else "unknown"
+                )
+            ),
+            resolution=(
+                None
+                if resolution_R is None
+                else ResolutionDescriptor(
+                    quantity="R",
+                    value=resolution_R,
+                    source="PEPSI WASREP/fiber metadata",
+                )
+            ),
         ).sorted()
 
 
@@ -836,6 +1287,25 @@ def read_xshooter_1d(
             wave_medium=wave_medium,
             wave_frame=wave_frame,
             name=name,
+            observer_frame=(
+                wave_frame
+                if wave_frame in {"topocentric", "heliocentric", "barycentric"}
+                else "unknown"
+            ),
+            stellar_rest_status=(
+                "observed"
+                if wave_frame in {"topocentric", "heliocentric", "barycentric"}
+                else "unknown"
+            ),
+            resolution=(
+                None
+                if resolution_R is None
+                else ResolutionDescriptor(
+                    quantity="R",
+                    value=resolution_R,
+                    source="X-SHOOTER arm/slit metadata",
+                )
+            ),
         ).sorted()
 
 def read_floyds_csv(path, name=None):
@@ -942,6 +1412,13 @@ def read_floyds_csv(path, name=None):
         wave_medium="unknown",
         wave_frame="unknown",
         name=seg_name,
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+        resolution=ResolutionDescriptor(
+            quantity="R",
+            value=500.0,
+            source="approximate nominal FLOYDS value",
+        ),
     ).sorted()
     
 
@@ -1058,6 +1535,9 @@ def read_gemini_gmos_ascii(path, name=None):
         wave_medium="unknown",
         wave_frame="unknown",
         name=seg_name,
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+        resolution=None,
     ).sorted()
     
 
@@ -1084,7 +1564,12 @@ register_reader(["floyds", "floyds_csv", "lco_floyds"], read_floyds_csv)
 register_reader(["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"], read_gemini_gmos_ascii)
 
   
-def read_spectrum(path, instrument=None, **kwargs):
+def read_spectrum(
+    path,
+    instrument=None,
+    warn_unknown=True,
+    **kwargs
+):
     """
     Dispatch to one of the registered 1D spectrum readers.
 
@@ -1096,6 +1581,11 @@ def read_spectrum(path, instrument=None, **kwargs):
         Reader alias such as "pepsi", "xshooter", "floyds", or "gemini".
     **kwargs
         Additional reader-specific keyword arguments.
+
+    Returns
+    -------
+    SpectrumSegment or SpectrumCollection
+        Reader output converted to the versioned common spectrum format.
     """
     inst = (instrument or "").strip().lower()
     func = READERS.get(inst, None)
@@ -1105,4 +1595,10 @@ def read_spectrum(path, instrument=None, **kwargs):
             "Unknown instrument '{0}'. Supported: pepsi, xshooter, floyds, gemini".format(instrument)
         )
 
-    return func(path, **kwargs)
+    spectrum = func(path, **kwargs)
+    return coerce_spectrum(
+        spectrum,
+        wave_unit="angstrom",
+        warn_unknown=warn_unknown,
+        source="reader:{0}".format(inst),
+    )

@@ -1,4 +1,9 @@
-# Spyctres/phoenix.py
+"""PHOENIX HiRes template loading, interpolation, and caching.
+
+Scientific model reference: Husser et al. (2013),
+https://doi.org/10.1051/0004-6361/201219058
+"""
+
 import os
 import hashlib
 import numpy as np

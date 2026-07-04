@@ -92,13 +92,32 @@ def _resolve_segment_fwhm_kms(seg, R=None, fwhm_kms=None):
     Resolve the Gaussian LSF FWHM in km/s for one segment.
 
     Precedence:
-    1. seg.meta["lsf_fwhm_kms"]
-    2. seg.meta["fwhm_kms"]
-    3. seg.meta["resolution_R"]
-    4. global fwhm_kms
-    5. global R
-    6. None
+    1. seg.resolution
+    2. seg.meta["lsf_fwhm_kms"]
+    3. seg.meta["fwhm_kms"]
+    4. seg.meta["resolution_R"]
+    5. global fwhm_kms
+    6. global R
+    7. None
     """
+    descriptor = getattr(seg, "resolution", None)
+    if descriptor is not None:
+        if descriptor.mode != "constant":
+            raise ValueError(
+                "Wavelength-dependent resolution is recorded for segment {0}, "
+                "but the current fitter supports only a constant LSF per segment.".format(
+                    getattr(seg, "name", None)
+                )
+            )
+        if descriptor.quantity == "R":
+            return resolve_gaussian_lsf_fwhm_kms(R=descriptor.value)
+        if descriptor.quantity == "fwhm_kms":
+            return resolve_gaussian_lsf_fwhm_kms(fwhm_kms=descriptor.value)
+        if descriptor.quantity == "sigma_kms":
+            return resolve_gaussian_lsf_fwhm_kms(
+                fwhm_kms=descriptor.value * 2.3548200450309493
+            )
+
     meta = getattr(seg, "meta", {}) or {}
 
     for key in ("lsf_fwhm_kms", "fwhm_kms"):

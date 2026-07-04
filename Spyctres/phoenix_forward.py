@@ -256,6 +256,9 @@ def convolve_to_resolution_loglam(
     """
     Convolve a spectrum with a Gaussian LSF on a uniform log-lambda grid.
 
+    The analytic Fourier treatment follows Cappellari (2017):
+    https://doi.org/10.1093/mnras/stw3020
+
     The log-grid velocity step is set by the target LSF with approximately
     one pixel per Gaussian sigma. Convolution uses the analytic Fourier
     transform of the Gaussian, avoiding a directly sampled kernel near the

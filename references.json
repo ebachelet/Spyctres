@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "description": "Validated scientific literature relevant to algorithms and scientific data products implemented or maintained in Spyctres. Links are checked before entries are added; affected_code identifies where each reference informs behavior.",
+  "references": [
+    {
+      "id": "cappellari2017_accurate_convolution",
+      "citation": "Cappellari, M. (2017), Improving the full spectrum fitting method: accurate convolution with Gauss-Hermite functions, Monthly Notices of the Royal Astronomical Society, 466, 798-811.",
+      "doi": "10.1093/mnras/stw3020",
+      "url": "https://doi.org/10.1093/mnras/stw3020",
+      "validated_via": "Crossref metadata and DOI resolution",
+      "validated_on": "2026-07-04",
+      "description": "Develops an analytic Fourier-domain treatment of line-of-sight and instrumental broadening that remains accurate near the Nyquist sampling limit. Spyctres uses this rationale for its Gaussian log-wavelength FFT convolution, including an analytic kernel transform rather than a directly sampled narrow kernel.",
+      "affected_code": [
+        "Spyctres/phoenix_forward.py:convolve_to_resolution_loglam"
+      ]
+    },
+    {
+      "id": "husser2013_phoenix_library",
+      "citation": "Husser, T.-O. et al. (2013), A new extensive library of PHOENIX stellar atmospheres and synthetic spectra, Astronomy & Astrophysics, 553, A6.",
+      "doi": "10.1051/0004-6361/201219058",
+      "url": "https://doi.org/10.1051/0004-6361/201219058",
+      "validated_via": "Publisher article and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Describes the PHOENIX synthetic spectral library used by the template backend, including its parameter coverage and wavelength conventions. It is the primary scientific reference for the model spectra loaded, interpolated, and fitted by the PHOENIX workflow.",
+      "affected_code": [
+        "Spyctres/phoenix.py",
+        "Spyctres/phoenix_forward.py",
+        "Spyctres/waveutils.py"
+      ]
+    },
+    {
+      "id": "ciddor1996_refractive_index",
+      "citation": "Ciddor, P. E. (1996), Refractive index of air: new equations for the visible and near infrared, Applied Optics, 35, 1566-1573.",
+      "doi": "10.1364/AO.35.001566",
+      "url": "https://doi.org/10.1364/AO.35.001566",
+      "validated_via": "Optica DOI resolution and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Provides the refractive-index relation currently used by Spyctres for explicit air-to-vacuum and vacuum-to-air wavelength conversion. Centralizing this citation makes the adopted wavelength-medium convention auditable and distinguishes it from alternative Edlen or Morton formulations.",
+      "affected_code": [
+        "Spyctres/waveutils.py:_ciddor_factor_from_vacuum_angstrom",
+        "Spyctres/waveutils.py:vacuum_to_air_ciddor",
+        "Spyctres/waveutils.py:air_to_vacuum_ciddor"
+      ]
+    },
+    {
+      "id": "carnall2017_spectres",
+      "citation": "Carnall, A. C. (2017), SpectRes: A Fast Spectral Resampling Tool in Python, arXiv:1705.05165.",
+      "arxiv": "1705.05165",
+      "url": "https://arxiv.org/abs/1705.05165",
+      "validated_via": "arXiv abstract and metadata API",
+      "validated_on": "2026-07-04",
+      "description": "Presents a flux-conserving method for resampling spectral flux densities and uncertainties on arbitrary wavelength grids. The legacy Spyctres binning routine cites this work; its conservation principle also informs validation of modern resampling paths, although the production LSF implementation uses its own tested log-grid rebinning algorithm.",
+      "affected_code": [
+        "Spyctres/Spyctres.py:bin_spectrum",
+        "Spyctres/Spyctres_old.py:bin_spectrum",
+        "Spyctres/phoenix_forward.py:_rebin_flux_density_piecewise_constant"
+      ]
+    }
+  ]
+}
