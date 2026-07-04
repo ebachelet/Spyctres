@@ -15,6 +15,7 @@ from .phoenix_forward import (
     convolve_to_resolution_loglam,
     resolve_gaussian_lsf_fwhm_kms,
 )
+from .preprocessing import compose_fit_mask
 # Why multiplicative polynomial: it is a standard way to absorb low-frequency continuum differences and calibration mismatches during full-spectrum fitting.
 
 # RV handling:
@@ -145,33 +146,6 @@ def _gaussian_broaden_velocity(wave, flux, fwhm_kms=None):
     )
 
 
-def _to_bool_mask(x, threshold=0.5):
-    a = np.asarray(x)
-    if a.dtype == bool:
-        return a
-    return a > threshold
-    
-
-def _select_region(wave, regions):
-    """Return boolean mask selecting points inside any (wmin,wmax) in regions."""
-    if regions is None:
-        return np.ones_like(wave, dtype=bool)
-    m = np.zeros_like(wave, dtype=bool)
-    for (wmin, wmax) in regions:
-        m |= (wave >= wmin) & (wave <= wmax)
-    return m
-
-
-def _exclude_region(wave, exclude_regions):
-    """Return boolean mask True for points NOT in any excluded interval."""
-    if exclude_regions is None:
-        return np.ones_like(wave, dtype=bool)
-    m = np.ones_like(wave, dtype=bool)
-    for (wmin, wmax) in exclude_regions:
-        m &= ~((wave >= wmin) & (wave <= wmax))
-    return m
-    
-
 def build_effective_fit_mask(seg, regions=None, exclude_regions=None, exclude_mask=None):
     """
     Build the effective boolean fit mask for a single SpectrumSegment.
@@ -181,23 +155,12 @@ def build_effective_fit_mask(seg, regions=None, exclude_regions=None, exclude_ma
     synthetic error array. In that case only finite wave/flux and the supplied
     mask/region logic are applied.
     """
-    wave = np.asarray(seg.wave, dtype=float)
-    flux = np.asarray(seg.flux, dtype=float)
-
-    m = np.asarray(seg.mask, dtype=bool)
-    m &= np.isfinite(wave) & np.isfinite(flux)
-
-    if seg.err is not None:
-        err = np.asarray(seg.err, dtype=float)
-        m &= np.isfinite(err) & (err > 0)
-
-    m &= _select_region(wave, regions)
-    m &= _exclude_region(wave, exclude_regions)
-
-    if exclude_mask is not None:
-        m &= ~_to_bool_mask(exclude_mask(wave))
-
-    return m
+    return compose_fit_mask(
+        seg,
+        regions=regions,
+        exclude_regions=exclude_regions,
+        exclude_mask=exclude_mask,
+    ).effective_mask
 
 
 def build_excluded_mask(seg, regions=None, exclude_regions=None, exclude_mask=None):
@@ -207,19 +170,12 @@ def build_excluded_mask(seg, regions=None, exclude_regions=None, exclude_mask=No
     This is intended for plotting diagnostics. It does not mark pixels excluded
     only because they are NaN, have non-positive errors, or lie outside seg.mask.
     """
-    wave = np.asarray(seg.wave, dtype=float)
-    m = np.zeros_like(wave, dtype=bool)
-
-    if regions is not None:
-        m |= ~_select_region(wave, regions)
-
-    if exclude_regions is not None:
-        m |= ~_exclude_region(wave, exclude_regions)
-
-    if exclude_mask is not None:
-        m |= _to_bool_mask(exclude_mask(wave))
-
-    return m
+    return compose_fit_mask(
+        seg,
+        regions=regions,
+        exclude_regions=exclude_regions,
+        exclude_mask=exclude_mask,
+    ).excluded_mask
 
 
 def _estimate_sigma(flux):
@@ -308,12 +264,13 @@ def _build_data_vectors(
         else:
             ex = exclude_regions
 
-        fit_m = build_effective_fit_mask(
+        mask_result = compose_fit_mask(
             seg,
             regions=reg,
             exclude_regions=ex,
             exclude_mask=exclude_mask,
         )
+        fit_m = mask_result.effective_mask
         fit_m &= support_ok
 
         n_support = int(np.sum(support_ok))
@@ -343,6 +300,7 @@ def _build_data_vectors(
             "wave_max": float(w_support.max()),
             "n_support": n_support,
             "n_fit": n_fit,
+            "mask_provenance": mask_result.to_metadata(label="fit selection"),
         })
 
         start_support += n_support

@@ -1,7 +1,13 @@
 import numpy as np
+import pytest
 
-from Spyctres.fitting import build_effective_fit_mask, build_excluded_mask
+from Spyctres.fitting import (
+    _build_data_vectors,
+    build_effective_fit_mask,
+    build_excluded_mask,
+)
 from Spyctres.io import SpectrumCollection, SpectrumSegment
+from Spyctres.preprocessing import apply_fit_mask, compose_fit_mask
 
 
 def test_segment_default_mask_rejects_invalid_data_and_errors():
@@ -49,3 +55,112 @@ def test_collection_preserves_positive_segment_weights():
 
     assert collection.names == ["first", "second"]
     assert np.array_equal(collection.weights, [1.0, 2.5])
+
+
+def test_mask_provenance_retains_overlapping_rejection_reasons():
+    segment = SpectrumSegment(
+        wave=[5000.0, 5001.0, 5002.0, 5003.0, 5004.0],
+        flux=[1.0, np.nan, 1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.0, 0.1, 0.1],
+        mask=[True, True, True, False, True],
+    )
+
+    def telluric_mask(_wave):
+        return [0.0, 0.8, 0.0, 0.0, 0.0]
+
+    result = compose_fit_mask(
+        segment,
+        regions=[(5001.0, 5004.0)],
+        exclude_regions=[(5003.0, 5003.0)],
+        exclude_mask=telluric_mask,
+    )
+
+    assert np.array_equal(result.effective_mask, [False, False, False, False, True])
+    assert np.array_equal(result.excluded_mask, [True, True, False, True, False])
+    assert np.array_equal(
+        result.rejection_masks["invalid_flux"],
+        [False, True, False, False, False],
+    )
+    assert np.array_equal(
+        result.rejection_masks["exclude_mask"],
+        [False, True, False, False, False],
+    )
+    assert result.counts["used"] == 1
+    assert result.counts["rejected"] == 4
+
+
+def test_apply_fit_mask_copies_inputs_and_records_json_safe_history():
+    segment = SpectrumSegment(
+        wave=[1.0, 2.0, 3.0],
+        flux=[1.0, 1.0, 1.0],
+        meta={"target": "star"},
+    )
+    original_mask = segment.mask.copy()
+
+    masked, result = apply_fit_mask(
+        segment,
+        exclude_regions=[(2.0, 2.0)],
+        label="science selection",
+    )
+
+    assert np.array_equal(segment.mask, original_mask)
+    assert "preprocessing" not in segment.meta
+    assert np.array_equal(masked.mask, [True, False, True])
+    assert masked.meta["target"] == "star"
+    record = masked.meta["preprocessing"][0]
+    assert record["operation"] == "mask"
+    assert record["label"] == "science selection"
+    assert record["counts"] == result.counts
+    assert record["settings"]["exclude_regions"] == [[2.0, 2.0]]
+
+
+def test_mask_callable_shape_is_validated_without_broadcasting():
+    segment = SpectrumSegment([1.0, 2.0, 3.0], [1.0, 1.0, 1.0])
+
+    with pytest.raises(ValueError, match="exclude_mask result must have shape"):
+        compose_fit_mask(segment, exclude_mask=lambda _wave: [True])
+
+
+def test_mask_threshold_must_be_finite():
+    segment = SpectrumSegment([1.0, 2.0], [1.0, 1.0])
+
+    with pytest.raises(ValueError, match="mask_threshold must be finite"):
+        compose_fit_mask(segment, mask_threshold=np.nan)
+
+
+@pytest.mark.parametrize(
+    "regions",
+    [[(2.0, 1.0)], [(1.0, np.inf)], [(1.0, 2.0, 3.0)]],
+)
+def test_invalid_wavelength_regions_are_rejected(regions):
+    segment = SpectrumSegment([1.0, 2.0, 3.0], [1.0, 1.0, 1.0])
+
+    with pytest.raises(ValueError):
+        compose_fit_mask(segment, regions=regions)
+
+
+def test_missing_errors_do_not_reject_otherwise_valid_pixels():
+    segment = SpectrumSegment([1.0, 2.0], [1.0, 1.0], err=None)
+    result = compose_fit_mask(segment)
+
+    assert np.array_equal(result.effective_mask, [True, True])
+    assert not np.any(result.rejection_masks["invalid_error"])
+
+
+def test_fit_segment_metadata_contains_mask_provenance():
+    segment = SpectrumSegment(
+        [1.0, 2.0, 3.0],
+        [1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1],
+        name="test",
+    )
+    vectors = _build_data_vectors(
+        [segment],
+        exclude_regions=[(2.0, 2.0)],
+    )
+    seg_meta = vectors[-1]
+
+    provenance = seg_meta[0]["mask_provenance"]
+    assert provenance["operation"] == "mask"
+    assert provenance["counts"]["used"] == 2
+    assert provenance["counts"]["exclude_regions"] == 1
