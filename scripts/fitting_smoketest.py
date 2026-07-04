@@ -20,7 +20,7 @@ from Spyctres.fitting import (
     _gaussian_broaden_velocity,
     _apply_observed_grid_rv_shift,
 )
-from Spyctres.config import load_user_config, get_config_value, resolve_setting
+from Spyctres.config import resolve_phoenix_dir
 
 def build_parser():
     return argparse.ArgumentParser(
@@ -112,15 +112,10 @@ def main():
         help="Verbosity passed to fit_phoenix_full_spectrum().",
     )
     args = parser.parse_args()
-    config = load_user_config()
-    phoenix_dir_cfg = get_config_value(config, "paths", "phoenix_dir", default=None)
-    
-    args.phoenix_dir = resolve_setting(
-        args.phoenix_dir,
-        env_var_name="SPYCTRES_PHOENIX_DIR",
-        config_value=phoenix_dir_cfg,
-        default=None,
-    )
+    try:
+        args.phoenix_dir = resolve_phoenix_dir(args.phoenix_dir)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
     
     if args.phoenix_dir is None:
         parser.error(
@@ -128,9 +123,6 @@ def main():
             "or [paths].phoenix_dir in ~/.config/spyctres/config.toml."
         )
         
-    if not os.path.isdir(args.phoenix_dir):
-        parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
-
     if args.wave_max <= args.wave_min:
         parser.error("--wave-max must be greater than --wave-min.")
 

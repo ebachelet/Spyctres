@@ -177,6 +177,7 @@ class PhoenixLibrary(object):
              phoenix_wave_medium="vacuum",
              verbose=True):
         self._flux_grid = None
+        self._observed_wave_medium = None
         self.base_dir = os.path.abspath(os.path.expanduser(base_dir))
         self.wave_filename = wave_filename
         self.model_tag = model_tag
@@ -426,6 +427,7 @@ class PhoenixLibrary(object):
             else str(observed_wave_medium).lower()
         )
         self.wave = observed_wave.copy()
+        self._observed_wave_medium = observed_wave_medium
         
         teff_grid = self.DEFAULT_TEFF_GRID if teff_grid is None else _as_float_array(teff_grid)
         feh_grid = self.DEFAULT_FEH_GRID if feh_grid is None else _as_float_array(feh_grid)
@@ -516,6 +518,51 @@ class PhoenixLibrary(object):
         p = (validate_phoenix_teff(teff), float(feh), float(logg))
         return self._interp(p)
     
+    CACHE_SCHEMA_VERSION = 2
+
+    def interpolator_matches(
+        self, wave, teff_grid, feh_grid, logg_grid, observed_wave_medium=None
+    ):
+        """Return whether the in-memory interpolator exactly matches a request."""
+        if self.wave is None or self._grid is None:
+            return False
+        requested = (teff_grid, feh_grid, logg_grid)
+        medium_matches = (
+            observed_wave_medium is None
+            or self._observed_wave_medium == str(observed_wave_medium).lower()
+        )
+        return medium_matches and _same_float_array(self.wave, wave) and all(
+            _same_float_array(actual, expected)
+            for actual, expected in zip(self._grid, requested)
+        )
+
+    def ensure_interpolator(
+        self,
+        wave,
+        teff_grid,
+        feh_grid,
+        logg_grid,
+        observed_wave_medium,
+        cache_path=None,
+    ):
+        """Build/load an interpolator only when its scientific grid changed."""
+        if not self.interpolator_matches(
+            wave,
+            teff_grid,
+            feh_grid,
+            logg_grid,
+            observed_wave_medium=observed_wave_medium,
+        ):
+            self.build_interpolator(
+                observed_wave=wave,
+                teff_grid=teff_grid,
+                feh_grid=feh_grid,
+                logg_grid=logg_grid,
+                observed_wave_medium=observed_wave_medium,
+                cache_path=cache_path,
+            )
+        return self._interp
+
     def save_cache(self, cache_path, observed_wave_medium):
         if self._grid is None or self.wave is None or self._flux_grid is None:
             raise RuntimeError("Nothing to save. Build interpolator first.")
@@ -534,6 +581,8 @@ class PhoenixLibrary(object):
             wave_filename=self.wave_filename,
             phoenix_wave_medium=np.asarray(self.phoenix_wave_medium),
             observed_wave_medium=np.asarray(observed_wave_medium),
+            cache_schema_version=np.asarray(self.CACHE_SCHEMA_VERSION),
+            source_root=np.asarray(os.path.realpath(self.base_dir)),
         )
         if self.verbose:
             print("Saved PHOENIX cache to {0}".format(cache_path))
@@ -548,6 +597,21 @@ class PhoenixLibrary(object):
         expected_observed_wave_medium=None,
     ):
         d = np.load(cache_path, allow_pickle=False)
+
+        cached_schema = int(d["cache_schema_version"]) if "cache_schema_version" in d.files else None
+        if cached_schema != self.CACHE_SCHEMA_VERSION:
+            raise ValueError(
+                "Cached schema version does not match: {0} != {1}".format(
+                    cached_schema, self.CACHE_SCHEMA_VERSION
+                )
+            )
+        cached_source_root = (
+            _normalize_cache_string(d["source_root"])
+            if "source_root" in d.files
+            else None
+        )
+        if cached_source_root != os.path.realpath(self.base_dir):
+            raise ValueError("Cached PHOENIX source root does not match current library.")
 
         teff_grid = d["teff_grid"].astype(float)
         for teff in teff_grid:
@@ -613,6 +677,7 @@ class PhoenixLibrary(object):
                 )     
                    
         self.wave = wave
+        self._observed_wave_medium = cached_observed_wave_medium
         self._grid = (teff_grid, feh_grid, logg_grid)
         self._flux_grid = flux_grid.astype(float, copy=False)
 

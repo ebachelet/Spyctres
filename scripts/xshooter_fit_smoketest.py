@@ -24,7 +24,7 @@ from Spyctres.fitting import (
 )
 from Spyctres.plotting import plot_full_spectrum_fit
 from Spyctres.Spyctres import load_telluric_lines
-from Spyctres.config import load_user_config, get_config_value, resolve_setting
+from Spyctres.config import resolve_phoenix_dir
 from Spyctres.recipes import (
     xshooter_balmer_windows,
     attach_balmer_metadata,
@@ -594,15 +594,10 @@ def main():
     args = parser.parse_args()
     args = apply_named_preset(args, raw_argv)
     
-    config = load_user_config()
-    phoenix_dir_cfg = get_config_value(config, "paths", "phoenix_dir", default=None)
-
-    args.phoenix_dir = resolve_setting(
-        args.phoenix_dir,
-        env_var_name="SPYCTRES_PHOENIX_DIR",
-        config_value=phoenix_dir_cfg,
-        default=None,
-    )
+    try:
+        args.phoenix_dir = resolve_phoenix_dir(args.phoenix_dir)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
 
     if not os.path.isfile(args.file):
         parser.error("Input file not found: {0}".format(args.file))
@@ -615,9 +610,6 @@ def main():
             "No PHOENIX directory supplied. Set --phoenix-dir, SPYCTRES_PHOENIX_DIR, "
             "or [paths].phoenix_dir in ~/.config/spyctres/config.toml."
         )
-
-    if not os.path.isdir(args.phoenix_dir):
-        parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
 
     if args.wmax <= args.wmin:
         parser.error("--wmax must be greater than --wmin.")

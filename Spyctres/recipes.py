@@ -223,36 +223,14 @@ def ensure_phoenix_interpolator_for_segments(
     segment_media = sorted(set(str(seg.wave_medium).lower() for seg in segments))
     observed_wave_medium = segment_media[0] if len(segment_media) == 1 else None
 
-    need_rebuild = False
-    if phoenix_lib.wave is None:
-        need_rebuild = True
-    elif (len(phoenix_lib.wave) != len(support_wave_all)) or (
-        not np.allclose(phoenix_lib.wave, support_wave_all, rtol=0.0, atol=0.0)
-    ):
-        need_rebuild = True
-    elif phoenix_lib._grid is None:
-        need_rebuild = True
-    else:
-        tg, zg, gg = phoenix_lib._grid
-        if (
-            (len(tg) != len(teff_grid)) or
-            (len(zg) != len(feh_grid)) or
-            (len(gg) != len(logg_grid)) or
-            (not np.allclose(tg, np.asarray(teff_grid, dtype=float), rtol=0.0, atol=0.0)) or
-            (not np.allclose(zg, np.asarray(feh_grid, dtype=float), rtol=0.0, atol=0.0)) or
-            (not np.allclose(gg, np.asarray(logg_grid, dtype=float), rtol=0.0, atol=0.0))
-        ):
-            need_rebuild = True
-
-    if need_rebuild:
-        phoenix_lib.build_interpolator(
-            observed_wave=support_wave_all,
-            teff_grid=np.asarray(teff_grid, dtype=float),
-            feh_grid=np.asarray(feh_grid, dtype=float),
-            logg_grid=np.asarray(logg_grid, dtype=float),
-            cache_path=cache_path,
-            observed_wave_medium=observed_wave_medium,
-        )
+    phoenix_lib.ensure_interpolator(
+        wave=support_wave_all,
+        teff_grid=np.asarray(teff_grid, dtype=float),
+        feh_grid=np.asarray(feh_grid, dtype=float),
+        logg_grid=np.asarray(logg_grid, dtype=float),
+        cache_path=cache_path,
+        observed_wave_medium=observed_wave_medium,
+    )
 
     return support_wave_all
 
@@ -1304,34 +1282,14 @@ def ensure_phoenix_native_interpolator_for_segments(
     feh_grid = np.asarray(feh_grid, dtype=float)
     logg_grid = np.asarray(logg_grid, dtype=float)
 
-    need_rebuild = False
-    if phoenix_lib.wave is None or phoenix_lib._grid is None:
-        need_rebuild = True
-    elif (len(phoenix_lib.wave) != len(model_wave_grid)) or (
-        not np.allclose(phoenix_lib.wave, model_wave_grid, rtol=0.0, atol=0.0)
-    ):
-        need_rebuild = True
-    else:
-        tg, zg, gg = phoenix_lib._grid
-        if (
-            len(tg) != len(teff_grid) or
-            len(zg) != len(feh_grid) or
-            len(gg) != len(logg_grid) or
-            not np.allclose(tg, teff_grid, rtol=0.0, atol=0.0) or
-            not np.allclose(zg, feh_grid, rtol=0.0, atol=0.0) or
-            not np.allclose(gg, logg_grid, rtol=0.0, atol=0.0)
-        ):
-            need_rebuild = True
-
-    if need_rebuild:
-        phoenix_lib.build_interpolator(
-            observed_wave=model_wave_grid,
-            teff_grid=teff_grid,
-            feh_grid=feh_grid,
-            logg_grid=logg_grid,
-            cache_path=cache_path,
-            observed_wave_medium=model_wave_medium,
-        )
+    phoenix_lib.ensure_interpolator(
+        wave=model_wave_grid,
+        teff_grid=teff_grid,
+        feh_grid=feh_grid,
+        logg_grid=logg_grid,
+        cache_path=cache_path,
+        observed_wave_medium=model_wave_medium,
+    )
 
     return model_wave_grid, model_wave_medium
 

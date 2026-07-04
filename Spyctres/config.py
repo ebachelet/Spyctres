@@ -46,3 +46,25 @@ def resolve_setting(cli_value, env_var_name: str | None = None, config_value=Non
     if config_value is not None:
         return config_value
     return default
+
+
+def resolve_phoenix_dir(
+    cli_value=None,
+    config: dict | None = None,
+    config_path: str | os.PathLike | None = None,
+    require_exists: bool = True,
+) -> str | None:
+    """Resolve and validate the PHOENIX root with one shared precedence rule."""
+    if config is None:
+        config = load_user_config(config_path)
+    value = resolve_setting(
+        cli_value,
+        env_var_name="SPYCTRES_PHOENIX_DIR",
+        config_value=get_config_value(config, "paths", "phoenix_dir", default=None),
+    )
+    if value is None:
+        return None
+    path = str(Path(value).expanduser().resolve())
+    if require_exists and not Path(path).is_dir():
+        raise FileNotFoundError("PHOENIX directory does not exist: {0}".format(path))
+    return path

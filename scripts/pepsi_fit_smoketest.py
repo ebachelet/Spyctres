@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
 from Spyctres import Spyctres
-from Spyctres.config import load_user_config, get_config_value, resolve_setting
+from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import (
     read_spectrum,
     make_padded_window_segments,
@@ -851,15 +851,10 @@ def main():
         args.legacy_log_scale_max = min(float(args.legacy_log_scale_max), 1.0)
         args.verbose = min(int(args.verbose), 1)
 
-    config = load_user_config()
-    phoenix_dir_cfg = get_config_value(config, "paths", "phoenix_dir", default=None)
-
-    args.phoenix_dir = resolve_setting(
-        args.phoenix_dir,
-        env_var_name="SPYCTRES_PHOENIX_DIR",
-        config_value=phoenix_dir_cfg,
-        default=None,
-    )
+    try:
+        args.phoenix_dir = resolve_phoenix_dir(args.phoenix_dir)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
 
     if args.mode == "legacy_max":
         run_legacy_pepsi_fit(args, parser)
@@ -878,9 +873,6 @@ def main():
             "No PHOENIX directory supplied. Set --phoenix-dir, SPYCTRES_PHOENIX_DIR, "
             "or [paths].phoenix_dir in ~/.config/spyctres/config.toml."
         )
-
-    if not os.path.isdir(args.phoenix_dir):
-        parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
 
     if args.forward_model == "interp_observed" and args.wave_hypothesis == "unknown":
         parser.error(
