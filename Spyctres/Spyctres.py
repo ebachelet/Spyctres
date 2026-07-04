@@ -214,7 +214,7 @@ def get_element_lines(wavelength_range = [2000,10000], require_elements=['H','HE
     lines = fits.open(elements_lines_path)
     waves = lines[1].data['wavel']
     
-    # Preserve Etienne's VALD3 air-to-vacuum convention through the shared
+    # Preserve the legacy VALD3 air-to-vacuum convention through the shared
     # implementation. Exact inverse and validity range:
     # https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion
     waves = air_to_vacuum_vald(waves)
@@ -1111,4 +1111,3 @@ def derive_AB_correction(filters):
         correction.append(fil.get_ab_magnitude(VEGA(wave).value*1.98644746*10**-8/wave,wave))
         
     return np.array(correction)
-

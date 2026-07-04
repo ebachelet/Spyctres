@@ -90,6 +90,17 @@ Current reader coverage includes:
 
 Readers return a generic `SpectrumSegment` object so that fitting code can remain instrument-agnostic.
 
+PEPSI wavelength semantics are release-specific and are not inferred from the
+`.dxt.nor` suffix. Use `product_profile="pets_stellar_rest"` for documented
+NASA Exoplanet Archive PETS products (air wavelengths supplied in microns and
+already shifted to the stellar rest frame), or
+`product_profile="cds_aanda_671_a7"` for that CDS release's Angstrom,
+Solar-System-barycentric products. The default `product_profile="generic"`
+preserves the historical assumption that Arg is numerically in Angstrom and
+leaves its medium and frame unknown. An explicit
+`--use-ssbvel` correction is rejected for profiles whose wavelengths are
+already barycentric or stellar-rest corrected.
+
 All `read_spectrum()` results pass through a versioned common-format boundary.
 Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
 deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion

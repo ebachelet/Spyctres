@@ -1063,14 +1063,70 @@ def read_pepsi_nor(
     wave_medium="unknown",
     wave_frame="unknown",
     infer_resolution=True,
+    product_profile="generic",
 ):
     """
     Read PEPSI .nor files (FITS binary table).
 
     Expected columns: Arg, Fun, Var (variance).
-    No wavelength-medium or reference-frame conversion is applied here.
-    Those are carried as metadata for later handling in the fitter or utilities.
+
+    ``product_profile`` must be selected from release documentation, never from
+    the ``.dxt.nor`` suffix. ``generic`` preserves the historical assumption
+    that Arg is numerically in Angstrom and leaves its medium/frame unknown.
+    ``pets_stellar_rest`` implements the documented
+    NASA Exoplanet Archive PETS convention (Arg in microns, air, already in the
+    stellar centre-of-mass frame). ``cds_aanda_671_a7`` implements that CDS
+    release's documented Angstrom, Solar-System-barycentric scale while leaving
+    the unreported air/vacuum medium unknown.
+
+    Product conventions:
+    https://exoplanetarchive.ipac.caltech.edu/docs/PEPSIMission.html
+    https://cdsarc.cds.unistra.fr/viz-bin/ReadMe/J/A%2BA/671/A7?format=html&tex=true
     """
+    profiles = {
+        "generic": {
+            "wave_scale": 1.0,
+            "wave_unit_input": "angstrom_assumed",
+            "wave_medium": "unknown",
+            "wave_frame": "unknown",
+            "observer_frame": "unknown",
+            "stellar_rest_status": "unknown",
+            "reference": None,
+        },
+        "pets_stellar_rest": {
+            "wave_scale": 1.0e4,
+            "wave_unit_input": "micron",
+            "wave_medium": "air",
+            "wave_frame": "stellar_rest",
+            "observer_frame": "barycentric",
+            "stellar_rest_status": "corrected",
+            "reference": "https://exoplanetarchive.ipac.caltech.edu/docs/PEPSIMission.html",
+        },
+        "cds_aanda_671_a7": {
+            "wave_scale": 1.0,
+            "wave_unit_input": "angstrom",
+            "wave_medium": "unknown",
+            "wave_frame": "barycentric",
+            "observer_frame": "barycentric",
+            "stellar_rest_status": "observed",
+            "reference": "https://cdsarc.cds.unistra.fr/viz-bin/ReadMe/J/A%2BA/671/A7?format=html&tex=true",
+        },
+    }
+    product_profile = str(product_profile).strip().lower()
+    if product_profile not in profiles:
+        raise ValueError(
+            "Unknown PEPSI product_profile {!r}; choose generic, "
+            "pets_stellar_rest, or cds_aanda_671_a7.".format(product_profile)
+        )
+    profile = profiles[product_profile]
+    if product_profile != "generic":
+        if wave_medium != "unknown" and wave_medium != profile["wave_medium"]:
+            raise ValueError("wave_medium conflicts with the selected PEPSI product profile.")
+        if wave_frame != "unknown" and wave_frame != profile["wave_frame"]:
+            raise ValueError("wave_frame conflicts with the selected PEPSI product profile.")
+        wave_medium = profile["wave_medium"]
+        wave_frame = profile["wave_frame"]
+
     path = os.path.abspath(os.path.expanduser(path))
     with fits.open(path, memmap=False) as hdul:
         data = hdul[ext].data
@@ -1081,7 +1137,7 @@ def read_pepsi_nor(
                 "Missing required columns in {0}: found {1}".format(path, sorted(cols))
             )
 
-        wave = np.array(data[wave_col], dtype=float)
+        wave = np.array(data[wave_col], dtype=float) * profile["wave_scale"]
         flux = np.array(data[flux_col], dtype=float)
 
         err = None
@@ -1098,6 +1154,23 @@ def read_pepsi_nor(
             if key in phdr:
                 return phdr[key]
             return default
+
+        def header_record(key):
+            header = ehdr if key in ehdr else phdr if key in phdr else None
+            if header is None:
+                return None
+            return {"value": header[key], "comment": header.comments[key]}
+
+        corrections_applied = (
+            True if product_profile == "pets_stellar_rest" else None
+        )
+        velocity_corrections = {
+            "RADVEL": header_record("RADVEL"),
+            "OBSVEL": header_record("OBSVEL"),
+            "SSBVEL": header_record("SSBVEL"),
+            "pets_radvel_applied": corrections_applied,
+            "pets_obsvel_applied": corrections_applied,
+        }
 
         meta = {
             "path": path,
@@ -1125,6 +1198,10 @@ def read_pepsi_nor(
             "wasfwhm_pix": get_any("WASFWHM"),
             "wave_medium": wave_medium,
             "wave_frame": wave_frame,
+            "pepsi_product_profile": product_profile,
+            "pepsi_profile_reference": profile["reference"],
+            "pepsi_arg_unit_input": profile["wave_unit_input"],
+            "velocity_corrections": velocity_corrections,
         }
 
         resolution_R = None
@@ -1151,17 +1228,25 @@ def read_pepsi_nor(
             wave_frame=wave_frame,
             name=name,
             observer_frame=(
-                wave_frame
-                if wave_frame in {"topocentric", "heliocentric", "barycentric"}
-                else "unknown"
-            ),
-            stellar_rest_status=(
-                "corrected"
-                if wave_frame == "stellar_rest"
+                profile["observer_frame"]
+                if product_profile != "generic"
                 else (
-                    "observed"
+                    wave_frame
                     if wave_frame in {"topocentric", "heliocentric", "barycentric"}
                     else "unknown"
+                )
+            ),
+            stellar_rest_status=(
+                profile["stellar_rest_status"]
+                if product_profile != "generic"
+                else (
+                    "corrected"
+                    if wave_frame == "stellar_rest"
+                    else (
+                        "observed"
+                        if wave_frame in {"topocentric", "heliocentric", "barycentric"}
+                        else "unknown"
+                    )
                 )
             ),
             resolution=(
@@ -1174,6 +1259,30 @@ def read_pepsi_nor(
                 )
             ),
         ).sorted()
+
+
+def pepsi_ssbvel_correction_kms(segment):
+    """Return SSBVEL in km/s only when it has not already been applied.
+
+    This deliberately refuses barycentric or stellar-rest products: applying
+    SSBVEL to either would double-correct the wavelength scale. For a generic
+    product, use remains an explicit caller choice because ``.dxt.nor`` does
+    not establish a reference frame.
+    """
+    if not isinstance(segment, SpectrumSegment):
+        raise TypeError("segment must be a SpectrumSegment.")
+    if (
+        segment.observer_frame == "barycentric"
+        or segment.stellar_rest_status == "corrected"
+    ):
+        raise ValueError(
+            "SSBVEL must not be applied: this spectrum is already barycentric "
+            "or corrected to the stellar rest frame."
+        )
+    value = segment.meta.get("ssbvel_mps")
+    if value is None:
+        return 0.0
+    return 1.0e-3 * float(value)
 
 
 def read_xshooter_1d(

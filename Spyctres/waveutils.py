@@ -277,7 +277,7 @@ def convert_wavelength_medium(
         'air', 'vacuum', or 'unknown'
     method : {'ciddor1996', 'vald3'}
         Explicit refractive-index convention. The default preserves the current
-        PHOENIX workflow; ``vald3`` preserves Etienne's legacy line-list path.
+        PHOENIX workflow; ``vald3`` preserves the legacy line-list path.
 
     Returns
     -------

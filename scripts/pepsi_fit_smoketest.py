@@ -18,7 +18,12 @@ from scipy.optimize import minimize
 
 from Spyctres import Spyctres
 from Spyctres.config import load_user_config, get_config_value, resolve_setting
-from Spyctres.io import read_spectrum, make_padded_window_segments, SpectrumCollection
+from Spyctres.io import (
+    read_spectrum,
+    make_padded_window_segments,
+    pepsi_ssbvel_correction_kms,
+    SpectrumCollection,
+)
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.fitting import (
     fit_phoenix_full_spectrum,
@@ -289,7 +294,11 @@ def run_legacy_pepsi_fit(args, parser):
 
     raw_segments = []
     for path in files:
-        seg = read_spectrum(path, instrument="pepsi")
+        seg = read_spectrum(
+            path,
+            instrument="pepsi",
+            product_profile=args.product_profile,
+        )
         meta = dict(seg.meta)
         meta["source_file"] = path
         raw_segments.append(seg.copy(meta=meta))
@@ -334,9 +343,11 @@ def run_legacy_pepsi_fit(args, parser):
 
     rv_bary_values = []
     for seg in input_segments:
-        ssbvel_mps = seg.meta.get("ssbvel_mps")
-        if args.use_ssbvel and ssbvel_mps is not None:
-            rv_bary_values.append(1.0e-3 * float(ssbvel_mps))
+        if args.use_ssbvel:
+            try:
+                rv_bary_values.append(pepsi_ssbvel_correction_kms(seg))
+            except ValueError as exc:
+                parser.error(str(exc))
 
     rv_bary_kms = float(np.nanmedian(rv_bary_values)) if rv_bary_values else 0.0
 
@@ -652,6 +663,15 @@ def main():
         help="Use header SSBVEL as a barycentric correction term.",
     )
     standard.add_argument(
+        "--product-profile",
+        choices=["generic", "pets_stellar_rest", "cds_aanda_671_a7"],
+        default="generic",
+        help=(
+            "Documented PEPSI release convention. The .dxt.nor suffix is never "
+            "used to infer wavelength units or frame."
+        ),
+    )
+    standard.add_argument(
         "--fast",
         action="store_true",
         help=(
@@ -868,7 +888,11 @@ def main():
             "Use --wave-hypothesis air, vacuum, or air_to_vac, or use native_interp."
         )
 
-    seg0 = read_spectrum(args.file, instrument="pepsi")
+    seg0 = read_spectrum(
+        args.file,
+        instrument="pepsi",
+        product_profile=args.product_profile,
+    )
     seg0 = seg0.copy(mask=build_pepsi_normalized_mask(seg0))
     seg = apply_pepsi_wave_hypothesis(seg0, args.wave_hypothesis)
 
@@ -910,8 +934,11 @@ def main():
 
     rv_bary_kms = 0.0
     ssbvel_mps = seg.meta.get("ssbvel_mps")
-    if args.use_ssbvel and ssbvel_mps is not None:
-        rv_bary_kms = 1.0e-3 * float(ssbvel_mps)
+    if args.use_ssbvel:
+        try:
+            rv_bary_kms = pepsi_ssbvel_correction_kms(seg)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     R = args.R_override if args.R_override is not None else seg.meta.get("resolution_R", None)
 
@@ -961,6 +988,7 @@ def main():
     print("Wave medium hypothesis:", args.wave_hypothesis)
     print("Wave medium used:", seg.wave_medium)
     print("Wave frame:", seg.wave_frame)
+    print("PEPSI product profile:", seg.meta.get("pepsi_product_profile"))
     print("SSBVEL m/s:", ssbvel_mps)
     print("Barycorr used [km/s]:", rv_bary_kms)
     print("Telluric mask:", bool(args.use_telluric_mask))

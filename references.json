@@ -87,10 +87,46 @@
       "url": "https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion",
       "validated_via": "Official VALD documentation page and coefficient comparison",
       "validated_on": "2026-07-04",
-      "description": "This is the authoritative technical source for the exact Piskunov inverse coefficients historically embedded in Etienne's get_element_lines implementation. The formula is paired with the Morton vacuum-to-air relation, is defined only above 2000 Angstrom, and is retained as an explicitly named compatibility method.",
+      "description": "This is the authoritative technical source for the exact Piskunov inverse coefficients historically embedded in the legacy get_element_lines implementation. The formula is paired with the Morton vacuum-to-air relation, is defined only above 2000 Angstrom, and is retained as an explicitly named compatibility method.",
       "affected_code": [
         "Spyctres/waveutils.py:air_to_vacuum_vald",
         "Spyctres/Spyctres.py:get_element_lines"
+      ]
+    },
+    {
+      "id": "nasa_exoplanet_archive_pets_pepsi",
+      "citation": "NASA Exoplanet Archive, PEPSI Exoplanet Transit Survey (PETS) Data at the Exoplanet Archive.",
+      "url": "https://exoplanetarchive.ipac.caltech.edu/docs/PEPSIMission.html",
+      "validated_via": "Official NASA Exoplanet Archive page; product description and FITS-column documentation inspected",
+      "validated_on": "2026-07-04",
+      "description": "Documents PETS Arg as air wavelength in microns and states that the wavelength array has already been shifted to the stellar centre-of-mass rest frame using RADVEL and OBSVEL. This is the authority for the opt-in PETS reader profile and its guard against applying an observer correction a second time.",
+      "affected_code": [
+        "Spyctres/io.py:read_pepsi_nor",
+        "Spyctres/io.py:pepsi_ssbvel_correction_kms",
+        "scripts/pepsi_fit_smoketest.py"
+      ]
+    },
+    {
+      "id": "pepsi_sds_reduction_manual_v1",
+      "citation": "Ilyin, I. (2020), PEPSI Spectroscopic Data Systems: Data Reduction User Manual, Version 1.0.",
+      "url": "https://pepsi.aip.de/wp-content/uploads/2022/11/PEPSI_DR_User_Manual_V1.0.pdf",
+      "validated_via": "Official PEPSI PDF; pipeline, wavelength-calibration, slice-merging, and DXT naming sections inspected",
+      "validated_on": "2026-07-04",
+      "description": "Describes PEPSI SDS reduction stages and identifies DXT as a slicer/side designation. It supports the rule that a .dxt.nor filename is not evidence for a wavelength reference frame, so release-specific semantics must be selected from documentation or headers.",
+      "affected_code": [
+        "Spyctres/io.py:read_pepsi_nor"
+      ]
+    },
+    {
+      "id": "cds_pepsi_aanda_671_a7",
+      "citation": "CDS ReadMe for A&A 671, A7 (2023), PEPSI spectra data-product description.",
+      "url": "https://cdsarc.cds.unistra.fr/viz-bin/ReadMe/J/A%2BA/671/A7?format=html&tex=true",
+      "validated_via": "Official CDS ReadMe; Arg column unit and Solar-System-barycentric scale inspected",
+      "validated_on": "2026-07-04",
+      "description": "Documents a PEPSI release whose Arg column is in Angstrom and on the Solar System barycentric wavelength scale. It demonstrates why PEPSI release profiles must remain explicit and why PETS microns/stellar-rest semantics cannot be inferred for arbitrary .nor files.",
+      "affected_code": [
+        "Spyctres/io.py:read_pepsi_nor",
+        "Spyctres/io.py:pepsi_ssbvel_correction_kms"
       ]
     }
   ]

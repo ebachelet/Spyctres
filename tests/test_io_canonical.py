@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pytest
+from astropy.io import fits
 
 from Spyctres.fitting import _resolve_segment_fwhm_kms
 from Spyctres.io import (
@@ -12,8 +13,22 @@ from Spyctres.io import (
     SpectrumSegment,
     canonicalize_segment,
     coerce_spectrum,
+    pepsi_ssbvel_correction_kms,
+    read_pepsi_nor,
     read_spectrum,
 )
+
+
+def _write_pepsi_nor(path, wave, **header_values):
+    primary = fits.PrimaryHDU()
+    for key, value in header_values.items():
+        primary.header[key] = value
+    columns = [
+        fits.Column(name="Arg", format="D", array=np.asarray(wave, dtype=float)),
+        fits.Column(name="Fun", format="D", array=np.ones(len(wave))),
+        fits.Column(name="Var", format="D", array=np.full(len(wave), 0.04)),
+    ]
+    fits.HDUList([primary, fits.BinTableHDU.from_columns(columns)]).writeto(path)
 
 
 def test_array_ingestion_converts_units_uncertainty_and_mask_polarity():
@@ -176,3 +191,53 @@ def test_references_registry_is_valid_json_with_unique_ids():
     assert len(ids) == len(set(ids))
     assert all(entry["url"].startswith("https://") for entry in registry["references"])
     assert all(entry["affected_code"] for entry in registry["references"])
+
+
+def test_pepsi_generic_profile_does_not_infer_semantics_from_suffix(tmp_path):
+    path = tmp_path / "example.dxt.nor"
+    _write_pepsi_nor(path, [5000.0, 5001.0], SSBVEL=-23000.0)
+
+    segment = read_pepsi_nor(path)
+
+    assert np.array_equal(segment.wave, [5000.0, 5001.0])
+    assert segment.wave_medium == "unknown"
+    assert segment.observer_frame == "unknown"
+    assert segment.stellar_rest_status == "unknown"
+    assert segment.meta["pepsi_product_profile"] == "generic"
+    assert pepsi_ssbvel_correction_kms(segment) == pytest.approx(-23.0)
+
+
+def test_pepsi_pets_profile_converts_microns_and_blocks_double_correction(tmp_path):
+    path = tmp_path / "pets.nor"
+    _write_pepsi_nor(
+        path,
+        [0.5000, 0.5001],
+        RADVEL=(12.3, "stellar radial velocity"),
+        OBSVEL=(-23.0, "barycentric radial velocity"),
+        SSBVEL=(-23000.0, "SSB velocity of observer m/s"),
+    )
+
+    segment = read_pepsi_nor(path, product_profile="pets_stellar_rest")
+
+    assert np.allclose(segment.wave, [5000.0, 5001.0])
+    assert segment.wave_medium == "air"
+    assert segment.observer_frame == "barycentric"
+    assert segment.stellar_rest_status == "corrected"
+    assert segment.meta["velocity_corrections"]["pets_radvel_applied"] is True
+    assert segment.meta["velocity_corrections"]["pets_obsvel_applied"] is True
+    with pytest.raises(ValueError, match="must not be applied"):
+        pepsi_ssbvel_correction_kms(segment)
+
+
+def test_pepsi_cds_profile_is_barycentric_but_medium_remains_unknown(tmp_path):
+    path = tmp_path / "cds.nor"
+    _write_pepsi_nor(path, [5000.0, 5001.0], SSBVEL=-23000.0)
+
+    segment = read_pepsi_nor(path, product_profile="cds_aanda_671_a7")
+
+    assert np.array_equal(segment.wave, [5000.0, 5001.0])
+    assert segment.wave_medium == "unknown"
+    assert segment.observer_frame == "barycentric"
+    assert segment.stellar_rest_status == "observed"
+    with pytest.raises(ValueError, match="must not be applied"):
+        pepsi_ssbvel_correction_kms(segment)
