@@ -14,6 +14,8 @@ from astropy.table import QTable
 import pkg_resources
 
 from .waveutils import air_to_vacuum_vald
+from .linefitting import LineSpec, LineFitConfig, LineFitResult, fit_line, fit_lines
+from .plotting import plot_line_fit
 
 
 from astropy.table import QTable

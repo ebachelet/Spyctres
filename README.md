@@ -137,6 +137,24 @@ arrays, actual fit masks, continuum coefficients, parameter covariance, and
 auditable velocity/cache provenance. Existing low-level fitting functions keep
 returning dictionaries for backward compatibility.
 
+## Local line diagnostics
+
+Local Gaussian measurements provide quick RV, width, equivalent-width, and
+residual checks without replacing the physical PHOENIX fit:
+
+```python
+from Spyctres import LineSpec, fit_line, plot_line_fit
+
+line = LineSpec("Halpha", 6562.80, kind="absorption", wave_medium="air")
+diagnostic = fit_line(segment, line)
+fig, axes = plot_line_fit(diagnostic)
+```
+
+Results report laboratory and segment wavelength media, observed line width,
+instrumental FWHM when available, uncertainty estimates, and quality flags.
+Positive equivalent width denotes absorption; emission-line area is reported
+as positive `line_flux` in flux-times-Angstrom units.
+
 Air/vacuum conversion conventions are explicit. `ciddor1996` remains the
 PHOENIX workflow default, while `vald3` preserves the historical Spyctres line-
 list conversion. Both leave wavelengths at or below 2000 Angstrom unchanged

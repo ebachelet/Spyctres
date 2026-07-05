@@ -52,6 +52,33 @@ COMMON_LINES = {
 }
 
 
+def plot_line_fit(result, figsize=(7.0, 5.0)):
+    """Plot a ``LineFitResult`` and residuals without calling ``show``."""
+    wave = np.asarray(result.wave, dtype=float)
+    flux = np.asarray(result.flux, dtype=float)
+    model = np.asarray(result.model_flux, dtype=float)
+    continuum = np.asarray(result.continuum, dtype=float)
+    residuals = np.asarray(result.residuals, dtype=float)
+    if wave.size == 0:
+        raise ValueError("LineFitResult has no fitted samples to plot.")
+    fig, axes = plt.subplots(
+        2, 1, sharex=True, figsize=figsize,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+    axes[0].plot(wave, flux, color="black", lw=1.0, label="data")
+    axes[0].plot(wave, model, color="tab:red", lw=1.4, label="fit")
+    axes[0].plot(wave, continuum, color="tab:blue", ls="--", lw=1.0, label="continuum")
+    axes[0].axvline(result.center_wave, color="tab:red", alpha=0.5)
+    axes[0].set_ylabel("Flux")
+    axes[0].legend(loc="best")
+    axes[0].set_title("{0}: {1}".format(result.line_name, ", ".join(result.flags)))
+    axes[1].axhline(0.0, color="0.5", lw=0.8)
+    axes[1].plot(wave, residuals, color="black", lw=0.9)
+    axes[1].set_ylabel("Residual")
+    axes[1].set_xlabel("Wavelength [Angstrom]")
+    return fig, axes
+
+
 def _as_float_array(x):
     """Return x as a NumPy float array."""
     return np.asarray(x, dtype=float)
