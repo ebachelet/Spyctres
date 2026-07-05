@@ -1,0 +1,81 @@
+import json
+
+import numpy as np
+import pytest
+
+from Spyctres.api import fit_phoenix_spectrum
+from Spyctres.io import SpectrumSegment
+from Spyctres.results import PhoenixFitResult
+
+
+def test_structured_result_is_mapping_and_json_serializable():
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0, "p_best": np.array([5772.0, 0.0, 4.44, 0.0])},
+        models=(np.array([1.0, 0.9]),),
+        used_masks=(np.array([True, False]),),
+        provenance={"api": "test"},
+    )
+
+    assert result["teff"] == 5772.0
+    payload = json.loads(result.to_json())
+    assert payload["p_best"] == [5772.0, 0.0, 4.44, 0.0]
+    assert payload["models"] == [[1.0, 0.9]]
+
+
+def test_public_api_canonicalizes_and_reconstructs(monkeypatch):
+    captured = {}
+
+    def fake_fit(spectrum, phoenix_lib, **kwargs):
+        captured["spectrum"] = spectrum
+        return {
+            "teff": 5000.0,
+            "feh": 0.0,
+            "logg": 4.5,
+            "rv_kms": 10.0,
+            "forward_model": "native_interp",
+            "model_margin_A": 20.0,
+        }
+
+    def fake_reconstruct(spectrum, phoenix_lib, fit_result, **kwargs):
+        captured["reconstruction_kwargs"] = kwargs
+        return [np.ones(2)], [np.array([1.0])], [np.ones(2, bool)], [np.zeros(2, bool)]
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_full_spectrum", fake_fit)
+    monkeypatch.setattr(
+        "Spyctres.api.reconstruct_phoenix_legendre_models_for_segments",
+        fake_reconstruct,
+    )
+    segment = SpectrumSegment(
+        [5001.0, 5000.0],
+        [1.0, 1.0],
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+    )
+
+    result = fit_phoenix_spectrum(
+        segment,
+        phoenix_lib=object(),
+        regions=[(5000.0, 5000.5)],
+        exclude_regions=[(5000.2, 5000.3)],
+    )
+
+    assert isinstance(result, PhoenixFitResult)
+    assert np.array_equal(captured["spectrum"].wave, [5000.0, 5001.0])
+    assert len(result.models) == 1
+    assert captured["reconstruction_kwargs"]["regions"] == [(5000.0, 5000.5)]
+    assert captured["reconstruction_kwargs"]["exclude_regions"] == [
+        (5000.2, 5000.3)
+    ]
+
+
+def test_public_api_rejects_two_library_sources():
+    segment = SpectrumSegment([5000.0], [1.0])
+    with pytest.raises(ValueError, match="not both"):
+        fit_phoenix_spectrum(
+            segment,
+            phoenix_lib=object(),
+            phoenix_dir="unused",
+            reconstruct=False,
+            warn_unknown=False,
+        )

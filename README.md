@@ -114,6 +114,29 @@ Scientific references supporting implemented algorithms are maintained in
 `references.json`, together with their affected code paths and validation
 notes.
 
+## Public PHOENIX fitting API
+
+The high-level API accepts a `SpectrumSegment`, `SpectrumCollection`, or any
+input supported by the canonical ingestion layer:
+
+```python
+from Spyctres import fit_phoenix_spectrum
+
+result = fit_phoenix_spectrum(
+    spectrum,
+    phoenix_dir="/path/to/PHOENIXv2",
+    p0=(5750.0, 0.0, 4.5, 0.0),
+    forward_model="native_interp",
+)
+print(result["teff"], result["rv_kms"])
+result.to_json()
+```
+
+`PhoenixFitResult` retains dictionary-style access while also carrying model
+arrays, actual fit masks, continuum coefficients, parameter covariance, and
+auditable velocity/cache provenance. Existing low-level fitting functions keep
+returning dictionaries for backward compatibility.
+
 Air/vacuum conversion conventions are explicit. `ciddor1996` remains the
 PHOENIX workflow default, while `vald3` preserves the historical Spyctres line-
 list conversion. Both leave wavelengths at or below 2000 Angstrom unchanged

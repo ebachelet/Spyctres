@@ -625,9 +625,11 @@ def reconstruct_phoenix_legendre_models_for_segments(
     segments,
     phoenix_lib,
     fit_result,
+    regions=None,
+    exclude_regions=None,
     exclude_mask=None,
     mdeg=2,
-    rv_bary_kms=0.0,
+    rv_bary_kms=None,
     R=None,
     fwhm_kms=None,
     forward_model=None,
@@ -659,14 +661,32 @@ def reconstruct_phoenix_legendre_models_for_segments(
     feh = float(fit_result["feh"])
     logg = float(fit_result["logg"])
     rv_kms = float(fit_result["rv_kms"])
+    if rv_bary_kms is None:
+        rv_bary_kms = float(fit_result.get("rv_bary_kms", 0.0))
 
     if forward_model is None:
         forward_model = str(fit_result.get("forward_model", "interp_observed"))
     if model_margin_A is None:
         model_margin_A = float(fit_result.get("model_margin_A", 200.0))
 
-    used_masks = [build_effective_fit_mask(seg, exclude_mask=exclude_mask) for seg in segments]
-    excluded_masks = [build_excluded_mask(seg, exclude_mask=exclude_mask) for seg in segments]
+    used_masks = [
+        build_effective_fit_mask(
+            seg,
+            regions=regions,
+            exclude_regions=exclude_regions,
+            exclude_mask=exclude_mask,
+        )
+        for seg in segments
+    ]
+    excluded_masks = [
+        build_excluded_mask(
+            seg,
+            regions=regions,
+            exclude_regions=exclude_regions,
+            exclude_mask=exclude_mask,
+        )
+        for seg in segments
+    ]
     segment_fwhm_kms = [
         _resolve_segment_fwhm_kms(seg, R=R, fwhm_kms=fwhm_kms)
         for seg in segments
@@ -1315,29 +1335,13 @@ def fit_phoenix_full_spectrum(
             model_margin_A=model_margin_A,
         )
 
-    need_rebuild = False
-
-    if phoenix_lib.wave is None:
-        need_rebuild = True
-    elif (len(phoenix_lib.wave) != len(model_wave_grid)) or (
-        not np.allclose(phoenix_lib.wave, model_wave_grid, rtol=0.0, atol=0.0)
+    if not phoenix_lib.interpolator_matches(
+        model_wave_grid,
+        teff_grid_req,
+        feh_grid_req,
+        logg_grid_req,
+        observed_wave_medium=model_wave_medium,
     ):
-        need_rebuild = True
-    elif phoenix_lib._grid is None:
-        need_rebuild = True
-    else:
-        tg, zg, gg = phoenix_lib._grid
-        if (
-            (len(tg) != len(teff_grid_req)) or
-            (len(zg) != len(feh_grid_req)) or
-            (len(gg) != len(logg_grid_req)) or
-            (not np.allclose(tg, teff_grid_req, rtol=0.0, atol=0.0)) or
-            (not np.allclose(zg, feh_grid_req, rtol=0.0, atol=0.0)) or
-            (not np.allclose(gg, logg_grid_req, rtol=0.0, atol=0.0))
-        ):
-            need_rebuild = True
-
-    if need_rebuild:
         phoenix_lib.build_interpolator(
             observed_wave=model_wave_grid,
             teff_grid=teff_grid_req,
@@ -1499,11 +1503,19 @@ def fit_phoenix_full_spectrum(
     r = res.fun
     chi2 = float(np.sum(r * r))
     n = int(r.size)
-    k = 4  # teff, feh, logg, rv
-    # Effective dof includes polynomial coefficients, but they were solved analytically.
-    # Report dof as N - k for a conservative baseline.
+    # Analytically solved continuum coefficients still consume degrees of freedom.
+    k = 4 + len(segments) * (int(mdeg) + 1)
     dof = max(1, n - k)
     chi2_red = chi2 / dof
+
+    covariance = None
+    parameter_errors = None
+    try:
+        covariance = np.linalg.pinv(res.jac.T @ res.jac) * chi2_red
+        parameter_errors = np.sqrt(np.clip(np.diag(covariance), 0.0, np.inf))
+    except (ValueError, np.linalg.LinAlgError):
+        covariance = None
+        parameter_errors = None
 
     return {
         "success": bool(res.success),
@@ -1520,6 +1532,9 @@ def fit_phoenix_full_spectrum(
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),
+        "n_free_parameters": int(k),
+        "covariance": covariance,
+        "parameter_errors": parameter_errors,
         "seg_meta": seg_meta,
         "forward_model": str(forward_model),
         "model_margin_A": float(model_margin_A),

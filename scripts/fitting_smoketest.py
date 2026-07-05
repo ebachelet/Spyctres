@@ -53,7 +53,7 @@ def chi2_red_with_poly(lib, wave, flux_n, err, teff, feh, logg, rv, fwhm_kms, md
     m_corr, coeffs = _solve_multiplicative_legendre(wave, flux_n, err, sh, mdeg=mdeg)
     r = (flux_n - m_corr) / err
     chi2 = float(np.sum(r * r))
-    dof = max(1, len(r) - 4)
+    dof = max(1, len(r) - 4 - (int(mdeg) + 1))
     return chi2 / dof, coeffs
 
 

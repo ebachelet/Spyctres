@@ -628,28 +628,13 @@ def fit_phoenix_sideband_symmetric(
             model_margin_A=model_margin_A,
         )
 
-        need_rebuild = False
-        if phoenix_lib.wave is None:
-            need_rebuild = True
-        elif (len(phoenix_lib.wave) != len(model_wave_grid)) or (
-            not np.allclose(phoenix_lib.wave, model_wave_grid, rtol=0.0, atol=0.0)
+        if not phoenix_lib.interpolator_matches(
+            model_wave_grid,
+            teff_grid_req,
+            feh_grid_req,
+            logg_grid_req,
+            observed_wave_medium=model_wave_medium,
         ):
-            need_rebuild = True
-        elif phoenix_lib._grid is None:
-            need_rebuild = True
-        else:
-            tg, zg, gg = phoenix_lib._grid
-            if (
-                (len(tg) != len(teff_grid_req)) or
-                (len(zg) != len(feh_grid_req)) or
-                (len(gg) != len(logg_grid_req)) or
-                (not np.allclose(tg, teff_grid_req, rtol=0.0, atol=0.0)) or
-                (not np.allclose(zg, feh_grid_req, rtol=0.0, atol=0.0)) or
-                (not np.allclose(gg, logg_grid_req, rtol=0.0, atol=0.0))
-            ):
-                need_rebuild = True
-
-        if need_rebuild:
             phoenix_lib.build_interpolator(
                 observed_wave=model_wave_grid,
                 teff_grid=teff_grid_req,
@@ -792,7 +777,7 @@ def fit_phoenix_sideband_symmetric(
     r = res.fun
     chi2 = float(np.sum(r * r))
     n = int(r.size)
-    k = 4
+    k = 4 + len(segments) * (int(mdeg) + 1)
     dof = max(1, n - k)
     chi2_red = chi2 / dof
 
