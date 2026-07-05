@@ -15,6 +15,17 @@ python examples/simple_phoenix_fit.py \
   --output-plot /tmp/spyctres_fit.png
 ```
 
+This is a real full-spectrum fit over the usable pixels, but it is deliberately
+a minimal demonstration rather than a precision line-profile analysis. It shows
+canonical ingestion, the native-grid PHOENIX forward model, structured output,
+and interactive plotting. It does not yet fit rotational broadening,
+macroturbulence, non-solar abundance patterns, or wavelength-dependent details
+of an instrument's LSF. Consequently, individual line widths may visibly
+disagree even when the broad atmospheric classification is informative. Use the
+instrument-specific recipes and local line diagnostics when assessing whether
+line-width residuals arise from the LSF, stellar broadening, masks, or model
+physics.
+
 ## XSL real-spectrum validation
 
 After downloading selected XSL DR3 FITS products, add one row per spectrum to

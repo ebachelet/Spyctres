@@ -1,5 +1,17 @@
 """Minimal command-line example for the public Spyctres PHOENIX API.
 
+Purpose
+-------
+This script demonstrates the shortest complete path from a reduced spectrum to
+a structured PHOENIX result and an interactive diagnostic plot. It does perform
+a full-spectrum fit over the usable input pixels, but it is not configured as a
+precision line-profile analysis. In particular, it does not fit rotational or
+macroturbulent broadening, detailed abundance patterns, or instrument-specific
+LSF variations. The reader's nominal resolution (or ``--R``) is the only
+instrumental broadening supplied. Individual observed lines can therefore be
+wider or narrower than the demonstration model even when the broad atmospheric
+classification is useful.
+
 Example
 -------
 python examples/simple_phoenix_fit.py \
@@ -21,7 +33,11 @@ from Spyctres.plotting import plot_full_spectrum_fit
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Minimal public-API PHOENIX fitting example.",
+        description=(
+            "Minimal public-API full-spectrum PHOENIX demonstration. This is "
+            "not a precision line-profile fit: rotation, macroturbulence, "
+            "abundance variations, and detailed LSF structure are not fitted."
+        ),
         epilog=(
             "Example:\n"
             "  python examples/simple_phoenix_fit.py "
@@ -64,6 +80,12 @@ def main(argv=None):
         for key in ("success", "teff", "feh", "logg", "rv_kms", "chi2_red")
     }
     print(json.dumps(summary, indent=2))
+    print(
+        "\nInterpretation: this example demonstrates ingestion, a native-grid "
+        "full-spectrum PHOENIX fit, structured results, and plotting. It is not "
+        "a precision line-width fit; line-profile mismatches can reflect stellar "
+        "rotation/macroturbulence, abundance differences, or an approximate LSF."
+    )
 
     if args.output_json:
         with open(args.output_json, "w", encoding="utf-8") as handle:
@@ -79,7 +101,9 @@ def main(argv=None):
         model=result.models[0],
         used_mask=result.used_masks[0],
         excluded_mask=result.excluded_masks[0],
-        title="PHOENIX fit: {0}".format(segment.name or args.spectrum),
+        title=(
+            "PHOENIX full-spectrum demonstration (not a precision line-width fit): {0}"
+        ).format(segment.name or args.spectrum),
     )
     if args.output_plot:
         fig.savefig(args.output_plot, dpi=160, bbox_inches="tight")
