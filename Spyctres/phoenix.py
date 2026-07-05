@@ -564,6 +564,11 @@ class PhoenixLibrary(object):
         return self._interp
 
     def save_cache(self, cache_path, observed_wave_medium):
+        """Save an interpolator cache keyed to this installation path.
+
+        Cache identity does not hash every template file. Delete caches after
+        mutating or replacing a PHOENIX tree in place at the same source path.
+        """
         if self._grid is None or self.wave is None or self._flux_grid is None:
             raise RuntimeError("Nothing to save. Build interpolator first.")
 

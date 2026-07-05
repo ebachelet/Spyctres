@@ -28,6 +28,7 @@ def test_public_api_canonicalizes_and_reconstructs(monkeypatch):
     def fake_fit(spectrum, phoenix_lib, **kwargs):
         captured["spectrum"] = spectrum
         return {
+            "success": True,
             "teff": 5000.0,
             "feh": 0.0,
             "logg": 4.5,
@@ -79,3 +80,17 @@ def test_public_api_rejects_two_library_sources():
             reconstruct=False,
             warn_unknown=False,
         )
+
+
+def test_public_api_skips_reconstruction_after_failed_fit(monkeypatch):
+    monkeypatch.setattr(
+        "Spyctres.api.fit_phoenix_full_spectrum",
+        lambda *args, **kwargs: {"success": False, "teff": 5000.0},
+    )
+    segment = SpectrumSegment([5000.0], [1.0])
+    result = fit_phoenix_spectrum(
+        segment, phoenix_lib=object(), warn_unknown=False
+    )
+
+    assert result.models == ()
+    assert result.provenance["reconstruction_performed"] is False

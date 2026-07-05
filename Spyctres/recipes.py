@@ -530,7 +530,7 @@ def fit_phoenix_sideband_symmetric(
     exclude_mask=None,
     rv_bary_kms=0.0,
     R=None,
-    forward_model="interp_observed",
+    forward_model="native_interp",
     model_margin_A=200.0,
     teff_grid=None,
     feh_grid=None,

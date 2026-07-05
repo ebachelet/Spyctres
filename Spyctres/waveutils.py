@@ -56,6 +56,10 @@ def shift_wavelength_velocity(wave, v_kms):
     """
     Shift wavelengths by a radial velocity using the relativistic Doppler factor.
 
+    ``phoenix_forward.doppler_shift_wave`` intentionally retains the classical
+    factor for notebook-reference reproducibility. Do not mix the two factors
+    within one RV derivation.
+
     Parameters
     ----------
     wave : array-like

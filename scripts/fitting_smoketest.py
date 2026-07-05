@@ -16,6 +16,7 @@ from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.io import SpectrumSegment
 from Spyctres.fitting import (
     fit_phoenix_full_spectrum,
+    reconstruct_phoenix_legendre_models_for_segments,
     _solve_multiplicative_legendre,
     _gaussian_broaden_velocity,
     _apply_observed_grid_rv_shift,
@@ -226,12 +227,15 @@ def main():
     print("Best :", dict(teff=out["teff"], feh=out["feh"], logg=out["logg"], rv=out["rv_kms"]))
     print("chi2_red (reported):", out["chi2_red"])
 
-    chi2b, cb = chi2_red_with_poly(
-        lib, wave, flux_n, err,
-        out["teff"], out["feh"], out["logg"], out["rv_kms"],
-        fwhm_test, mdeg=2,
+    models, coeffs, used_masks, _excluded = (
+        reconstruct_phoenix_legendre_models_for_segments(
+            [seg], lib, out, mdeg=2, R=r_test
+        )
     )
-    print("chi2_red at BEST  :", chi2b, "poly coeffs:", cb)
+    used = used_masks[0]
+    resid = (flux_n[used] - models[0][used]) / err[used]
+    chi2b = float(np.sum(resid * resid)) / max(1, np.count_nonzero(used) - 7)
+    print("chi2_red at BEST  :", chi2b, "poly coeffs:", coeffs[0])
 
 
 if __name__ == "__main__":

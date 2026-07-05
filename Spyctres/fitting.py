@@ -1104,7 +1104,7 @@ def fit_phoenix_full_spectrum(
     rv_bary_kms=0.0,
     R=None,
     fwhm_kms=None,
-    forward_model="interp_observed",
+    forward_model="native_interp",
     model_margin_A=200.0,
     teff_grid=None,
     feh_grid=None,
@@ -1202,11 +1202,10 @@ def fit_phoenix_full_spectrum(
         `R` or `fwhm_kms` may be provided.
 
     forward_model : {"interp_observed", "native_interp"}, optional
-        Choice of wavelength-space forward-model path. The default preserves the
-        original observed-grid behavior. The `native_interp` mode keeps the fit
-        continuous in `(teff, feh, logg)` but uses the native-grid-inspired
-        shift/convolve/resample-last sequence validated against the X-SHOOTER
-        PHOENIX notebook reference.
+        Choice of wavelength-space forward-model path. `native_interp` is the
+        scientific default and uses the validated shift/convolve/resample-last
+        sequence. `interp_observed` remains available as an explicit legacy/fast
+        compatibility path.
 
     model_margin_A : float, optional
         Wavelength margin in Angstrom used by `forward_model="native_interp"`
@@ -1371,13 +1370,16 @@ def fit_phoenix_full_spectrum(
         
     broadening_fwhm_kms = _resolve_broadening_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
     
+    invalid_model_evaluations = {"count": 0}
+
     def residuals(p):
         teff, feh, logg, rv_kms = float(p[0]), float(p[1]), float(p[2]), float(p[3])
         rv_tot = rv_bary_kms + rv_kms
 
         try:
             model0 = phoenix_lib.evaluate(teff, feh, logg)
-        except Exception:
+        except ValueError:
+            invalid_model_evaluations["count"] += 1
             return np.ones_like(flux_all) * 1e6
 
         out = np.empty_like(flux_all)
@@ -1532,6 +1534,7 @@ def fit_phoenix_full_spectrum(
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),
+        "invalid_model_evaluations": int(invalid_model_evaluations["count"]),
         "n_free_parameters": int(k),
         "covariance": covariance,
         "parameter_errors": parameter_errors,

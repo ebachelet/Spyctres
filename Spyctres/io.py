@@ -675,16 +675,36 @@ def coerce_spectrum(data, **kwargs):
     )
         
         
-def concatenate_segments(segments, sort=True, name=None):
+def concatenate_segments(segments, sort=True, name=None, require_disjoint=True):
     """
-    Concatenate multiple SpectrumSegment objects into a single SpectrumSegment.
+    Concatenate genuinely disjoint SpectrumSegment objects for export/plotting.
 
     If all input segments share the same wavelength medium and frame, those are
     preserved. Otherwise they are set to "unknown" on the merged segment.
+    By default, overlapping wavelength ranges are rejected: represent echelle
+    orders or overlapping arms as a SpectrumCollection instead of using this
+    helper as an implicit order-merging operation.
     """
     segments = list(segments)
     if len(segments) == 0:
         raise ValueError("concatenate_segments requires at least one segment.")
+
+    ranges = []
+    for segment in segments:
+        valid_wave = np.asarray(segment.wave, dtype=float)
+        valid_wave = valid_wave[np.isfinite(valid_wave)]
+        if valid_wave.size:
+            ranges.append((float(np.min(valid_wave)), float(np.max(valid_wave))))
+    ranges.sort()
+    if require_disjoint and any(
+        next_lo <= current_hi
+        for (_current_lo, current_hi), (next_lo, _next_hi)
+        in zip(ranges[:-1], ranges[1:])
+    ):
+        raise ValueError(
+            "Cannot concatenate overlapping wavelength ranges; preserve them "
+            "as separate SpectrumCollection segments."
+        )
 
     wave = np.concatenate([s.wave for s in segments])
     flux = np.concatenate([s.flux for s in segments])

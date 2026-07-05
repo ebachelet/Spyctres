@@ -1,5 +1,7 @@
 """High-level, instrument-independent Spyctres fitting API."""
 
+import inspect
+
 from .config import resolve_phoenix_dir
 from .fitting import (
     fit_phoenix_full_spectrum,
@@ -8,6 +10,16 @@ from .fitting import (
 from .io import coerce_spectrum
 from .phoenix import PhoenixLibrary
 from .results import PhoenixFitResult
+
+
+_RECONSTRUCTION_KEYS = (
+    set(inspect.signature(fit_phoenix_full_spectrum).parameters)
+    & set(
+        inspect.signature(
+            reconstruct_phoenix_legendre_models_for_segments
+        ).parameters
+    )
+)
 
 
 def fit_phoenix_spectrum(
@@ -34,20 +46,10 @@ def fit_phoenix_spectrum(
 
     summary = fit_phoenix_full_spectrum(canonical, phoenix_lib=phoenix_lib, **fit_kwargs)
     models = coefficients = used_masks = excluded_masks = ()
-    if reconstruct:
+    if reconstruct and summary.get("success", False):
         reconstruction_keys = {
             key: fit_kwargs[key]
-            for key in (
-                "regions",
-                "exclude_regions",
-                "exclude_mask",
-                "mdeg",
-                "rv_bary_kms",
-                "R",
-                "fwhm_kms",
-                "forward_model",
-                "model_margin_A",
-            )
+            for key in _RECONSTRUCTION_KEYS
             if key in fit_kwargs
         }
         models, coefficients, used_masks, excluded_masks = (
@@ -65,6 +67,10 @@ def fit_phoenix_spectrum(
         "rv_bary_explicit": True,
         "spectrum_schema_version": 1,
         "cache_path": fit_kwargs.get("cache_path"),
+        "phoenix_source_root": getattr(phoenix_lib, "base_dir", None),
+        "cache_schema_version": getattr(phoenix_lib, "CACHE_SCHEMA_VERSION", None),
+        "reconstruction_requested": bool(reconstruct),
+        "reconstruction_performed": bool(reconstruct and summary.get("success", False)),
     }
     return PhoenixFitResult(
         summary=dict(summary),

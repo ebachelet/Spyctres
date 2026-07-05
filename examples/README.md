@@ -2,6 +2,19 @@
 
 This directory contains a worked notebook example of PHOENIX-based full-spectrum fitting in Spyctres, using a reduced X-SHOOTER UVB spectrum of Gaia21ccu as the reference dataset.
 
+For a shorter non-notebook workflow, use `simple_phoenix_fit.py`. It reads any
+registered instrument format, invokes the public structured API, prints the
+main fitted parameters, and can save JSON and a diagnostic plot:
+
+```bash
+python examples/simple_phoenix_fit.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --teff 6000 --feh 0.0 --logg 4.0 --rv 0.0 \
+  --output-json /tmp/spyctres_result.json \
+  --output-plot /tmp/spyctres_fit.png
+```
+
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 
 ## What this notebook demonstrates

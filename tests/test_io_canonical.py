@@ -12,6 +12,7 @@ from Spyctres.io import (
     SpectrumCollection,
     SpectrumSegment,
     canonicalize_segment,
+    concatenate_segments,
     coerce_spectrum,
     pepsi_ssbvel_correction_kms,
     read_pepsi_nor,
@@ -147,6 +148,14 @@ def test_collection_ingestion_preserves_segments_and_weights():
     assert np.array_equal(canonical.weights, [1.0, 2.0])
     assert np.array_equal(canonical[0].wave, [1.0, 2.0])
     assert np.array_equal(canonical[1].wave, [3.0, 4.0])
+
+
+def test_concatenate_segments_rejects_overlapping_ranges():
+    first = SpectrumSegment([5000.0, 5002.0], [1.0, 1.0])
+    second = SpectrumSegment([5001.0, 5003.0], [1.0, 1.0])
+
+    with pytest.raises(ValueError, match="SpectrumCollection"):
+        concatenate_segments([first, second])
 
 
 def test_unknown_semantics_are_allowed_but_warned():

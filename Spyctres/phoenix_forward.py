@@ -202,7 +202,9 @@ def doppler_shift_wave(wave_A, rv_kms):
     Apply a non-relativistic Doppler shift to a wavelength array.
 
     This matches the Gaia21ccu notebook-faithful reference path currently used for
-    X-SHOOTER development.
+    X-SHOOTER development. See ``waveutils.shift_wavelength_velocity`` for the
+    full relativistic factor. The difference is about 5e-7 at 300 km/s; this
+    classical form remains here only to preserve the validated reference path.
     """
     wave_A = np.asarray(wave_A, dtype=np.float64)
     return wave_A * (1.0 + float(rv_kms) / C_KMS)
