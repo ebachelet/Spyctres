@@ -15,6 +15,28 @@ python examples/simple_phoenix_fit.py \
   --output-plot /tmp/spyctres_fit.png
 ```
 
+## XSL real-spectrum validation
+
+After downloading selected XSL DR3 FITS products, add one row per spectrum to
+`xsl_validation_manifest.csv`. Relative paths are resolved from the manifest.
+Then run:
+
+```bash
+python scripts/xsl_validation.py examples/xsl_validation_manifest.csv \
+  --wave-medium air \
+  --output /tmp/xsl_validation_results.json
+```
+
+The wavelength-medium argument is deliberately required: the official DR3
+format page documents nm and stellar-rest-frame wavelengths but does not state
+air versus vacuum. The runner excludes the published dichroic-contamination
+regions and records fitted-minus-reference atmospheric parameters. Stars above
+12000 K are reported as unsupported instead of being extrapolated with PHOENIX.
+
+`simple_phoenix_fit.py` opens an interactive Matplotlib fit figure by default,
+so users can zoom, pan, and inspect residuals. Add `--no-show` for automated or
+headless runs; `--output-plot` can be used independently to save the figure.
+
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 
 ## What this notebook demonstrates

@@ -1305,6 +1305,103 @@ def pepsi_ssbvel_correction_kms(segment):
     return 1.0e-3 * float(value)
 
 
+def read_xsl_dr3(
+    path,
+    ext=1,
+    flux_variant="flux",
+    wave_medium="unknown",
+    observer_frame="unknown",
+):
+    """Read an X-shooter Spectral Library DR3 combined-arm FITS spectrum.
+
+    DR3 documents WAVE in nm, ERR as one-sigma flux uncertainty, logarithmic
+    sampling, and a stellar-rest-frame wavelength scale. Its effective Gaussian
+    velocity sigma is 13, 11, and 16 km/s across the UVB-through-overlap, VIS,
+    and NIR-from-overlap regions respectively. The DR3 format page does not
+    explicitly state air versus vacuum, so the default remains ``unknown``.
+
+    https://xsl.astro.unistra.fr/page_dr3_format.html
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    flux_variant = str(flux_variant).strip().lower()
+    if flux_variant not in {"flux", "dereddened", "auto"}:
+        raise ValueError("flux_variant must be flux, dereddened, or auto.")
+    with fits.open(path, memmap=False) as hdul:
+        data = hdul[ext].data
+        names = {name.upper(): name for name in data.names}
+        required = {"WAVE", "FLUX", "ERR"}
+        if not required.issubset(names):
+            raise ValueError(
+                "XSL DR3 table requires WAVE, FLUX, and ERR columns; found {0}.".format(
+                    sorted(names)
+                )
+            )
+        corrected_candidates = [name for name in ("FLUX_DR", "FLUX_SC") if name in names]
+        if flux_variant == "flux":
+            flux_name = names["FLUX"]
+        elif corrected_candidates:
+            flux_name = names[corrected_candidates[0]]
+        elif flux_variant == "dereddened":
+            raise ValueError("Requested corrected XSL flux, but FLUX_DR/FLUX_SC is absent.")
+        else:
+            flux_name = names["FLUX"]
+
+        wave = np.asarray(data[names["WAVE"]], dtype=float) * 10.0
+        flux = np.asarray(data[flux_name], dtype=float)
+        err = np.asarray(data[names["ERR"]], dtype=float)
+        primary_meta = dict(hdul[0].header)
+
+    base_meta = {
+        "path": path,
+        "instrument": "XSL DR3",
+        "xsl_release": "DR3",
+        "xsl_flux_column": str(flux_name),
+        "xsl_wave_unit_input": "nm",
+        "xsl_log10_sampled": True,
+        "xsl_combined_arms": True,
+        "xsl_reference": "https://doi.org/10.1051/0004-6361/202142388",
+        "header": primary_meta,
+    }
+    name = os.path.basename(path)
+
+    # DR3 overlap regions are smoothed to sigma_v=13 km/s over 545-590 nm and
+    # sigma_v=16 km/s over 994-1150 nm. These boundaries therefore describe
+    # effective constant-LSF regions, not merely detector-arm labels.
+    regions = [
+        ("UVB", -np.inf, 5900.0, 13.0),
+        ("VIS", 5900.0, 9940.0, 11.0),
+        ("NIR", 9940.0, np.inf, 16.0),
+    ]
+    segments = []
+    for label, lo, hi, sigma_kms in regions:
+        select = (wave >= lo) & (wave < hi)
+        if not np.any(select):
+            continue
+        meta = dict(base_meta)
+        meta.update({"arm": label, "xsl_effective_lsf_sigma_kms": sigma_kms})
+        segments.append(
+            SpectrumSegment(
+                wave[select],
+                flux[select],
+                err=err[select],
+                meta=meta,
+                wave_medium=wave_medium,
+                wave_frame="stellar_rest",
+                observer_frame=observer_frame,
+                stellar_rest_status="corrected",
+                resolution=ResolutionDescriptor(
+                    quantity="sigma_kms",
+                    value=sigma_kms,
+                    source="XSL DR3 documented effective arm/overlap resolution",
+                ),
+                name="{0}:{1}".format(name, label),
+            ).sorted()
+        )
+    if not segments:
+        raise ValueError("XSL DR3 spectrum contains no finite wavelength samples.")
+    return SpectrumCollection(segments, name=name, meta=base_meta)
+
+
 def read_xshooter_1d(
     path,
     flux_ext=0,
@@ -1688,6 +1785,7 @@ def register_reader(names, func):
 
 
 register_reader(["pepsi", "pepsi_nor", "pepsi-1d", "pepsi1d"], read_pepsi_nor)
+register_reader(["xsl", "xsl_dr3", "xsl-dr3"], read_xsl_dr3)
 register_reader(["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"], read_xshooter_1d)
 register_reader(["floyds", "floyds_csv", "lco_floyds"], read_floyds_csv)
 register_reader(["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"], read_gemini_gmos_ascii)
@@ -1721,7 +1819,8 @@ def read_spectrum(
 
     if func is None:
         raise ValueError(
-            "Unknown instrument '{0}'. Supported: pepsi, xshooter, floyds, gemini".format(instrument)
+            "Unknown instrument '{0}'. Supported: pepsi, xsl_dr3, xshooter, "
+            "floyds, gemini".format(instrument)
         )
 
     spectrum = func(path, **kwargs)

@@ -128,6 +128,30 @@
         "Spyctres/io.py:read_pepsi_nor",
         "Spyctres/io.py:pepsi_ssbvel_correction_kms"
       ]
+    },
+    {
+      "id": "verro2022_xsl_dr3",
+      "citation": "Verro, K. et al. (2022), The X-shooter Spectral Library (XSL): Data Release 3, Astronomy & Astrophysics, 660, A34.",
+      "doi": "10.1051/0004-6361/202142388",
+      "url": "https://doi.org/10.1051/0004-6361/202142388",
+      "validated_via": "Publisher metadata, official XSL DR3 site, and CDS catalogue description",
+      "validated_on": "2026-07-05",
+      "description": "Defines the XSL DR3 combined-arm, stellar-rest-frame spectral products and their effective arm-dependent velocity resolutions. Spyctres uses these documented semantics to ingest DR3 spectra as separate constant-LSF regions suitable for empirical PHOENIX classification validation.",
+      "affected_code": [
+        "Spyctres/io.py:read_xsl_dr3",
+        "tests/test_io_canonical.py:test_xsl_dr3_reader_splits_effective_lsf_regions"
+      ]
+    },
+    {
+      "id": "xsl_dr3_format_documentation",
+      "citation": "X-shooter Spectral Library, XSL DR3 Data Format documentation.",
+      "url": "https://xsl.astro.unistra.fr/page_dr3_format.html",
+      "validated_via": "Official XSL project data-format page",
+      "validated_on": "2026-07-05",
+      "description": "Documents the DR3 FITS table columns, wavelength unit in nm, logarithmic sampling, stellar-rest-frame status, corrected-flux variants, and Gaussian velocity sigma for each effective arm/overlap region. The page does not explicitly identify the wavelength medium, so the reader deliberately leaves air/vacuum unknown unless supplied by the caller.",
+      "affected_code": [
+        "Spyctres/io.py:read_xsl_dr3"
+      ]
     }
   ]
 }

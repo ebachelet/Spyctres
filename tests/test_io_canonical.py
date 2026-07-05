@@ -16,6 +16,7 @@ from Spyctres.io import (
     coerce_spectrum,
     pepsi_ssbvel_correction_kms,
     read_pepsi_nor,
+    read_xsl_dr3,
     read_spectrum,
 )
 
@@ -250,3 +251,26 @@ def test_pepsi_cds_profile_is_barycentric_but_medium_remains_unknown(tmp_path):
     assert segment.stellar_rest_status == "observed"
     with pytest.raises(ValueError, match="must not be applied"):
         pepsi_ssbvel_correction_kms(segment)
+
+
+def test_xsl_dr3_reader_splits_effective_lsf_regions(tmp_path):
+    path = tmp_path / "xsl_spectrum_X0000_merged.fits"
+    wave_nm = np.array([500.0, 589.0, 600.0, 993.0, 1000.0, 1200.0])
+    columns = [
+        fits.Column(name="WAVE", format="D", array=wave_nm),
+        fits.Column(name="FLUX", format="D", array=np.ones(wave_nm.size)),
+        fits.Column(name="FLUX_DR", format="D", array=np.full(wave_nm.size, 2.0)),
+        fits.Column(name="ERR", format="D", array=np.full(wave_nm.size, 0.1)),
+    ]
+    fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU.from_columns(columns)]).writeto(path)
+
+    collection = read_xsl_dr3(path, flux_variant="dereddened", wave_medium="air")
+
+    assert isinstance(collection, SpectrumCollection)
+    assert [segment.meta["arm"] for segment in collection] == ["UVB", "VIS", "NIR"]
+    assert [segment.resolution.value for segment in collection] == [13.0, 11.0, 16.0]
+    assert all(segment.resolution.quantity == "sigma_kms" for segment in collection)
+    assert all(segment.stellar_rest_status == "corrected" for segment in collection)
+    assert all(segment.wave_medium == "air" for segment in collection)
+    assert np.array_equal(collection[0].wave, [5000.0, 5890.0])
+    assert np.all(collection[0].flux == 2.0)
