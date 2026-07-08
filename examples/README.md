@@ -4,7 +4,8 @@ This directory contains a worked notebook example of PHOENIX-based full-spectrum
 
 For a shorter non-notebook workflow, use `simple_phoenix_fit.py`. It reads any
 registered instrument format, invokes the public structured API, prints the
-main fitted parameters, and can save JSON and a diagnostic plot:
+main fitted parameters, and can save compact JSON plus a diagnostic referee
+plot:
 
 ```bash
 python examples/simple_phoenix_fit.py \
@@ -59,7 +60,9 @@ domain, not automatically evidence that the numerical fitter is broken.
 
 `simple_phoenix_fit.py` opens an interactive Matplotlib fit figure by default,
 so users can zoom, pan, and inspect residuals. Add `--no-show` for automated or
-headless runs; `--output-plot` can be used independently to save the figure.
+headless runs; `--output-plot` can be used independently to save the figure. If
+`--output-json` and `--output-plot` are both provided, the JSON records the plot
+path relative to the JSON file and strips local cache/template paths by default.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 

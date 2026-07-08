@@ -35,7 +35,7 @@ def test_structured_result_can_save_compact_json(tmp_path):
     result = PhoenixFitResult(
         summary={"teff": np.float64(5772.0)},
         models=(np.array([np.nan]),),
-        diagnostics={"residual_rms": np.nan},
+        diagnostics={"residual_rms": np.float64(np.nan)},
         quality_flags=("metadata_incomplete",),
     )
     path = tmp_path / "result.json"
@@ -46,6 +46,46 @@ def test_structured_result_can_save_compact_json(tmp_path):
     assert "models" not in payload
     assert payload["diagnostics"]["residual_rms"] is None
     assert payload["quality_flags"] == ["metadata_incomplete"]
+
+
+def test_compact_json_sanitizes_local_paths_and_records_relative_plot(tmp_path):
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0},
+        provenance={
+            "phoenix_source_root": "/home/someone/PHOENIX",
+            "cache_path": "/tmp/spyctres_cache.npz",
+            "reader_path": "examples/data/spectrum.fits",
+        },
+    )
+    json_path = tmp_path / "products" / "result.json"
+    json_path.parent.mkdir()
+    plot_path = json_path.parent / "fit.png"
+
+    result.save_json(json_path, plot_paths={"referee_plot": plot_path})
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    text = json.dumps(payload)
+    assert "/home/" not in text
+    assert "/tmp/" not in text
+    assert payload["provenance"]["phoenix_source_root"] is None
+    assert payload["provenance"]["cache_path"] is None
+    assert payload["provenance"]["reader_path"] == "examples/data/spectrum.fits"
+    assert payload["generated_files"]["plots"]["referee_plot"] == "fit.png"
+
+
+def test_to_dict_rejects_absolute_plot_paths_without_relative_base():
+    result = PhoenixFitResult(summary={"teff": 5772.0})
+    with pytest.raises(ValueError, match="Absolute/local paths"):
+        result.to_dict(plot_paths={"referee_plot": "/tmp/fit.png"})
+
+
+def test_local_paths_can_be_included_explicitly():
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0},
+        provenance={"phoenix_source_root": "/home/someone/PHOENIX"},
+    )
+    payload = result.to_dict(include_local_paths=True)
+    assert payload["provenance"]["phoenix_source_root"] == "/home/someone/PHOENIX"
 
 
 def test_public_api_canonicalizes_and_reconstructs(monkeypatch):

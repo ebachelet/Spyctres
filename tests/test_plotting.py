@@ -53,6 +53,7 @@ def test_plot_fit_referee_saves_without_mutating_result(tmp_path):
 
     after = json.dumps(result.to_dict(include_arrays=False), sort_keys=True)
     assert path.exists()
+    assert fig.spyctres_generated_files == {"referee_plot": str(path)}
     assert axes.shape == (1, 2)
     assert before == after
     fig.clf()

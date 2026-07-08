@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 
 from Spyctres import fit_phoenix_spectrum
 from Spyctres.io import read_spectrum
-from Spyctres.plotting import plot_full_spectrum_fit
+from Spyctres.plotting import plot_fit_referee
 
 
 def build_parser():
@@ -87,26 +87,20 @@ def main(argv=None):
         "rotation/macroturbulence, abundance differences, or an approximate LSF."
     )
 
-    if args.output_json:
-        with open(args.output_json, "w", encoding="utf-8") as handle:
-            handle.write(result.to_json(indent=2))
-
     if not result.models:
+        if args.output_json:
+            result.save_json(args.output_json)
         raise RuntimeError("Fit did not converge, so no model is available to plot.")
-    segment = spectrum if hasattr(spectrum, "wave") else spectrum[0]
-    fig, _axes = plot_full_spectrum_fit(
-        segment.wave,
-        segment.flux,
-        err=segment.err,
-        model=result.models[0],
-        used_mask=result.used_masks[0],
-        excluded_mask=result.excluded_masks[0],
-        title=(
-            "PHOENIX full-spectrum demonstration (not a precision line-width fit): {0}"
-        ).format(segment.name or args.spectrum),
+    fig, _axes = plot_fit_referee(
+        result,
+        segment=spectrum,
+        savepath=args.output_plot,
     )
-    if args.output_plot:
-        fig.savefig(args.output_plot, dpi=160, bbox_inches="tight")
+    if args.output_json:
+        result.save_json(
+            args.output_json,
+            plot_paths=getattr(fig, "spyctres_generated_files", None),
+        )
     if not args.no_show:
         plt.show()
     else:
