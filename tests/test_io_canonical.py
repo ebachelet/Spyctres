@@ -264,7 +264,7 @@ def test_xsl_dr3_reader_splits_effective_lsf_regions(tmp_path):
     ]
     fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU.from_columns(columns)]).writeto(path)
 
-    collection = read_xsl_dr3(path, flux_variant="dereddened", wave_medium="air")
+    collection = read_xsl_dr3(path, flux_variant="dereddened")
 
     assert isinstance(collection, SpectrumCollection)
     assert [segment.meta["arm"] for segment in collection] == ["UVB", "VIS", "NIR"]

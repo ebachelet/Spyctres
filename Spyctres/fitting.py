@@ -6,6 +6,7 @@ from numpy.polynomial.legendre import legvander
 # Observed-grid PHOENIX RV resampling is implemented in waveutils.py so that
 # this fitting layer does not import the legacy monolithic Spyctres.py module.
 from .io import SpectrumSegment, SpectrumCollection
+from .phoenix import validate_phoenix_teff
 from .phoenix_forward import (
     infer_segments_wave_medium,
     fit_bounds_from_segments,
@@ -16,7 +17,9 @@ from .phoenix_forward import (
     resolve_gaussian_lsf_fwhm_kms,
 )
 from .preprocessing import compose_fit_mask
-# Why multiplicative polynomial: it is a standard way to absorb low-frequency continuum differences and calibration mismatches during full-spectrum fitting.
+# Profiling linear continuum coefficients inside the nonlinear fit follows the
+# separable least-squares design used by pPXF; see Cappellari (2023):
+# https://doi.org/10.1093/mnras/stad2597
 
 # RV handling:
 # Spyctres.velocity_correction is a legacy helper and is left unchanged.
@@ -450,6 +453,10 @@ def _make_forward_segments(segments, support_wave_all, support_slices, fit_masks
     These segments live on the cleaned support wavelength grids used internally
     by fitting.py, with seg.mask marking the fit pixels on each support grid.
     """
+    if not (len(segments) == len(support_slices) == len(fit_masks)):
+        raise ValueError(
+            "Forward segments, support slices, and fit masks must remain aligned."
+        )
     out = []
     for seg, support_sl, fit_mask in zip(segments, support_slices, fit_masks):
         w = np.asarray(support_wave_all[support_sl], dtype=float)
@@ -463,9 +470,37 @@ def _make_forward_segments(segments, support_wave_all, support_slices, fit_masks
                 wave_medium=getattr(seg, "wave_medium", None),
                 wave_frame=getattr(seg, "wave_frame", None),
                 name=getattr(seg, "name", None),
+                observer_frame=getattr(seg, "observer_frame", "unknown"),
+                stellar_rest_status=getattr(seg, "stellar_rest_status", "unknown"),
+                stellar_rv_applied_kms=getattr(
+                    seg, "stellar_rv_applied_kms", None
+                ),
+                resolution=getattr(seg, "resolution", None),
             )
         )
     return out
+
+
+def _retained_segments_from_meta(segments, seg_meta):
+    """Recover the input segments retained by `_build_data_vectors`."""
+    retained = []
+    for meta in seg_meta:
+        index = int(meta["index"])
+        if index < 0 or index >= len(segments):
+            raise ValueError("Retained segment index is outside the input segment list.")
+        retained.append(segments[index])
+    return retained
+
+
+def _full_spectrum_parameter_count(n_retained_segments, mdeg):
+    """Count nonlinear parameters plus retained per-segment continua."""
+    n_retained_segments = int(n_retained_segments)
+    mdeg = int(mdeg)
+    if n_retained_segments < 1:
+        raise ValueError("n_retained_segments must be >= 1.")
+    if mdeg < 0:
+        raise ValueError("mdeg must be >= 0.")
+    return 4 + n_retained_segments * (mdeg + 1)
 
 
 def _chi2_for_params_native_interp(
@@ -495,6 +530,41 @@ def _chi2_for_params_native_interp(
     support grid before continuum fitting.
     """
     model_dense = phoenix_lib.evaluate(teff, feh, logg)
+    return _chi2_for_dense_model_native_interp(
+        forward_segments=forward_segments,
+        flux_all=flux_all,
+        err_all=err_all,
+        fit_slices=fit_slices,
+        fit_masks=fit_masks,
+        segment_weights=segment_weights,
+        model_dense=model_dense,
+        rv_tot=rv_tot,
+        model_wave_grid=model_wave_grid,
+        model_wave_medium=model_wave_medium,
+        mdeg=mdeg,
+        decimate=decimate,
+        segment_fwhm_kms=segment_fwhm_kms,
+        model_margin_A=model_margin_A,
+    )
+
+
+def _chi2_for_dense_model_native_interp(
+    forward_segments,
+    flux_all,
+    err_all,
+    fit_slices,
+    fit_masks,
+    segment_weights,
+    model_dense,
+    rv_tot,
+    model_wave_grid,
+    model_wave_medium,
+    mdeg,
+    decimate=1,
+    segment_fwhm_kms=None,
+    model_margin_A=200.0,
+):
+    """Score a prepared dense PHOENIX model without an interpolator lookup."""
 
     model_list = build_phoenix_native_models_for_segments(
         segments=forward_segments,
@@ -530,6 +600,211 @@ def _chi2_for_params_native_interp(
         chi2 += float(seg_weight) * float(np.sum(r * r))
 
     return chi2
+
+
+def _default_coarse_grid(full_grid, targets):
+    """Map a compact set of physical targets onto installed grid nodes."""
+    grid = np.asarray(full_grid, dtype=float)
+    if grid.ndim != 1 or grid.size == 0:
+        raise ValueError("full_grid must be a non-empty 1D array.")
+    return np.unique([grid[np.argmin(np.abs(grid - value))] for value in targets])
+
+
+def _axis_between_coarse_neighbors(full_grid, coarse_grid, center, max_points):
+    """Return installed nodes bracketed by neighboring sparse-grid values."""
+    full_grid = np.unique(np.asarray(full_grid, dtype=float))
+    coarse_grid = np.unique(np.asarray(coarse_grid, dtype=float))
+    center_index = int(np.argmin(np.abs(coarse_grid - float(center))))
+    lo = coarse_grid[max(0, center_index - 1)]
+    hi = coarse_grid[min(coarse_grid.size - 1, center_index + 1)]
+    candidates = full_grid[(full_grid >= lo) & (full_grid <= hi)]
+    max_points = int(max_points)
+    if candidates.size <= max_points:
+        return candidates
+    indices = np.unique(
+        np.rint(np.linspace(0, candidates.size - 1, max_points)).astype(int)
+    )
+    return candidates[indices]
+
+
+def _coarse_physical_start_native_interp(
+    forward_segments,
+    flux_all,
+    err_all,
+    fit_slices,
+    fit_masks,
+    segment_weights,
+    phoenix_lib,
+    model_wave_grid,
+    model_wave_medium,
+    rv_tot,
+    mdeg,
+    segment_fwhm_kms,
+    model_margin_A,
+    teff_grid=None,
+    feh_grid=None,
+    logg_grid=None,
+    decimate=12,
+):
+    """Select a physical starting region by scoring sparse PHOENIX nodes.
+
+    This stage reads only the requested node templates and never constructs a
+    full rectangular interpolator. It therefore avoids the memory blow-up of a
+    survey-wide dense cache while still testing widely separated regions of
+    parameter space. The local interpolator is built only after the best coarse
+    node has been identified. The staged strategy is motivated by the dispersed
+    initial searches used by ASPCAP/FERRE; see Garcia Perez et al. (2016):
+    https://doi.org/10.3847/0004-6256/151/6/144
+    """
+    if teff_grid is None:
+        teff_grid = _default_coarse_grid(
+            phoenix_lib.DEFAULT_TEFF_GRID,
+            [3000.0, 4000.0, 5000.0, 6000.0, 8000.0, 10000.0, 12000.0],
+        )
+    if feh_grid is None:
+        feh_grid = _default_coarse_grid(
+            phoenix_lib.DEFAULT_FEH_GRID, [-2.0, -1.0, 0.0]
+        )
+    if logg_grid is None:
+        logg_grid = _default_coarse_grid(
+            phoenix_lib.DEFAULT_LOGG_GRID, [0.0, 2.5, 4.5]
+        )
+
+    teff_grid = np.unique(np.asarray(teff_grid, dtype=float))
+    feh_grid = np.unique(np.asarray(feh_grid, dtype=float))
+    logg_grid = np.unique(np.asarray(logg_grid, dtype=float))
+    if min(teff_grid.size, feh_grid.size, logg_grid.size) == 0:
+        raise ValueError("Coarse physical grids must be non-empty.")
+    decimate = int(decimate)
+    if decimate < 1:
+        raise ValueError("coarse_decimate must be >= 1.")
+
+    scores = []
+    evaluated = set()
+
+    def score_node(teff, feh, logg):
+        node = (float(teff), float(feh), float(logg))
+        if node in evaluated:
+            return
+        evaluated.add(node)
+        validate_phoenix_teff(teff)
+        if not phoenix_lib.has_template(teff, logg, feh):
+            return
+        try:
+            _wave, model_dense = phoenix_lib.load_template(
+                teff,
+                logg,
+                feh,
+                wave=model_wave_grid,
+                wave_medium=model_wave_medium,
+            )
+            chi2 = _chi2_for_dense_model_native_interp(
+                forward_segments=forward_segments,
+                flux_all=flux_all,
+                err_all=err_all,
+                fit_slices=fit_slices,
+                fit_masks=fit_masks,
+                segment_weights=segment_weights,
+                model_dense=model_dense,
+                rv_tot=rv_tot,
+                model_wave_grid=model_wave_grid,
+                model_wave_medium=model_wave_medium,
+                mdeg=mdeg,
+                decimate=decimate,
+                segment_fwhm_kms=segment_fwhm_kms,
+                model_margin_A=model_margin_A,
+            )
+        except (FileNotFoundError, ValueError):
+            return
+        if np.isfinite(chi2):
+            scores.append(
+                {
+                    "teff": float(teff),
+                    "feh": float(feh),
+                    "logg": float(logg),
+                    "chi2": float(chi2),
+                }
+            )
+
+    for teff in teff_grid:
+        for feh in feh_grid:
+            for logg in logg_grid:
+                score_node(teff, feh, logg)
+    if not scores:
+        raise ValueError("No valid PHOENIX templates were available for coarse initialization.")
+    scores.sort(key=lambda item: item["chi2"])
+
+    # Refine Teff and log(g) between the neighboring sparse nodes while holding
+    # metallicity at the best first-stage value. This prevents an edge node
+    # such as 12000 K from creating a one-sided local interpolation grid.
+    first_best = scores[0]
+    refine_teff = _axis_between_coarse_neighbors(
+        phoenix_lib.DEFAULT_TEFF_GRID,
+        teff_grid,
+        first_best["teff"],
+        max_points=11,
+    )
+    refine_logg = _axis_between_coarse_neighbors(
+        phoenix_lib.DEFAULT_LOGG_GRID,
+        logg_grid,
+        first_best["logg"],
+        max_points=7,
+    )
+    for teff in refine_teff:
+        for logg in refine_logg:
+            score_node(teff, first_best["feh"], logg)
+    scores.sort(key=lambda item: item["chi2"])
+    return scores[0], scores
+
+
+def _build_local_multistarts(center, bounds, count, alternate_rv=None):
+    """Return deterministic interior starts sharing one local interpolator."""
+    count = int(count)
+    if count < 1:
+        raise ValueError("multistart must be >= 1.")
+    center = np.asarray(center, dtype=float)
+    lower = np.asarray(bounds[0], dtype=float)
+    upper = np.asarray(bounds[1], dtype=float)
+    if center.shape != (4,) or lower.shape != (4,) or upper.shape != (4,):
+        raise ValueError("center and bounds must contain four parameters.")
+    eps = np.maximum(1e-10, (upper - lower) * 1e-8)
+    center = np.clip(center, lower + eps, upper - eps)
+    starts = [center]
+    if alternate_rv is not None and len(starts) < count:
+        alternate_rv = float(alternate_rv)
+        if not lower[3] <= alternate_rv <= upper[3]:
+            raise ValueError("alternate_rv must lie inside the RV bounds.")
+        alternate = center.copy()
+        alternate[3] = alternate_rv
+        if not np.allclose(alternate, center, rtol=0.0, atol=0.0):
+            starts.append(alternate)
+    for axis in range(3):
+        for fraction in (0.25, 0.75):
+            if len(starts) >= count:
+                break
+            candidate = center.copy()
+            candidate[axis] = lower[axis] + fraction * (upper[axis] - lower[axis])
+            starts.append(candidate)
+        if len(starts) >= count:
+            break
+    patterns = (
+        (0.25, 0.75, 0.25),
+        (0.75, 0.25, 0.75),
+        (0.25, 0.25, 0.75),
+        (0.75, 0.75, 0.25),
+    )
+    for pattern in patterns:
+        if len(starts) >= count:
+            break
+        candidate = center.copy()
+        candidate[:3] = lower[:3] + np.asarray(pattern) * (upper[:3] - lower[:3])
+        starts.append(candidate)
+    while len(starts) < count:
+        fraction = len(starts) / float(count + 1)
+        candidate = center.copy()
+        candidate[:3] = lower[:3] + fraction * (upper[:3] - lower[:3])
+        starts.append(candidate)
+    return starts
 
    
 def _solve_multiplicative_legendre(wave, flux, err, model_flux, mdeg):
@@ -892,8 +1167,9 @@ def diagnose_phoenix_fixed_params(
     if support_wave_all.size == 0 or flux_all.size == 0:
         raise ValueError("No data points selected for fixed-parameter diagnostic.")
 
+    retained_segments = _retained_segments_from_meta(segments, seg_meta)
     forward_segments = _make_forward_segments(
-        segments=segments,
+        segments=retained_segments,
         support_wave_all=support_wave_all,
         support_slices=support_slices,
         fit_masks=fit_masks,
@@ -907,7 +1183,9 @@ def diagnose_phoenix_fixed_params(
     if forward_model == "interp_observed":
         model_wave_grid = support_wave_all
 
-        segment_media = sorted(set(str(seg.wave_medium).lower() for seg in segments))
+        segment_media = sorted(
+            set(str(seg.wave_medium).lower() for seg in retained_segments)
+        )
         if len(segment_media) == 1:
             model_wave_medium = segment_media[0]
         else:
@@ -1111,6 +1389,12 @@ def fit_phoenix_full_spectrum(
     logg_grid=None,
     cache_path=None,
     allow_missing=False,
+    physical_init=None,
+    coarse_teff_grid=None,
+    coarse_feh_grid=None,
+    coarse_logg_grid=None,
+    coarse_decimate=12,
+    multistart=1,
     rv_init="grid",
     rv_grid_n=81,
     rv_grid_decimate=5,
@@ -1225,6 +1509,25 @@ def fit_phoenix_full_spectrum(
         If True, allow missing PHOENIX templates when building the interpolator.
         Missing grid points are filled with NaNs and may degrade interpolation.
 
+    physical_init : {None, "coarse"}, optional
+        If ``"coarse"``, score a sparse set of widely separated installed
+        PHOENIX nodes before constructing the local interpolator. This removes
+        dependence on the physical part of ``p0`` without allocating a dense
+        full-library cache. Currently available for ``native_interp`` only.
+
+    coarse_teff_grid, coarse_feh_grid, coarse_logg_grid : array-like, optional
+        Sparse PHOENIX node axes used by ``physical_init="coarse"``. Compact
+        survey-inspired defaults are used when omitted.
+
+    coarse_decimate : int, optional
+        Pixel decimation used only while ranking coarse physical nodes.
+
+    multistart : int, optional
+        Number of deterministic local least-squares starts. All starts share
+        the same local PHOENIX interpolator; ``1`` preserves historical
+        behavior. A stellar-rest input always adds/tests an explicit zero-RV
+        start when the selected start has nonzero RV.
+
     rv_init : {"grid", None}, optional
         Strategy for initializing the radial velocity:
         - `"grid"`: perform a coarse RV scan and use the best value to seed the fit
@@ -1282,9 +1585,10 @@ def fit_phoenix_full_spectrum(
     )
     if support_wave_all.size == 0 or flux_all.size == 0:
         raise ValueError("No data points selected for fitting.")
-    
+
+    retained_segments = _retained_segments_from_meta(segments, seg_meta)
     forward_segments = _make_forward_segments(
-        segments=segments,
+        segments=retained_segments,
         support_wave_all=support_wave_all,
         support_slices=support_slices,
         fit_masks=fit_masks,
@@ -1296,8 +1600,64 @@ def fit_phoenix_full_spectrum(
     ]
     
     teff0, feh0, logg0, rv0 = map(float, p0)
-    # Materialize the requested PHOENIX subgrid before deciding whether the
-    # current interpolator can be reused.
+    if forward_model == "interp_observed":
+        model_wave_grid = support_wave_all
+
+        segment_media = sorted(
+            set(str(seg.wave_medium).lower() for seg in retained_segments)
+        )
+        if len(segment_media) == 1:
+            model_wave_medium = segment_media[0]
+        else:
+            model_wave_medium = None
+    else:
+        model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
+            segments=forward_segments,
+            phoenix_lib=phoenix_lib,
+            model_margin_A=model_margin_A,
+        )
+
+    if physical_init not in (None, "coarse"):
+        raise ValueError("physical_init must be 'coarse' or None.")
+    coarse_initialization = None
+    if physical_init == "coarse":
+        if forward_model != "native_interp":
+            raise ValueError("physical_init='coarse' requires forward_model='native_interp'.")
+        coarse_best, coarse_scores = _coarse_physical_start_native_interp(
+            forward_segments=forward_segments,
+            flux_all=flux_all,
+            err_all=err_all,
+            fit_slices=fit_slices,
+            fit_masks=fit_masks,
+            segment_weights=fit_weights,
+            phoenix_lib=phoenix_lib,
+            model_wave_grid=model_wave_grid,
+            model_wave_medium=model_wave_medium,
+            rv_tot=rv_bary_kms + rv0,
+            mdeg=mdeg,
+            segment_fwhm_kms=segment_fwhm_kms,
+            model_margin_A=model_margin_A,
+            teff_grid=coarse_teff_grid,
+            feh_grid=coarse_feh_grid,
+            logg_grid=coarse_logg_grid,
+            decimate=coarse_decimate,
+        )
+        teff0 = coarse_best["teff"]
+        feh0 = coarse_best["feh"]
+        logg0 = coarse_best["logg"]
+        coarse_initialization = {
+            "best": dict(coarse_best),
+            "candidates_evaluated": int(len(coarse_scores)),
+            "candidates": [dict(item) for item in coarse_scores],
+            "candidates_complete": True,
+            "top_candidates": [dict(item) for item in coarse_scores[:5]],
+            "decimate": int(coarse_decimate),
+        }
+        if verbose:
+            print("Coarse physical init best:", coarse_best)
+
+    # Materialize one local interpolation grid around either p0 or the best
+    # sparse-grid node. Every local multistart below reuses this same grid.
     if teff_grid is None:
         teff_grid_req = _pick_subgrid(
             phoenix_lib.DEFAULT_TEFF_GRID, teff0, half_width=800.0, n_min=5, n_max=9
@@ -1318,21 +1678,6 @@ def fit_phoenix_full_spectrum(
         )
     else:
         logg_grid_req = np.asarray(logg_grid, dtype=float)
-    
-    if forward_model == "interp_observed":
-        model_wave_grid = support_wave_all
-
-        segment_media = sorted(set(str(seg.wave_medium).lower() for seg in segments))
-        if len(segment_media) == 1:
-            model_wave_medium = segment_media[0]
-        else:
-            model_wave_medium = None
-    else:
-        model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
-            segments=forward_segments,
-            phoenix_lib=phoenix_lib,
-            model_margin_A=model_margin_A,
-        )
 
     if not phoenix_lib.interpolator_matches(
         model_wave_grid,
@@ -1489,16 +1834,57 @@ def fit_phoenix_full_spectrum(
     
     if x_scale is None:
         x_scale = np.array([100.0, 0.1, 0.1, 10.0], dtype=float)
-       
-    res = least_squares(
-        residuals,
-        x0=np.array(p0, dtype=float),
-        bounds=bounds,
-        method="trf",
-        x_scale=x_scale,
-        max_nfev=int(max_nfev),
-        verbose=2 if verbose else 0,
+
+    stellar_rest_input = bool(forward_segments) and all(
+        getattr(segment, "stellar_rest_status", "unknown") == "corrected"
+        for segment in forward_segments
     )
+    alternate_rv = 0.0 if stellar_rest_input else (rv0 if rv_init == "grid" else None)
+    effective_multistart = int(multistart)
+    if (
+        stellar_rest_input
+        and not np.isclose(float(p0[3]), 0.0, rtol=0.0, atol=1e-12)
+    ):
+        effective_multistart = max(2, effective_multistart)
+    starts = _build_local_multistarts(
+        p0,
+        bounds,
+        effective_multistart,
+        alternate_rv=alternate_rv,
+    )
+    local_results = []
+    for start_index, start in enumerate(starts):
+        candidate_result = least_squares(
+            residuals,
+            x0=np.asarray(start, dtype=float),
+            bounds=bounds,
+            method="trf",
+            x_scale=x_scale,
+            max_nfev=int(max_nfev),
+            verbose=2 if verbose else 0,
+        )
+        local_results.append(candidate_result)
+        if verbose and len(starts) > 1:
+            print(
+                "Local start {0}/{1}: chi2={2:.6g}".format(
+                    start_index + 1,
+                    len(starts),
+                    float(np.sum(candidate_result.fun * candidate_result.fun)),
+                )
+            )
+    res = min(local_results, key=lambda item: float(np.sum(item.fun * item.fun)))
+    multistart_diagnostics = []
+    for start, item in zip(starts, local_results):
+        multistart_diagnostics.append(
+            {
+                "start": np.asarray(start, dtype=float).tolist(),
+                "solution": np.asarray(item.x, dtype=float).tolist(),
+                "chi2": float(np.sum(item.fun * item.fun)),
+                "success": bool(item.success),
+                "status": int(item.status),
+                "nfev": int(item.nfev),
+            }
+        )
 
     # Compute diagnostics. If segment weights are used, chi2 is the weighted
     # sum of squared normalized residuals.
@@ -1506,7 +1892,7 @@ def fit_phoenix_full_spectrum(
     chi2 = float(np.sum(r * r))
     n = int(r.size)
     # Analytically solved continuum coefficients still consume degrees of freedom.
-    k = 4 + len(segments) * (int(mdeg) + 1)
+    k = _full_spectrum_parameter_count(len(forward_segments), mdeg)
     dof = max(1, n - k)
     chi2_red = chi2 / dof
 
@@ -1535,6 +1921,15 @@ def fit_phoenix_full_spectrum(
         "status": int(res.status),
         "nfev": int(res.nfev),
         "invalid_model_evaluations": int(invalid_model_evaluations["count"]),
+        "physical_initialization": physical_init,
+        "coarse_initialization": coarse_initialization,
+        "multistart": int(len(starts)),
+        "multistart_requested": int(multistart),
+        "stellar_rest_zero_rv_start_tested": bool(
+            stellar_rest_input
+            and any(np.isclose(start[3], 0.0, rtol=0.0, atol=1e-12) for start in starts)
+        ),
+        "multistart_diagnostics": multistart_diagnostics,
         "n_free_parameters": int(k),
         "covariance": covariance,
         "parameter_errors": parameter_errors,

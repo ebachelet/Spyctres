@@ -136,10 +136,12 @@
       "url": "https://doi.org/10.1051/0004-6361/202142388",
       "validated_via": "Publisher metadata, official XSL DR3 site, and CDS catalogue description",
       "validated_on": "2026-07-05",
-      "description": "Defines the XSL DR3 combined-arm, stellar-rest-frame spectral products and their effective arm-dependent velocity resolutions. Spyctres uses these documented semantics to ingest DR3 spectra as separate constant-LSF regions suitable for empirical PHOENIX classification validation.",
+      "description": "Defines the XSL DR3 combined-arm, air-wavelength, stellar-rest-frame spectral products and their effective arm-dependent velocity resolutions. It also supplies the Figure 1 reference-star sequence and the adopted parameters for the added M dwarfs. Spyctres uses these semantics for ingestion and empirical PHOENIX classification validation.",
       "affected_code": [
         "Spyctres/io.py:read_xsl_dr3",
-        "tests/test_io_canonical.py:test_xsl_dr3_reader_splits_effective_lsf_regions"
+        "tests/test_io_canonical.py:test_xsl_dr3_reader_splits_effective_lsf_regions",
+        "examples/xsl_figure1_validation.ipynb",
+        "examples/xsl_validation_manifest.csv"
       ]
     },
     {
@@ -148,9 +150,89 @@
       "url": "https://xsl.astro.unistra.fr/page_dr3_format.html",
       "validated_via": "Official XSL project data-format page",
       "validated_on": "2026-07-05",
-      "description": "Documents the DR3 FITS table columns, wavelength unit in nm, logarithmic sampling, stellar-rest-frame status, corrected-flux variants, and Gaussian velocity sigma for each effective arm/overlap region. The page does not explicitly identify the wavelength medium, so the reader deliberately leaves air/vacuum unknown unless supplied by the caller.",
+      "description": "Documents the DR3 FITS table columns, wavelength unit in nm, logarithmic sampling, stellar-rest-frame status, corrected-flux variants, and Gaussian velocity sigma for each effective arm/overlap region. The companion DR3 paper establishes that the wavelengths are in air.",
       "affected_code": [
         "Spyctres/io.py:read_xsl_dr3"
+      ]
+    },
+    {
+      "id": "arentsen2019_xsl_parameters",
+      "citation": "Arentsen, A. et al. (2019), Stellar atmospheric parameters for 754 spectra from the X-shooter Spectral Library, Astronomy & Astrophysics, 627, A138.",
+      "doi": "10.1051/0004-6361/201834273",
+      "url": "https://doi.org/10.1051/0004-6361/201834273",
+      "validated_via": "A&A publisher article and CDS catalogue J/A+A/627/A138",
+      "validated_on": "2026-07-05",
+      "description": "Provides homogeneous effective temperatures, surface gravities, metallicities, and uncertainties derived from XSL UVB/VIS spectra. These adopted values form the primary comparison set for seven of the Figure 1 stars; the paper's precision estimates and carbon-star flag prevent the benchmark from treating every reference value as equally secure.",
+      "affected_code": [
+        "examples/xsl_validation_manifest.csv",
+        "examples/xsl_figure1_validation.ipynb",
+        "scripts/xsl_validation.py"
+      ]
+    },
+    {
+      "id": "gonneau2017_xsl_carbon_models",
+      "citation": "Gonneau, A. et al. (2017), Carbon stars in the X-Shooter Spectral Library: II. Comparison with models, Astronomy & Astrophysics, 601, A141.",
+      "doi": "10.1051/0004-6361/201629750",
+      "url": "https://doi.org/10.1051/0004-6361/201629750",
+      "validated_via": "A&A publication metadata, arXiv 1702.00819, and the published model-comparison tables",
+      "validated_on": "2026-07-05",
+      "description": "Derives separate optical and near-infrared atmospheric-parameter ranges for XSL carbon stars using carbon-rich models with C/O as an explicit dimension. For X0013 it favors temperatures near 3400 K, log(g) near 0, and [Fe/H] near -0.5. Because the present Spyctres PHOENIX grid does not fit C/O, X0013 is retained as a deliberate model-mismatch stress test rather than an ordinary accuracy benchmark.",
+      "affected_code": [
+        "examples/xsl_validation_manifest.csv",
+        "examples/xsl_figure1_validation.ipynb"
+      ]
+    },
+    {
+      "id": "lancon2021_xsl_phoenix_comparison",
+      "citation": "Lançon, A. et al. (2021), A comparison between X-shooter spectra and PHOENIX models across the HR-diagram, Astronomy & Astrophysics, 649, A97.",
+      "doi": "10.1051/0004-6361/202039371",
+      "url": "https://doi.org/10.1051/0004-6361/202039371",
+      "validated_via": "A&A publisher PDF, DOI metadata, and official XSL papers index",
+      "validated_on": "2026-07-05",
+      "description": "Directly compares XSL spectra with PHOENIX-based Göttingen models. It finds wavelength-arm-dependent parameter offsets and increasingly structured residuals below about 5000 K, especially in the UVB, providing the scientific basis for reporting individual-star residuals and model-stress categories instead of reducing this validation to a single pass/fail statistic.",
+      "affected_code": [
+        "examples/xsl_figure1_validation.ipynb",
+        "scripts/xsl_validation.py"
+      ]
+    },
+    {
+      "id": "kunder2017_rave_dr5",
+      "citation": "Kunder, A. et al. (2017), The Radial Velocity Experiment (RAVE): Fifth Data Release, The Astronomical Journal, 153, 75.",
+      "doi": "10.3847/1538-3881/153/2/75",
+      "url": "https://doi.org/10.3847/1538-3881/153/2/75",
+      "validated_via": "Journal DOI metadata and publisher-version PDF",
+      "validated_on": "2026-07-05",
+      "description": "Supplies the external RAVE atmospheric parameters used by the XSL DR3 study when assessing LTT 2544. The validation manifest uses the XSL DR3 adopted fit for this star, while this reference records the independent provenance against which that M-dwarf estimate was checked.",
+      "affected_code": [
+        "examples/xsl_validation_manifest.csv",
+        "examples/xsl_figure1_validation.ipynb"
+      ]
+    },
+    {
+      "id": "cappellari2023_ppxf_optimization",
+      "citation": "Cappellari, M. (2023), Full spectrum fitting with photometry in pPXF: stellar population versus dynamical masses, non-parametric star formation history and metallicity for 3200 LEGA-C galaxies at redshift z approximately 0.8, Monthly Notices of the Royal Astronomical Society, 526, 3273-3300.",
+      "doi": "10.1093/mnras/stad2597",
+      "url": "https://doi.org/10.1093/mnras/stad2597",
+      "validated_via": "MNRAS publisher paper, arXiv 2208.14974, and CapFit documentation",
+      "validated_on": "2026-07-06",
+      "description": "Describes pPXF's separable optimization architecture and CapFit nonlinear least-squares method. It supports Spyctres' decision to solve multiplicative continuum coefficients exactly as a linear subproblem inside each nonlinear atmospheric-parameter evaluation while retaining SciPy's bounded least-squares optimizer for the small nonlinear parameter set.",
+      "affected_code": [
+        "Spyctres/fitting.py:_solve_multiplicative_legendre",
+        "Spyctres/fitting.py:fit_phoenix_full_spectrum"
+      ]
+    },
+    {
+      "id": "garcia_perez2016_aspcap",
+      "citation": "Garcia Perez, A. E. et al. (2016), ASPCAP: The APOGEE Stellar Parameter and Chemical Abundances Pipeline, The Astronomical Journal, 151, 144.",
+      "doi": "10.3847/0004-6256/151/6/144",
+      "url": "https://doi.org/10.3847/0004-6256/151/6/144",
+      "validated_via": "Published Astronomical Journal paper and SDSS ASPCAP documentation",
+      "validated_on": "2026-07-06",
+      "description": "Documents ASPCAP/FERRE's use of 12 dispersed initial searches across stellar-parameter space and selection of the lowest-chi-square solution. Spyctres adopts the underlying lesson with a compact sparse-node coarse scan followed by a shared-cache local multistart, rather than copying the survey-specific number or parameter layout.",
+      "affected_code": [
+        "Spyctres/fitting.py:_coarse_physical_start_native_interp",
+        "Spyctres/fitting.py:_build_local_multistarts",
+        "scripts/xsl_validation.py"
       ]
     }
   ]

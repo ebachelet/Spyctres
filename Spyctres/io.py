@@ -851,6 +851,10 @@ def make_padded_window_segments(seg, windows, pad=5.0, name_prefix=None):
                 wave_medium=seg.wave_medium,
                 wave_frame=seg.wave_frame,
                 name=name,
+                observer_frame=seg.observer_frame,
+                stellar_rest_status=seg.stellar_rest_status,
+                stellar_rv_applied_kms=seg.stellar_rv_applied_kms,
+                resolution=seg.resolution,
             )
         )
 
@@ -1309,7 +1313,7 @@ def read_xsl_dr3(
     path,
     ext=1,
     flux_variant="flux",
-    wave_medium="unknown",
+    wave_medium="air",
     observer_frame="unknown",
 ):
     """Read an X-shooter Spectral Library DR3 combined-arm FITS spectrum.
@@ -1317,10 +1321,10 @@ def read_xsl_dr3(
     DR3 documents WAVE in nm, ERR as one-sigma flux uncertainty, logarithmic
     sampling, and a stellar-rest-frame wavelength scale. Its effective Gaussian
     velocity sigma is 13, 11, and 16 km/s across the UVB-through-overlap, VIS,
-    and NIR-from-overlap regions respectively. The DR3 format page does not
-    explicitly state air versus vacuum, so the default remains ``unknown``.
+    and NIR-from-overlap regions respectively. Verro et al. (2022) state that
+    the rest-frame wavelengths are in air, so ``air`` is the reader default.
 
-    https://xsl.astro.unistra.fr/page_dr3_format.html
+    https://doi.org/10.1051/0004-6361/202142388
     """
     path = os.path.abspath(os.path.expanduser(path))
     flux_variant = str(flux_variant).strip().lower()

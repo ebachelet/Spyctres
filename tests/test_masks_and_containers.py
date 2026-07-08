@@ -6,7 +6,12 @@ from Spyctres.fitting import (
     build_effective_fit_mask,
     build_excluded_mask,
 )
-from Spyctres.io import SpectrumCollection, SpectrumSegment
+from Spyctres.io import (
+    ResolutionDescriptor,
+    SpectrumCollection,
+    SpectrumSegment,
+    make_padded_window_segments,
+)
 from Spyctres.preprocessing import apply_fit_mask, compose_fit_mask
 
 
@@ -145,6 +150,29 @@ def test_missing_errors_do_not_reject_otherwise_valid_pixels():
 
     assert np.array_equal(result.effective_mask, [True, True])
     assert not np.any(result.rejection_masks["invalid_error"])
+
+
+def test_padded_windows_preserve_wavelength_state_and_resolution():
+    resolution = ResolutionDescriptor(quantity="sigma_kms", value=11.0)
+    segment = SpectrumSegment(
+        wave=np.arange(4990.0, 5011.0),
+        flux=np.ones(21),
+        err=np.full(21, 0.01),
+        wave_medium="air",
+        wave_frame="stellar_rest",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        stellar_rv_applied_kms=42.0,
+        resolution=resolution,
+    )
+
+    window = make_padded_window_segments(segment, [(4998.0, 5002.0)], pad=2.0)[0]
+
+    assert window.wave_medium == "air"
+    assert window.observer_frame == "barycentric"
+    assert window.stellar_rest_status == "corrected"
+    assert window.stellar_rv_applied_kms == 42.0
+    assert window.resolution is resolution
 
 
 def test_fit_segment_metadata_contains_mask_provenance():

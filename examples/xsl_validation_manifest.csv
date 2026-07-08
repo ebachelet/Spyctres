@@ -1,1 +1,10 @@
-path,xsl_id,spectral_type,teff_ref,feh_ref,logg_ref
+path,xsl_id,star_name,spectral_type,teff_ref,teff_err,logg_ref,logg_err,feh_ref,feh_err,reference_id,validation_role,notes
+data/xsl_spectrum_X0116_merged_ncl_ncge.fits,X0116,HD 57060,O7,31840,866,3.41,0.24,0.21,0.08,arentsen2019_xsl_parameters,unsupported_hot,"Above the 12000 K PHOENIX boundary; P-Cygni H-alpha/He I and eclipsing-binary caveats in DR3."
+data/xsl_spectrum_X0245_merged.fits,X0245,HD 147550,B9V,10044,273,3.82,0.24,-0.26,0.10,arentsen2019_xsl_parameters,standard,"Hot edge of the supported PHOENIX validation sample."
+data/xsl_spectrum_X0646_merged.fits,X0646,HD 175058,A5IV,7862,156,3.01,0.21,-0.27,0.09,arentsen2019_xsl_parameters,standard,"Figure 1 A-star reference."
+data/xsl_spectrum_X0900_merged.fits,X0900,HD 110885,F3V,5616,82,2.66,0.14,-1.07,0.08,arentsen2019_xsl_parameters,standard,"Figure 1 F-star reference; literature type and fitted gravity warrant inspection."
+data/xsl_spectrum_X0843_merged.fits,X0843,BD-01 1792,G6V,5074,66,3.34,0.14,-0.88,0.07,arentsen2019_xsl_parameters,standard,"Figure 1 G-star reference; literature type and fitted gravity warrant inspection."
+data/xsl_spectrum_X0379_merged.fits,X0379,HD 119802,K3V,4638,49,4.69,0.14,-0.01,0.05,arentsen2019_xsl_parameters,standard,"Cool-star model systematics become increasingly important below 5000 K."
+data/xsl_spectrum_MD002_merged_scl.fits,MD002,LTT 2544,M2,3585,,4.78,,-0.23,,verro2022_xsl_dr3,cool_stress,"DR3 M-dwarf fit; optical PHOENIX residuals are expected to be structured at this temperature."
+data/xsl_spectrum_X0119_merged.fits,X0119,[M2002] LMC 148035,M5Ia,3469,57,0.59,0.19,-0.82,0.17,arentsen2019_xsl_parameters,peculiar_stress,"Low-gravity supergiant tests hydrostatic/LTE model limitations."
+data/xsl_spectrum_X0013_merged_ncl.fits,X0013,ISO-MCMS J005712.2-730704,C,3400,150,0.0,,-0.5,,gonneau2017_xsl_carbon_models,carbon_star,"Carbon-star literature fits favor about 3400 K; solar-abundance PHOENIX lacks the fitted C/O dimension, so disagreement is diagnostic rather than a classification failure."

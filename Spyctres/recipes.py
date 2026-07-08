@@ -85,6 +85,17 @@ BALMER_LABEL_ALIASES = {
 }
 
 
+def _sideband_fit_parameter_count(n_segments, sideband_poly_order):
+    """Count nonlinear and profiled continuum parameters for fit diagnostics."""
+    n_segments = int(n_segments)
+    sideband_poly_order = int(sideband_poly_order)
+    if n_segments < 1:
+        raise ValueError("n_segments must be >= 1.")
+    if sideband_poly_order < 0:
+        raise ValueError("sideband_poly_order must be >= 0.")
+    return 4 + n_segments * (sideband_poly_order + 1)
+
+
 def xshooter_balmer_windows(window_mode="notebook"):
     """
     Return X-SHOOTER UVB Balmer-window presets.
@@ -332,6 +343,10 @@ def normalize_segment_sidebands(seg, sideband_width=10.0, sideband_order=1):
         wave_medium=seg.wave_medium,
         wave_frame=seg.wave_frame,
         name=seg.name,
+        observer_frame=seg.observer_frame,
+        stellar_rest_status=seg.stellar_rest_status,
+        stellar_rv_applied_kms=seg.stellar_rv_applied_kms,
+        resolution=seg.resolution,
     )
 
     seg_n.meta["norm_mode"] = "sideband"
@@ -777,7 +792,7 @@ def fit_phoenix_sideband_symmetric(
     r = res.fun
     chi2 = float(np.sum(r * r))
     n = int(r.size)
-    k = 4 + len(segments) * (int(mdeg) + 1)
+    k = _sideband_fit_parameter_count(len(segments), sideband_poly_order)
     dof = max(1, n - k)
     chi2_red = chi2 / dof
 

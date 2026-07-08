@@ -28,21 +28,34 @@ physics.
 
 ## XSL real-spectrum validation
 
-After downloading selected XSL DR3 FITS products, add one row per spectrum to
-`xsl_validation_manifest.csv`. Relative paths are resolved from the manifest.
-Then run:
+The Figure 1 validation sample from Verro et al. (2022) is listed in
+`xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
+`data/`. Relative paths are resolved from the manifest. Run the batch analysis
+with:
 
 ```bash
 python scripts/xsl_validation.py examples/xsl_validation_manifest.csv \
-  --wave-medium air \
-  --output /tmp/xsl_validation_results.json
+  --output /tmp/xsl_validation_results.json --resume
 ```
 
-The wavelength-medium argument is deliberately required: the official DR3
-format page documents nm and stellar-rest-frame wavelengths but does not state
-air versus vacuum. The runner excludes the published dichroic-contamination
-regions and records fitted-minus-reference atmospheric parameters. Stars above
-12000 K are reported as unsupported instead of being extrapolated with PHOENIX.
+The DR3 paper identifies the stellar-rest-frame wavelengths as air wavelengths,
+which is therefore the reader and runner default. The runner uses 4000--9000 A
+by default, excludes the published dichroic-contamination region, and records
+fitted-minus-reference atmospheric parameters. A sparse physical-grid scan
+selects the local PHOENIX interpolation region without using the literature
+parameters as the optimizer start. Standard targets use four local starts;
+model-stress and peculiar targets use two bounded starts and are excluded from
+ordinary recovery statistics. Every target is written atomically to the JSON
+checkpoint, so `--resume` safely skips completed stars after an interruption.
+The JSON retains every coarse candidate and local solution. Stars above 12000 K
+are reported as unsupported instead of being extrapolated with PHOENIX.
+
+Open `xsl_figure1_validation.ipynb` for the worked validation example. It keeps
+ordinary accuracy targets separate from three deliberate boundary tests: the
+unsupported O star, a carbon star whose C/O chemistry is absent from the
+current PHOENIX fit, and a very cool low-gravity supergiant. This distinction is
+important: a predictable model-physics mismatch is evidence about the model's
+domain, not automatically evidence that the numerical fitter is broken.
 
 `simple_phoenix_fit.py` opens an interactive Matplotlib fit figure by default,
 so users can zoom, pan, and inspect residuals. Add `--no-show` for automated or
