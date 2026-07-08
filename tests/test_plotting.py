@@ -1,0 +1,82 @@
+import json
+
+import matplotlib
+matplotlib.use("Agg")
+import numpy as np
+
+from Spyctres.io import SpectrumCollection, SpectrumSegment
+from Spyctres.plotting import plot_fit_referee
+from Spyctres.results import PhoenixFitResult
+
+
+def _fit_result_for_segments(segments):
+    models = tuple(np.asarray(seg.flux, dtype=float) * 0.98 for seg in segments)
+    used_masks = tuple(np.asarray(seg.mask, dtype=bool) for seg in segments)
+    excluded_masks = tuple(np.zeros(seg.wave.size, dtype=bool) for seg in segments)
+    coeffs = tuple(np.array([1.0, 0.0]) for _seg in segments)
+    return PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": 5750.0,
+            "feh": 0.0,
+            "logg": 4.4,
+            "rv_kms": 0.0,
+            "chi2_red": 1.1,
+            "diagnostics": {
+                "segment_diagnostics": [
+                    {"name": seg.name, "n_fit": int(np.sum(seg.mask))}
+                    for seg in segments
+                ],
+            },
+            "quality_flags": ["ok"],
+        },
+        models=models,
+        continuum_coefficients=coeffs,
+        used_masks=used_masks,
+        excluded_masks=excluded_masks,
+    )
+
+
+def test_plot_fit_referee_saves_without_mutating_result(tmp_path):
+    wave = np.linspace(5000.0, 5010.0, 25)
+    segment = SpectrumSegment(
+        wave,
+        1.0 - 0.1 * np.exp(-0.5 * ((wave - 5005.0) / 1.0) ** 2),
+        err=np.full(wave.size, 0.02),
+        name="synthetic",
+    )
+    result = _fit_result_for_segments([segment])
+    before = json.dumps(result.to_dict(include_arrays=False), sort_keys=True)
+    path = tmp_path / "referee.png"
+
+    fig, axes = plot_fit_referee(result, segment=segment, savepath=path)
+
+    after = json.dumps(result.to_dict(include_arrays=False), sort_keys=True)
+    assert path.exists()
+    assert axes.shape == (1, 2)
+    assert before == after
+    fig.clf()
+
+
+def test_plot_fit_referee_handles_multisegment_collection():
+    first = SpectrumSegment(
+        np.linspace(4000.0, 4010.0, 12),
+        np.ones(12),
+        err=np.full(12, 0.05),
+        name="blue",
+    )
+    second = SpectrumSegment(
+        np.linspace(6500.0, 6510.0, 15),
+        np.ones(15),
+        err=np.full(15, 0.05),
+        name="red",
+    )
+    collection = SpectrumCollection([first, second])
+    result = _fit_result_for_segments(collection.segments)
+
+    fig, axes = plot_fit_referee(result, segment=collection)
+
+    assert axes.shape == (2, 2)
+    assert axes[0, 0].get_title(loc="left") == "blue"
+    assert axes[1, 0].get_title(loc="left") == "red"
+    fig.clf()

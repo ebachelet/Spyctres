@@ -18,6 +18,8 @@ Design principles
 import numpy as np
 import matplotlib.pyplot as plt
 
+from .fitting import evaluate_legendre_continuum
+
 
 COMMON_LINES = {
     "balmer": [
@@ -519,6 +521,266 @@ def plot_full_spectrum_fit(
     ax_resid.set_xlabel("Wavelength (Å)")
     fig.tight_layout()
     return fig, (ax_flux, ax_resid)
+
+
+def _coerce_segment_sequence(segment):
+    """Return a list of SpectrumSegment-like objects."""
+    if segment is None:
+        raise ValueError(
+            "plot_fit_referee requires segment=... because fit results do not "
+            "store observed flux arrays by default."
+        )
+    if hasattr(segment, "segments"):
+        return list(segment.segments)
+    if isinstance(segment, (list, tuple)):
+        return list(segment)
+    return [segment]
+
+
+def _segment_plot_label(segment, index):
+    name = getattr(segment, "name", None)
+    return str(name) if name else "segment {0}".format(index + 1)
+
+
+def _continuum_and_raw_model(wave, used_mask, corrected_model, coeffs):
+    """Recover continuum and pre-continuum model when coefficients are available."""
+    if coeffs is None:
+        return None, None
+    coeffs = np.asarray(coeffs, dtype=float)
+    if coeffs.size == 0:
+        return None, None
+    used = np.asarray(used_mask, dtype=bool)
+    if used.shape != wave.shape or not np.any(used):
+        return None, None
+    continuum = evaluate_legendre_continuum(wave, wave[used], coeffs)
+    finite = np.isfinite(continuum) & (continuum != 0.0)
+    raw = np.full_like(corrected_model, np.nan, dtype=float)
+    raw[finite] = corrected_model[finite] / continuum[finite]
+    return continuum, raw
+
+
+def _quality_text(result):
+    flags = list(getattr(result, "quality_flags", result.get("quality_flags", [])))
+    if not flags:
+        flags = ["unknown"]
+    summary = []
+    for key, label in (
+        ("teff", "Teff"),
+        ("logg", "logg"),
+        ("feh", "[Fe/H]"),
+        ("rv_kms", "RV"),
+        ("chi2_red", "χ²ν"),
+    ):
+        try:
+            value = result[key]
+        except Exception:
+            continue
+        if value is None:
+            continue
+        if key == "teff":
+            summary.append("{0}={1:.0f} K".format(label, float(value)))
+        elif key == "rv_kms":
+            summary.append("{0}={1:.2f} km/s".format(label, float(value)))
+        else:
+            summary.append("{0}={1:.3g}".format(label, float(value)))
+    return " | ".join(summary) + "\nflags: " + ", ".join(flags)
+
+
+def plot_fit_referee(
+    result,
+    *,
+    segment=None,
+    rest_frame=False,
+    savepath=None,
+    max_points_per_segment=6000,
+    figsize_per_segment=(11.0, 3.2),
+    residual_ylim=(-6.0, 6.0),
+):
+    """
+    Plot a deterministic referee view of a PHOENIX fit.
+
+    Parameters
+    ----------
+    result : PhoenixFitResult-like
+        Fit result containing reconstructed ``models``, ``used_masks``, and
+        ``excluded_masks``. The function does not mutate this object.
+    segment : SpectrumSegment, SpectrumCollection, or sequence, optional
+        Observed spectrum used for the fit. Required because the result object
+        intentionally avoids storing observed flux arrays by default.
+    rest_frame : bool, optional
+        Reserved for future explicit rest-frame display. The current
+        implementation leaves wavelengths in the supplied segment frame and
+        annotates the fitted RV instead of silently shifting axes.
+    savepath : str or path-like, optional
+        If provided, save the figure to this path. Matplotlib infers PNG/SVG/etc.
+        from the extension.
+    max_points_per_segment : int, optional
+        Plot at most this many finite samples per segment to keep large spectra
+        responsive.
+
+    Returns
+    -------
+    fig, axes
+        Matplotlib figure and a ``(n_segments, 2)`` array of axes.
+    """
+    if rest_frame:
+        raise NotImplementedError(
+            "rest_frame=True is not implemented yet; wavelengths are plotted in "
+            "the segment metadata frame to avoid hidden RV/frame assumptions."
+        )
+    max_points_per_segment = int(max_points_per_segment)
+    if max_points_per_segment < 1:
+        raise ValueError("max_points_per_segment must be >= 1.")
+
+    segments = _coerce_segment_sequence(segment)
+    models = tuple(getattr(result, "models", ()))
+    used_masks = tuple(getattr(result, "used_masks", ()))
+    excluded_masks = tuple(getattr(result, "excluded_masks", ()))
+    coeffs = tuple(getattr(result, "continuum_coefficients", ()))
+    if len(models) != len(segments):
+        raise ValueError(
+            "Result model count ({0}) does not match segment count ({1}).".format(
+                len(models), len(segments)
+            )
+        )
+
+    n_segments = len(segments)
+    fig, axes = plt.subplots(
+        n_segments,
+        2,
+        figsize=(figsize_per_segment[0], figsize_per_segment[1] * n_segments),
+        squeeze=False,
+        gridspec_kw={"width_ratios": [3, 1]},
+    )
+    fig.suptitle(_quality_text(result), fontsize=10)
+
+    for index, (seg, model_corr) in enumerate(zip(segments, models)):
+        ax_flux, ax_resid = axes[index]
+        wave = _as_float_array(seg.wave)
+        flux = _as_float_array(seg.flux)
+        err = None if getattr(seg, "err", None) is None else _as_float_array(seg.err)
+        model_corr = _as_float_array(model_corr)
+        if wave.shape != flux.shape or wave.shape != model_corr.shape:
+            raise ValueError("Segment wave/flux/model arrays must have matching shapes.")
+
+        if index < len(used_masks):
+            used = _as_bool_array(used_masks[index], n_expected=wave.size)
+        else:
+            used = np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model_corr)
+        if index < len(excluded_masks):
+            excluded = _as_bool_array(excluded_masks[index], n_expected=wave.size)
+        else:
+            excluded = np.zeros(wave.size, dtype=bool)
+        coeff = coeffs[index] if index < len(coeffs) else None
+        continuum, model_raw = _continuum_and_raw_model(wave, used, model_corr, coeff)
+
+        valid = np.flatnonzero(
+            np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model_corr)
+        )
+        if valid.size > max_points_per_segment:
+            positions = np.unique(
+                np.rint(
+                    np.linspace(0, valid.size - 1, max_points_per_segment)
+                ).astype(int)
+            )
+            sel = valid[positions]
+        else:
+            sel = valid
+
+        ax_flux.plot(wave[sel], flux[sel], color="0.25", lw=0.7, label="observed")
+        if model_raw is not None:
+            ax_flux.plot(
+                wave[sel],
+                model_raw[sel],
+                color="tab:orange",
+                lw=0.7,
+                alpha=0.8,
+                label="PHOENIX+LSF",
+            )
+        ax_flux.plot(
+            wave[sel],
+            model_corr[sel],
+            color="tab:red",
+            lw=0.9,
+            label="continuum-adjusted model",
+        )
+        if continuum is not None:
+            finite_cont = np.isfinite(continuum)
+            if np.any(finite_cont):
+                norm = np.nanmedian(flux[used]) if np.any(used) else np.nanmedian(flux)
+                ax_flux.plot(
+                    wave[sel],
+                    continuum[sel] * norm,
+                    color="tab:blue",
+                    lw=0.6,
+                    alpha=0.6,
+                    label="continuum shape",
+                )
+
+        for wmin, wmax in _mask_to_spans(wave, excluded):
+            ax_flux.axvspan(wmin, wmax, color="tab:purple", alpha=0.08)
+            ax_resid.axvspan(wmin, wmax, color="tab:purple", alpha=0.08)
+        if (~used).any():
+            unused = np.intersect1d(sel, np.flatnonzero(~used), assume_unique=False)
+            if unused.size:
+                ax_flux.plot(
+                    wave[unused],
+                    flux[unused],
+                    ".",
+                    color="0.5",
+                    ms=2,
+                    alpha=0.5,
+                    label="unused",
+                )
+
+        ylo, yhi = _compute_robust_ylim(flux[used] if np.any(used) else flux)
+        ax_flux.set_ylim(ylo, yhi)
+        ax_flux.set_ylabel("Flux")
+        ax_flux.set_title(_segment_plot_label(seg, index), loc="left", fontsize=9)
+        handles, labels = ax_flux.get_legend_handles_labels()
+        if index == 0 and labels:
+            ax_flux.legend(frameon=False, loc="best", fontsize=8)
+
+        residual = flux - model_corr
+        if err is not None:
+            if err.shape != wave.shape:
+                raise ValueError("Segment err array must match wave shape.")
+            good_err = np.isfinite(err) & (err > 0)
+            residual_sigma = np.full_like(residual, np.nan, dtype=float)
+            residual_sigma[good_err] = residual[good_err] / err[good_err]
+            ax_resid.plot(wave[sel], residual_sigma[sel], color="black", lw=0.6)
+            ax_resid.set_ylabel("(D-M)/σ")
+            ax_resid.set_ylim(*residual_ylim)
+        else:
+            ax_resid.plot(wave[sel], residual[sel], color="black", lw=0.6)
+            ax_resid.set_ylabel("D-M")
+        ax_resid.axhline(0.0, color="0.5", lw=0.8)
+        ax_resid.set_xlabel("Wavelength (Å)")
+
+        diag = getattr(result, "diagnostics", {})
+        if hasattr(diag, "to_dict"):
+            diag = diag.to_dict()
+        seg_diag = diag.get("segment_diagnostics", [])
+        if index < len(seg_diag):
+            info = seg_diag[index]
+            text = "N={0}, χ flags={1}".format(
+                info.get("n_fit", "?"),
+                ", ".join(getattr(result, "quality_flags", ())) or "none",
+            )
+            ax_resid.text(
+                0.01,
+                0.98,
+                text,
+                ha="left",
+                va="top",
+                transform=ax_resid.transAxes,
+                fontsize=8,
+            )
+
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    if savepath is not None:
+        fig.savefig(savepath, bbox_inches="tight")
+    return fig, axes
 
 
 def plot_fit_windows(
