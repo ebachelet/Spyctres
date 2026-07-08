@@ -4,10 +4,12 @@ import pytest
 from Spyctres.fitting import (
     _build_data_vectors,
     _build_local_multistarts,
+    _build_phoenix_fit_diagnostics,
     _coarse_physical_start_native_interp,
     _default_coarse_grid,
     _full_spectrum_parameter_count,
     _make_forward_segments,
+    _phoenix_quality_flags,
     _retained_segments_from_meta,
     _resolve_segment_fwhm_kms,
 )
@@ -135,6 +137,78 @@ def test_forward_segment_alignment_mismatch_is_rejected():
 
 def test_parameter_count_uses_only_retained_segments():
     assert _full_spectrum_parameter_count(2, mdeg=2) == 10
+
+
+def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
+    class Library:
+        DEFAULT_TEFF_GRID = np.array([5000.0, 6000.0])
+        DEFAULT_FEH_GRID = np.array([-0.5, 0.0])
+        DEFAULT_LOGG_GRID = np.array([3.0, 4.0])
+
+    dropped = SpectrumSegment(
+        [4000.0, 4001.0],
+        [1.0, 1.0],
+        err=[0.1, 0.1],
+        mask=[False, False],
+        name="dropped",
+    )
+    retained = SpectrumSegment(
+        [5000.0, 5001.0, 5002.0, 5003.0],
+        [1.0, 0.9, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1, 0.1],
+        mask=[True, True, False, True],
+        name="retained",
+        wave_medium="unknown",
+        wave_frame="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+    )
+    vectors = _build_data_vectors([dropped, retained])
+    support_wave, _, _, support_slices, _, fit_masks, _, seg_meta = vectors
+    forward = _make_forward_segments(
+        _retained_segments_from_meta([dropped, retained], seg_meta),
+        support_wave,
+        support_slices,
+        fit_masks,
+    )
+    diagnostics = _build_phoenix_fit_diagnostics(
+        residuals=np.array([3.0, -3.0, 3.0]),
+        chi2=27.0,
+        chi2_red=9.0,
+        dof=3,
+        n_parameters=4,
+        input_segments=[dropped, retained],
+        forward_segments=forward,
+        seg_meta=seg_meta,
+        mdeg=0,
+        best_parameters=np.array([5000.0, -0.25, 3.5, 0.0]),
+        phoenix_lib=Library(),
+        segment_fwhm_kms=[None],
+        local_solutions=[
+            {
+                "start": [5000.0, -0.25, 3.5, 0.0],
+                "solution": [5000.0, -0.25, 3.5, 0.0],
+                "chi2": 27.0,
+                "success": True,
+                "status": 1,
+                "nfev": 3,
+            }
+        ],
+        coarse_initialization=None,
+    )
+    flags = _phoenix_quality_flags(diagnostics, success=True)
+
+    assert diagnostics["n_input_segments"] == 2
+    assert diagnostics["n_retained_segments"] == 1
+    assert diagnostics["n_dropped_segments"] == 1
+    assert diagnostics["grid_edge_flags"]["teff"] is True
+    assert diagnostics["resolution_metadata_summary"]["missing_count"] == 1
+    assert diagnostics["rv_start_values"] == [0.0]
+    assert "high_chi2" in flags
+    assert "grid_edge_teff" in flags
+    assert "resolution_missing" in flags
+    assert "wavelength_frame_ambiguous" in flags
+    assert "metadata_incomplete" in flags
 
 
 class _NodeLibrary:

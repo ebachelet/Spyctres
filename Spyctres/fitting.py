@@ -503,6 +503,262 @@ def _full_spectrum_parameter_count(n_retained_segments, mdeg):
     return 4 + n_retained_segments * (mdeg + 1)
 
 
+def _metadata_values(segments, attribute):
+    values = []
+    for segment in segments:
+        value = getattr(segment, attribute, "unknown")
+        values.append("unknown" if value is None else str(value))
+    return values
+
+
+def _metadata_summary(segments):
+    fields = (
+        "wave_medium",
+        "wave_frame",
+        "observer_frame",
+        "stellar_rest_status",
+    )
+    summary = {}
+    for field in fields:
+        values = _metadata_values(segments, field)
+        summary[field] = {
+            "values": values,
+            "unique": sorted(set(values)),
+            "unknown_count": int(sum(value.lower() == "unknown" for value in values)),
+        }
+    return summary
+
+
+def _parameter_grid_summary(phoenix_lib):
+    grid = getattr(phoenix_lib, "_grid", None)
+    if grid is None:
+        grid = (
+            getattr(phoenix_lib, "DEFAULT_TEFF_GRID", ()),
+            getattr(phoenix_lib, "DEFAULT_FEH_GRID", ()),
+            getattr(phoenix_lib, "DEFAULT_LOGG_GRID", ()),
+        )
+    labels = ("teff", "feh", "logg")
+    summary = {}
+    for label, values in zip(labels, grid):
+        arr = np.asarray(values, dtype=float)
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            summary[label] = {"min": None, "max": None, "n": 0}
+        else:
+            summary[label] = {
+                "min": float(np.min(finite)),
+                "max": float(np.max(finite)),
+                "n": int(finite.size),
+            }
+    return summary
+
+
+def _grid_edge_flags(best, grid_summary, rtol=0.0, atol=1e-8):
+    flags = {}
+    for label, value in zip(("teff", "feh", "logg"), best[:3]):
+        info = grid_summary.get(label, {})
+        lo = info.get("min")
+        hi = info.get("max")
+        if lo is None or hi is None:
+            flags[label] = False
+            continue
+        value = float(value)
+        flags[label] = bool(
+            np.isclose(value, float(lo), rtol=rtol, atol=atol)
+            or np.isclose(value, float(hi), rtol=rtol, atol=atol)
+            or value <= float(lo)
+            or value >= float(hi)
+        )
+    return flags
+
+
+def _residual_shape_diagnostics(residuals):
+    residuals = np.asarray(residuals, dtype=float)
+    finite = residuals[np.isfinite(residuals)]
+    if finite.size == 0:
+        return {
+            "residual_rms": None,
+            "residual_slope": None,
+            "durbin_watson": None,
+            "residual_autocorrelation_flag": False,
+        }
+    rms = float(np.sqrt(np.mean(finite * finite)))
+    if finite.size > 1:
+        x = np.linspace(-0.5, 0.5, finite.size)
+        slope = float(np.polyfit(x, finite, 1)[0])
+        denom = float(np.sum(finite * finite))
+        dw = None if denom <= 0.0 else float(np.sum(np.diff(finite) ** 2) / denom)
+        autocorr = bool(dw is not None and (dw < 1.2 or dw > 2.8))
+    else:
+        slope = None
+        dw = None
+        autocorr = False
+    return {
+        "residual_rms": rms,
+        "residual_slope": slope,
+        "durbin_watson": dw,
+        "residual_autocorrelation_flag": autocorr,
+    }
+
+
+def _build_phoenix_fit_diagnostics(
+    *,
+    residuals,
+    chi2,
+    chi2_red,
+    dof,
+    n_parameters,
+    input_segments,
+    forward_segments,
+    seg_meta,
+    mdeg,
+    best_parameters,
+    phoenix_lib,
+    segment_fwhm_kms,
+    local_solutions,
+    coarse_initialization,
+):
+    """Build a compact, JSON-safe diagnostics block for PHOENIX fits."""
+    retained_count = int(len(seg_meta))
+    input_count = int(len(input_segments))
+    support_points = int(sum(meta.get("n_support", 0) for meta in seg_meta))
+    fit_points = int(sum(meta.get("n_fit", 0) for meta in seg_meta))
+    mask_fraction = (
+        None
+        if support_points <= 0
+        else float(1.0 - fit_points / float(support_points))
+    )
+
+    segment_diagnostics = []
+    for index, meta in enumerate(seg_meta):
+        n_support = int(meta.get("n_support", 0))
+        n_fit = int(meta.get("n_fit", 0))
+        segment_diagnostics.append(
+            {
+                "name": meta.get("name"),
+                "input_index": int(meta.get("index", index)),
+                "weight": float(meta.get("weight", 1.0)),
+                "n_support": n_support,
+                "n_fit": n_fit,
+                "mask_fraction": (
+                    None if n_support <= 0 else float(1.0 - n_fit / float(n_support))
+                ),
+                "wave_min": meta.get("wave_min"),
+                "wave_max": meta.get("wave_max"),
+                "lsf_fwhm_kms": (
+                    None
+                    if segment_fwhm_kms[index] is None
+                    else float(segment_fwhm_kms[index])
+                ),
+                "resolution_R_effective": (
+                    None
+                    if segment_fwhm_kms[index] is None
+                    else float(C_KMS / segment_fwhm_kms[index])
+                ),
+            }
+        )
+
+    grid_summary = _parameter_grid_summary(phoenix_lib)
+    edge_flags = _grid_edge_flags(np.asarray(best_parameters, dtype=float), grid_summary)
+    residual_shape = _residual_shape_diagnostics(residuals)
+    local_solution_summaries = []
+    for solution in local_solutions:
+        local_solution_summaries.append(
+            {
+                "start": solution.get("start"),
+                "solution": solution.get("solution"),
+                "chi2": solution.get("chi2"),
+                "success": bool(solution.get("success", False)),
+                "status": solution.get("status"),
+                "nfev": solution.get("nfev"),
+            }
+        )
+
+    coarse = coarse_initialization or {}
+    coarse_summary = {
+        "available": bool(coarse),
+        "candidates_evaluated": coarse.get("candidates_evaluated"),
+        "candidates_complete": coarse.get("candidates_complete"),
+        "best": coarse.get("best"),
+        "top_candidates": coarse.get("top_candidates", []),
+    }
+
+    return {
+        "schema_version": 1,
+        "n_pixels": int(np.asarray(residuals).size),
+        "n_input_segments": input_count,
+        "n_retained_segments": retained_count,
+        "n_dropped_segments": int(input_count - retained_count),
+        "n_parameters": int(n_parameters),
+        "degrees_of_freedom": int(dof),
+        "chi2": float(chi2),
+        "reduced_chi2": float(chi2_red),
+        "segment_diagnostics": segment_diagnostics,
+        "grid_summary": grid_summary,
+        "grid_edge_flags": edge_flags,
+        "rv_start_values": [
+            float(solution["start"][3])
+            for solution in local_solution_summaries
+            if solution.get("start") is not None and len(solution["start"]) >= 4
+        ],
+        "coarse_grid_candidates": coarse_summary,
+        "local_solution_summaries": local_solution_summaries,
+        "mask_fraction": mask_fraction,
+        "continuum_degree": int(mdeg),
+        "continuum_warning_flags": [],
+        "segment_rv_scatter": None,
+        "wavelength_metadata_summary": _metadata_summary(forward_segments),
+        "resolution_metadata_summary": {
+            "missing_count": int(sum(value is None for value in segment_fwhm_kms)),
+            "segment_lsf_fwhm_kms": [
+                None if value is None else float(value)
+                for value in segment_fwhm_kms
+            ],
+            "segment_resolution_R_effective": [
+                None if value is None else float(C_KMS / value)
+                for value in segment_fwhm_kms
+            ],
+        },
+        **residual_shape,
+    }
+
+
+def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
+    """Return deterministic quality flags; flags never alter the fit."""
+    flags = []
+    if not bool(success):
+        flags.append("optimizer_local_minimum_suspected")
+    reduced_chi2 = diagnostics.get("reduced_chi2")
+    if reduced_chi2 is not None and float(reduced_chi2) > float(high_chi2_threshold):
+        flags.append("high_chi2")
+    if diagnostics.get("residual_autocorrelation_flag"):
+        flags.append("structured_residuals")
+    slope = diagnostics.get("residual_slope")
+    if slope is not None and abs(float(slope)) > 1.0:
+        flags.append("residual_slope")
+    for label, active in diagnostics.get("grid_edge_flags", {}).items():
+        if active:
+            flags.append("grid_edge_{0}".format(label))
+    if diagnostics.get("resolution_metadata_summary", {}).get("missing_count", 0) > 0:
+        flags.append("resolution_missing")
+
+    wavelength = diagnostics.get("wavelength_metadata_summary", {})
+    unknown_fields = [
+        field
+        for field, info in wavelength.items()
+        if int(info.get("unknown_count", 0)) > 0
+    ]
+    if "wave_frame" in unknown_fields:
+        flags.append("wavelength_frame_ambiguous")
+    if unknown_fields:
+        flags.append("metadata_incomplete")
+
+    if diagnostics.get("mask_fraction") is not None and diagnostics["mask_fraction"] > 0.5:
+        flags.append("mask_fraction_high")
+
+    return ["ok"] if not flags else sorted(set(flags))
+
+
 def _chi2_for_params_native_interp(
     forward_segments,
     flux_all,
@@ -1905,6 +2161,24 @@ def fit_phoenix_full_spectrum(
         covariance = None
         parameter_errors = None
 
+    diagnostics = _build_phoenix_fit_diagnostics(
+        residuals=r,
+        chi2=chi2,
+        chi2_red=chi2_red,
+        dof=dof,
+        n_parameters=k,
+        input_segments=segments,
+        forward_segments=forward_segments,
+        seg_meta=seg_meta,
+        mdeg=mdeg,
+        best_parameters=res.x,
+        phoenix_lib=phoenix_lib,
+        segment_fwhm_kms=segment_fwhm_kms,
+        local_solutions=multistart_diagnostics,
+        coarse_initialization=coarse_initialization,
+    )
+    quality_flags = _phoenix_quality_flags(diagnostics, success=res.success)
+
     return {
         "success": bool(res.success),
         "message": res.message,
@@ -1952,5 +2226,7 @@ def fit_phoenix_full_spectrum(
         # segment_lsf_fwhm_kms and segment_resolution_R_effective.
         "resolution_R": None if R is None else float(R),
         "lsf_fwhm_kms": None if broadening_fwhm_kms is None else float(broadening_fwhm_kms),
+        "diagnostics": diagnostics,
+        "quality_flags": quality_flags,
         # Note: did not store poly coeffs in this minimal version to avoid re-evaluating.
     }

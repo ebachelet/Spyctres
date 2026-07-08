@@ -5,21 +5,47 @@ import pytest
 
 from Spyctres.api import fit_phoenix_spectrum
 from Spyctres.io import SpectrumSegment
-from Spyctres.results import PhoenixFitResult
+from Spyctres.results import PhoenixFitDiagnostics, PhoenixFitResult
 
 
 def test_structured_result_is_mapping_and_json_serializable():
     result = PhoenixFitResult(
-        summary={"teff": 5772.0, "p_best": np.array([5772.0, 0.0, 4.44, 0.0])},
+        summary={
+            "teff": 5772.0,
+            "p_best": np.array([5772.0, 0.0, 4.44, 0.0]),
+            "diagnostics": {"reduced_chi2": np.float64(1.0)},
+            "quality_flags": ["ok"],
+        },
         models=(np.array([1.0, 0.9]),),
         used_masks=(np.array([True, False]),),
         provenance={"api": "test"},
     )
 
     assert result["teff"] == 5772.0
+    assert isinstance(result.diagnostics, PhoenixFitDiagnostics)
+    assert result.quality_flags == ("ok",)
     payload = json.loads(result.to_json())
     assert payload["p_best"] == [5772.0, 0.0, 4.44, 0.0]
     assert payload["models"] == [[1.0, 0.9]]
+    assert payload["diagnostics"]["reduced_chi2"] == 1.0
+    assert payload["quality_flags"] == ["ok"]
+
+
+def test_structured_result_can_save_compact_json(tmp_path):
+    result = PhoenixFitResult(
+        summary={"teff": np.float64(5772.0)},
+        models=(np.array([np.nan]),),
+        diagnostics={"residual_rms": np.nan},
+        quality_flags=("metadata_incomplete",),
+    )
+    path = tmp_path / "result.json"
+
+    result.save_json(path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "models" not in payload
+    assert payload["diagnostics"]["residual_rms"] is None
+    assert payload["quality_flags"] == ["metadata_incomplete"]
 
 
 def test_public_api_canonicalizes_and_reconstructs(monkeypatch):
