@@ -15,6 +15,8 @@ Design principles
 - accept plain arrays or simple spectrum containers, not instrument-specific logic
 """
 
+import textwrap
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -779,6 +781,7 @@ def plot_fit_referee(
     max_points_per_segment=6000,
     figsize_per_segment=(11.0, 3.2),
     residual_ylim=(-6.0, 6.0),
+    layout="side_by_side",
 ):
     """
     Plot a deterministic referee view of a PHOENIX fit.
@@ -801,6 +804,11 @@ def plot_fit_referee(
     max_points_per_segment : int, optional
         Plot at most this many finite samples per segment to keep large spectra
         responsive.
+    layout : {"side_by_side", "stacked"}, optional
+        ``"side_by_side"`` keeps the compact report layout with flux and
+        residual panels in two columns. ``"stacked"`` uses one wide flux panel
+        above one wide residual panel per segment, which is usually clearer in
+        an interactive notebook or pop-up window.
 
     Returns
     -------
@@ -829,14 +837,38 @@ def plot_fit_referee(
         )
 
     n_segments = len(segments)
-    fig, axes = plt.subplots(
-        n_segments,
-        2,
-        figsize=(figsize_per_segment[0], figsize_per_segment[1] * n_segments),
-        squeeze=False,
-        gridspec_kw={"width_ratios": [3, 1]},
-    )
-    fig.suptitle(_quality_text(result), fontsize=10)
+    layout = str(layout).strip().lower()
+    if layout not in {"side_by_side", "stacked"}:
+        raise ValueError("layout must be 'side_by_side' or 'stacked'.")
+    if layout == "side_by_side":
+        fig, axes = plt.subplots(
+            n_segments,
+            2,
+            figsize=(figsize_per_segment[0], figsize_per_segment[1] * n_segments),
+            squeeze=False,
+            gridspec_kw={"width_ratios": [3, 1]},
+        )
+    else:
+        height_ratios = []
+        for _index in range(n_segments):
+            height_ratios.extend([3, 1])
+        fig, axes_flat = plt.subplots(
+            2 * n_segments,
+            1,
+            figsize=(figsize_per_segment[0], figsize_per_segment[1] * n_segments),
+            squeeze=False,
+            gridspec_kw={"height_ratios": height_ratios},
+        )
+        axes = axes_flat.reshape(n_segments, 2)
+    title_text = _quality_text(result)
+    if layout == "stacked":
+        parts = title_text.split("\nflags: ", 1)
+        if len(parts) == 2:
+            title_text = "{0}\nflags: {1}".format(
+                parts[0],
+                textwrap.fill(parts[1], width=135),
+            )
+    fig.suptitle(title_text, fontsize=9 if layout == "stacked" else 10)
 
     for index, (seg, model_corr) in enumerate(zip(segments, models)):
         ax_flux, ax_resid = axes[index]
@@ -921,6 +953,8 @@ def plot_fit_referee(
         ax_flux.set_ylim(ylo, yhi)
         ax_flux.set_ylabel("Flux")
         ax_flux.set_title(_segment_plot_label(seg, index), loc="left", fontsize=9)
+        if layout == "stacked":
+            ax_flux.tick_params(labelbottom=False)
         handles, labels = ax_flux.get_legend_handles_labels()
         if index == 0 and labels:
             ax_flux.legend(frameon=False, loc="best", fontsize=8)
@@ -955,8 +989,9 @@ def plot_fit_referee(
                 text_parts.append(
                     "P(λ)={0:.3g}–{1:.3g}".format(*continuum_range)
                 )
-            flags = ", ".join(getattr(result, "quality_flags", ())) or "none"
-            text_parts.append("flags={0}".format(flags))
+            if layout == "side_by_side":
+                flags = ", ".join(getattr(result, "quality_flags", ())) or "none"
+                text_parts.append("flags={0}".format(flags))
             text = "\n".join(text_parts)
             ax_resid.text(
                 0.01,
@@ -966,6 +1001,7 @@ def plot_fit_referee(
                 va="top",
                 transform=ax_resid.transAxes,
                 fontsize=8,
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.72},
             )
 
     fig.tight_layout(rect=[0, 0, 1, 0.94])

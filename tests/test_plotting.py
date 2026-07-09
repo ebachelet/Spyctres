@@ -85,6 +85,31 @@ def test_plot_fit_referee_handles_multisegment_collection():
     fig.clf()
 
 
+def test_plot_fit_referee_stacked_layout_uses_full_width_rows():
+    wave = np.linspace(5000.0, 5010.0, 25)
+    segment = SpectrumSegment(
+        wave,
+        1.0 - 0.1 * np.exp(-0.5 * ((wave - 5005.0) / 1.0) ** 2),
+        err=np.full(wave.size, 0.02),
+        name="synthetic",
+    )
+    result = _fit_result_for_segments([segment])
+
+    fig, axes = plot_fit_referee(
+        result,
+        segment=segment,
+        layout="stacked",
+        figsize_per_segment=(16.0, 6.4),
+    )
+
+    assert axes.shape == (1, 2)
+    assert fig.get_size_inches()[0] == 16.0
+    assert axes[0, 0].get_position().width == axes[0, 1].get_position().width
+    assert axes[0, 0].get_position().y0 > axes[0, 1].get_position().y0
+    assert axes[0, 1].get_xlabel() == "Wavelength (Å)"
+    fig.clf()
+
+
 def test_xsl_validation_payload_defaults_to_global_display_scaling():
     payload = {
         "display_defaults": {"scale_mode": "global"},

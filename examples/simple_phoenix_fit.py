@@ -3,14 +3,18 @@
 Purpose
 -------
 This script demonstrates the shortest complete path from a reduced spectrum to
-a structured PHOENIX result and an interactive diagnostic plot. It does perform
-a full-spectrum fit over the usable input pixels, but it is not configured as a
-precision line-profile analysis. In particular, it does not fit rotational or
-macroturbulent broadening, detailed abundance patterns, or instrument-specific
-LSF variations. The reader's nominal resolution (or ``--R``) is the only
-instrumental broadening supplied. Individual observed lines can therefore be
-wider or narrower than the demonstration model even when the broad atmospheric
-classification is useful.
+a structured PHOENIX result and an interactive diagnostic plot. The plot is a
+wide, stacked diagnostic view: observed spectrum and model on top, residuals
+underneath. This makes it easier to inspect broad failures, masked regions, and
+line-profile mismatches than a small square pop-up.
+
+The script does perform a full-spectrum fit over the usable input pixels, but it
+is not configured as a precision line-profile analysis. In particular, it does
+not fit rotational or macroturbulent broadening, detailed abundance patterns, or
+instrument-specific LSF variations. The reader's nominal resolution (or ``--R``)
+is the only instrumental broadening supplied. Individual observed lines can
+therefore be wider or narrower than the demonstration model even when the broad
+atmospheric classification is useful.
 
 Example
 -------
@@ -59,6 +63,15 @@ def build_parser():
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output-plot", default=None)
     parser.add_argument(
+        "--plot-layout",
+        choices=("stacked", "side_by_side"),
+        default="stacked",
+        help=(
+            "Diagnostic plot layout. 'stacked' is the default interactive view: "
+            "wide data/model panel over a wide residual panel."
+        ),
+    )
+    parser.add_argument(
         "--no-show",
         action="store_true",
         help="Do not open the interactive fit figure (useful for batch runs).",
@@ -95,6 +108,11 @@ def main(argv=None):
         result,
         segment=spectrum,
         savepath=args.output_plot,
+        layout=args.plot_layout,
+        figsize_per_segment=(
+            (16.0, 6.4) if args.plot_layout == "stacked" else (12.0, 3.4)
+        ),
+        max_points_per_segment=20000,
     )
     if args.output_json:
         result.save_json(
