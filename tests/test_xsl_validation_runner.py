@@ -70,7 +70,13 @@ def test_ordinary_statistics_exclude_stress_targets():
 
 def test_validation_plot_payload_is_bounded_and_uses_native_arrays():
     wave = np.linspace(4000.0, 5000.0, 11)
-    segment = SpectrumSegment(wave, np.ones(11), err=np.ones(11), name="UVB")
+    segment = SpectrumSegment(
+        wave,
+        np.ones(11),
+        err=np.ones(11),
+        name="UVB",
+        wave_frame="stellar_rest",
+    )
     collection = SpectrumCollection([segment])
     fit_result = SimpleNamespace(
         models=(np.linspace(0.9, 1.1, 11),),
@@ -80,10 +86,14 @@ def test_validation_plot_payload_is_bounded_and_uses_native_arrays():
     payload = xsl_validation._validation_plot_payload(collection, fit_result, 4)
 
     assert payload["max_points_per_segment"] == 4
+    assert payload["display_defaults"]["scale_mode"] == "global"
+    assert payload["display_defaults"]["arm_scaling_applied_by_spyctres"] is False
+    assert payload["display_defaults"]["rv_correction_applied_by_spyctres"] is False
     saved = payload["segments"][0]
     assert saved["original_points"] == 11
     assert saved["saved_points"] == 4
     assert saved["wave_A"].shape == (4,)
+    assert saved["stellar_rest_status"] == "corrected"
     native = xsl_validation._json_native(payload)
     assert isinstance(native["segments"][0]["wave_A"], list)
 

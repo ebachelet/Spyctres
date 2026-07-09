@@ -262,7 +262,11 @@ def test_xsl_dr3_reader_splits_effective_lsf_regions(tmp_path):
         fits.Column(name="FLUX_DR", format="D", array=np.full(wave_nm.size, 2.0)),
         fits.Column(name="ERR", format="D", array=np.full(wave_nm.size, 0.1)),
     ]
-    fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU.from_columns(columns)]).writeto(path)
+    primary = fits.PrimaryHDU()
+    primary.header["REST_COR"] = (True, "stellar rest correction applied")
+    table = fits.BinTableHDU.from_columns(columns)
+    table.header["S_U_VAL"] = (1.23, "UVB scale relative to VIS")
+    fits.HDUList([primary, table]).writeto(path)
 
     collection = read_xsl_dr3(path, flux_variant="dereddened")
 
@@ -274,3 +278,9 @@ def test_xsl_dr3_reader_splits_effective_lsf_regions(tmp_path):
     assert all(segment.wave_medium == "air" for segment in collection)
     assert np.array_equal(collection[0].wave, [5000.0, 5890.0])
     assert np.all(collection[0].flux == 2.0)
+    provenance = collection.meta["xsl_header_provenance"]
+    assert provenance["REST_COR"]["value"] is True
+    assert "stellar rest" in provenance["REST_COR"]["comment"]
+    assert provenance["S_U_VAL"]["value"] == pytest.approx(1.23)
+    assert collection.meta["xsl_arm_scaling_applied_by_spyctres"] is False
+    assert collection.meta["xsl_rv_correction_applied_by_spyctres"] is False

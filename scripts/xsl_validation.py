@@ -322,6 +322,11 @@ def _validation_plot_payload(collection, fit_result, max_points_per_segment):
         segments.append(
             {
                 "name": segment.name,
+                "arm": segment.meta.get("arm"),
+                "wave_medium": segment.wave_medium,
+                "observer_frame": segment.observer_frame,
+                "stellar_rest_status": segment.stellar_rest_status,
+                "lsf_sigma_kms": segment.meta.get("xsl_effective_lsf_sigma_kms"),
                 "wave_A": wave[selected],
                 "observed_flux": flux[selected],
                 "model_flux": model[selected],
@@ -335,6 +340,22 @@ def _validation_plot_payload(collection, fit_result, max_points_per_segment):
     return {
         "sampling": "uniform_index_from_finite_observed_model_pairs",
         "max_points_per_segment": max_points_per_segment,
+        "display_defaults": {
+            "scale_mode": "global",
+            "available_scale_modes": ["global", "per_segment", "none"],
+            "arm_scaling_applied_by_spyctres": False,
+            "rv_correction_applied_by_spyctres": False,
+            "notes": [
+                (
+                    "Use global scaling for XSL full-spectrum displays; "
+                    "per-segment scaling is diagnostic only."
+                ),
+                (
+                    "Segments are saved separately to preserve UVB/VIS/NIR "
+                    "resolution metadata, not because Spyctres has realigned arms."
+                ),
+            ],
+        },
         "segments": segments,
     }
 
@@ -528,6 +549,25 @@ def main(argv=None):
             if not isinstance(spectrum, SpectrumCollection):
                 raise TypeError("XSL DR3 reader must return a SpectrumCollection.")
             spectrum = _window_collection(spectrum, args.wave_min, args.wave_max)
+            record["spectrum_provenance"] = {
+                "instrument": spectrum.meta.get("instrument"),
+                "xsl_release": spectrum.meta.get("xsl_release"),
+                "xsl_combined_arms": spectrum.meta.get("xsl_combined_arms"),
+                "xsl_flux_column": spectrum.meta.get("xsl_flux_column"),
+                "xsl_log10_sampled": spectrum.meta.get("xsl_log10_sampled"),
+                "xsl_header_provenance": spectrum.meta.get(
+                    "xsl_header_provenance", {}
+                ),
+                "xsl_header_provenance_policy": spectrum.meta.get(
+                    "xsl_header_provenance_policy"
+                ),
+                "xsl_arm_scaling_applied_by_spyctres": spectrum.meta.get(
+                    "xsl_arm_scaling_applied_by_spyctres", False
+                ),
+                "xsl_rv_correction_applied_by_spyctres": spectrum.meta.get(
+                    "xsl_rv_correction_applied_by_spyctres", False
+                ),
+            }
             cache_path = None
             if args.cache_dir:
                 identifier = xsl_id or "row_{0:04d}".format(index)

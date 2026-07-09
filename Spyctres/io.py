@@ -11,6 +11,50 @@ from astropy.io import fits
 COMMON_SPECTRUM_SCHEMA_VERSION = 1
 
 
+XSL_DR3_PROVENANCE_HEADER_KEYS = (
+    "REST_COR",
+    "REST_UVB",
+    "REST_VIS",
+    "REST_NIR",
+    "BARY_COR",
+    "S_U_VAL",
+    "S_U_ORI",
+    "S_N_VAL",
+    "S_N_ORI",
+    "SPL_COR",
+    "LOSS_COR",
+    "AV_VAL",
+    "AV_ORI",
+    "ARM_ZERO",
+)
+
+
+def _fits_header_scalar(value):
+    """Return a simple Python scalar suitable for metadata/provenance."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _extract_fits_header_provenance(headers, keys):
+    """Extract selected FITS header values/comments without applying them."""
+    provenance = {}
+    for key in keys:
+        for header in headers:
+            if key not in header:
+                continue
+            provenance[key] = {
+                "value": _fits_header_scalar(header[key]),
+                "comment": str(header.comments[key]),
+            }
+            break
+    return provenance
+
+
 @dataclass(frozen=True)
 class ResolutionDescriptor:
     """Instrumental-resolution description for a spectrum segment.
@@ -1353,7 +1397,14 @@ def read_xsl_dr3(
         wave = np.asarray(data[names["WAVE"]], dtype=float) * 10.0
         flux = np.asarray(data[flux_name], dtype=float)
         err = np.asarray(data[names["ERR"]], dtype=float)
-        primary_meta = dict(hdul[0].header)
+        primary_header = hdul[0].header
+        table_header = hdul[ext].header
+        primary_meta = dict(primary_header)
+        table_meta = dict(table_header)
+        xsl_header_provenance = _extract_fits_header_provenance(
+            (primary_header, table_header),
+            XSL_DR3_PROVENANCE_HEADER_KEYS,
+        )
 
     base_meta = {
         "path": path,
@@ -1364,7 +1415,15 @@ def read_xsl_dr3(
         "xsl_log10_sampled": True,
         "xsl_combined_arms": True,
         "xsl_reference": "https://doi.org/10.1051/0004-6361/202142388",
+        "xsl_header_provenance": xsl_header_provenance,
+        "xsl_header_provenance_policy": (
+            "record_only; DR3 merged products are already rest-frame and "
+            "arm-combined, so Spyctres does not reapply these corrections"
+        ),
+        "xsl_arm_scaling_applied_by_spyctres": False,
+        "xsl_rv_correction_applied_by_spyctres": False,
         "header": primary_meta,
+        "table_header": table_meta,
     }
     name = os.path.basename(path)
 

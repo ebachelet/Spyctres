@@ -586,6 +586,190 @@ def _quality_text(result):
     return " | ".join(summary) + "\nflags: " + ", ".join(flags)
 
 
+def _safe_median_scale(values):
+    """Return a finite non-zero median scale, falling back to unity."""
+    values = _as_float_array(values)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return 1.0
+    scale = float(np.nanmedian(values))
+    if not np.isfinite(scale) or np.isclose(scale, 0.0, rtol=0.0, atol=1e-300):
+        return 1.0
+    return scale
+
+
+def _validation_plot_segments(plot_data):
+    if not isinstance(plot_data, dict):
+        raise TypeError("plot_data must be a validation_plot dictionary.")
+    segments = list(plot_data.get("segments", []))
+    if not segments:
+        raise ValueError("validation plot payload contains no segments.")
+    return segments
+
+
+def _validation_segment_arrays(segment):
+    wave = _as_float_array(segment["wave_A"])
+    observed = _as_float_array(segment["observed_flux"])
+    model = _as_float_array(segment["model_flux"])
+    if wave.shape != observed.shape or wave.shape != model.shape:
+        raise ValueError("validation plot segment arrays must have matching shapes.")
+    used = segment.get("used", np.ones(wave.size, dtype=bool))
+    used = _as_bool_array(used, n_expected=wave.size)
+    return wave, observed, model, used
+
+
+def _validation_plot_scales(plot_data, scale_mode):
+    """Return per-segment display scales for an XSL validation payload."""
+    scale_mode = str(scale_mode).strip().lower()
+    if scale_mode not in {"global", "per_segment", "none"}:
+        raise ValueError("scale_mode must be 'global', 'per_segment', or 'none'.")
+
+    segments = _validation_plot_segments(plot_data)
+    if scale_mode == "none":
+        return [1.0 for _segment in segments]
+
+    if scale_mode == "global":
+        chunks = []
+        fallback = []
+        for segment in segments:
+            _wave, observed, _model, used = _validation_segment_arrays(segment)
+            good = used & np.isfinite(observed)
+            if np.any(good):
+                chunks.append(observed[good])
+            finite = np.isfinite(observed)
+            if np.any(finite):
+                fallback.append(observed[finite])
+        if chunks:
+            scale = _safe_median_scale(np.concatenate(chunks))
+        elif fallback:
+            scale = _safe_median_scale(np.concatenate(fallback))
+        else:
+            scale = 1.0
+        return [scale for _segment in segments]
+
+    scales = []
+    for segment in segments:
+        _wave, observed, _model, used = _validation_segment_arrays(segment)
+        good = used & np.isfinite(observed)
+        values = observed[good] if np.any(good) else observed[np.isfinite(observed)]
+        scales.append(_safe_median_scale(values))
+    return scales
+
+
+def plot_xsl_validation_payload(
+    plot_data,
+    *,
+    scale_mode=None,
+    title=None,
+    annotate=True,
+    figsize=(11.0, 5.2),
+):
+    """
+    Plot an XSL validation JSON payload with explicit display normalization.
+
+    ``scale_mode="global"`` uses one median scale per star and is the default
+    for full-spectrum XSL displays. ``scale_mode="per_segment"`` is retained as
+    a diagnostic line-shape view and is labelled as such. ``scale_mode="none"``
+    plots the saved flux samples without display normalization.
+
+    The function is display-only: it does not align arms, alter wavelengths, or
+    apply any radial-velocity correction.
+    """
+    if scale_mode is None:
+        scale_mode = (
+            plot_data.get("display_defaults", {}).get("scale_mode", "global")
+            if isinstance(plot_data, dict)
+            else "global"
+        )
+    scale_mode = str(scale_mode).strip().lower()
+    segments = _validation_plot_segments(plot_data)
+    scales = _validation_plot_scales(plot_data, scale_mode)
+
+    fig, axes = plt.subplots(
+        2,
+        1,
+        sharex=True,
+        figsize=figsize,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+    ax_flux, ax_resid = axes
+
+    for index, (segment, scale) in enumerate(zip(segments, scales)):
+        wave, observed, model, used = _validation_segment_arrays(segment)
+        finite = np.isfinite(wave) & np.isfinite(observed) & np.isfinite(model)
+        if not np.any(finite):
+            continue
+        label_obs = "observed" if index == 0 else None
+        label_model = "model" if index == 0 else None
+        ax_flux.plot(
+            wave[finite],
+            observed[finite] / scale,
+            color="0.25",
+            lw=0.7,
+            label=label_obs,
+        )
+        ax_flux.plot(
+            wave[finite],
+            model[finite] / scale,
+            color="tab:red",
+            lw=0.8,
+            alpha=0.9,
+            label=label_model,
+        )
+        resid_good = finite & used
+        if np.any(resid_good):
+            ax_resid.plot(
+                wave[resid_good],
+                (observed[resid_good] - model[resid_good]) / scale,
+                color="black",
+                lw=0.6,
+            )
+
+    ylabel = {
+        "global": "Flux / global median",
+        "per_segment": "Flux / segment median",
+        "none": "Flux",
+    }[scale_mode]
+    ax_flux.set_ylabel(ylabel)
+    ax_resid.axhline(0.0, color="0.5", lw=0.8)
+    ax_resid.set_ylabel("Data - model")
+    ax_resid.set_xlabel("Wavelength (Å)")
+    ax_flux.legend(frameon=False, loc="best", fontsize=8)
+    if title is None:
+        title = plot_data.get("title", "XSL validation display")
+    ax_flux.set_title(title, loc="left")
+
+    if annotate:
+        if scale_mode == "per_segment":
+            note = (
+                "Per-segment median normalization: diagnostic line-shape view only; "
+                "do not interpret arm-to-arm continuum levels."
+            )
+        elif scale_mode == "global":
+            note = (
+                "One display scale per target. Segments preserve UVB/VIS/NIR "
+                "resolution metadata; no arm scaling or RV correction is applied here."
+            )
+        else:
+            note = (
+                "No display normalization. Segments preserve metadata; no arm "
+                "scaling or RV correction is applied here."
+            )
+        ax_flux.text(
+            0.01,
+            0.98,
+            note,
+            ha="left",
+            va="top",
+            transform=ax_flux.transAxes,
+            fontsize=8,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.72},
+        )
+
+    fig.tight_layout()
+    return fig, axes
+
+
 def plot_fit_referee(
     result,
     *,

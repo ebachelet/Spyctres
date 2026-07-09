@@ -561,22 +561,71 @@ def _parameter_grid_summary(phoenix_lib):
 
 
 def _grid_edge_flags(best, grid_summary, rtol=0.0, atol=1e-8):
+    """Return JSON-safe PHOENIX grid-edge flags with low/high specificity.
+
+    The legacy per-parameter flags (``teff``, ``feh``, ``logg``) are retained
+    for compatibility.  The ``*_low`` and ``*_high`` flags make the failure
+    mode auditable when a fit lands on, or is clipped beyond, a grid boundary.
+    """
     flags = {}
+    any_edge = False
     for label, value in zip(("teff", "feh", "logg"), best[:3]):
         info = grid_summary.get(label, {})
         lo = info.get("min")
         hi = info.get("max")
         if lo is None or hi is None:
             flags[label] = False
+            flags["{0}_low".format(label)] = False
+            flags["{0}_high".format(label)] = False
             continue
         value = float(value)
-        flags[label] = bool(
-            np.isclose(value, float(lo), rtol=rtol, atol=atol)
-            or np.isclose(value, float(hi), rtol=rtol, atol=atol)
-            or value <= float(lo)
-            or value >= float(hi)
-        )
+        lo = float(lo)
+        hi = float(hi)
+        low = bool(np.isclose(value, lo, rtol=rtol, atol=atol) or value <= lo)
+        high = bool(np.isclose(value, hi, rtol=rtol, atol=atol) or value >= hi)
+        edge = bool(low or high)
+        flags[label] = edge
+        flags["{0}_low".format(label)] = low
+        flags["{0}_high".format(label)] = high
+        any_edge = bool(any_edge or edge)
+    flags["fit_bound_hit"] = any_edge
     return flags
+
+
+def _unique_metadata_value(segments, attribute):
+    values = _metadata_values(segments, attribute)
+    unique = sorted(set(values))
+    if len(unique) == 1:
+        return unique[0]
+    return "mixed"
+
+
+def _velocity_convention_summary(forward_segments, rv_kms, rv_bary_kms):
+    """Return explicit velocity/frame semantics for result JSON and audits."""
+    rv_kms = float(rv_kms)
+    rv_bary_kms = float(rv_bary_kms)
+    total = rv_kms + rv_bary_kms
+    return {
+        "rv_kms_fit": rv_kms,
+        "rv_bary_kms_input": rv_bary_kms,
+        "total_model_shift_kms": float(total),
+        "rv_sign_convention": (
+            "positive velocity redshifts the stellar template/model; "
+            "positive stellar RV means the source is receding"
+        ),
+        "rv_combination_formula": "total_model_shift_kms = rv_kms_fit + rv_bary_kms_input",
+        "rv_bary_applied_to_model": bool(not np.isclose(rv_bary_kms, 0.0)),
+        "rv_bary_term_in_model_formula": True,
+        "rv_bary_applied_to_data": "unknown",
+        "wavelength_frame_assumption": {
+            "wave_frame": _unique_metadata_value(forward_segments, "wave_frame"),
+            "observer_frame": _unique_metadata_value(forward_segments, "observer_frame"),
+            "stellar_rest_status": _unique_metadata_value(
+                forward_segments, "stellar_rest_status"
+            ),
+            "wave_medium": _unique_metadata_value(forward_segments, "wave_medium"),
+        },
+    }
 
 
 def _residual_shape_diagnostics(residuals):
@@ -624,6 +673,8 @@ def _build_phoenix_fit_diagnostics(
     segment_fwhm_kms,
     local_solutions,
     coarse_initialization,
+    rv_kms=0.0,
+    rv_bary_kms=0.0,
 ):
     """Build a compact, JSON-safe diagnostics block for PHOENIX fits."""
     retained_count = int(len(seg_meta))
@@ -689,6 +740,11 @@ def _build_phoenix_fit_diagnostics(
         "best": coarse.get("best"),
         "top_candidates": coarse.get("top_candidates", []),
     }
+    velocity_convention = _velocity_convention_summary(
+        forward_segments,
+        rv_kms=rv_kms,
+        rv_bary_kms=rv_bary_kms,
+    )
 
     return {
         "schema_version": 1,
@@ -708,6 +764,8 @@ def _build_phoenix_fit_diagnostics(
             for solution in local_solution_summaries
             if solution.get("start") is not None and len(solution["start"]) >= 4
         ],
+        "velocity_convention": velocity_convention,
+        "total_model_shift_kms": velocity_convention["total_model_shift_kms"],
         "coarse_grid_candidates": coarse_summary,
         "local_solution_summaries": local_solution_summaries,
         "mask_fraction": mask_fraction,
@@ -743,9 +801,15 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
     slope = diagnostics.get("residual_slope")
     if slope is not None and abs(float(slope)) > 1.0:
         flags.append("residual_slope")
-    for label, active in diagnostics.get("grid_edge_flags", {}).items():
-        if active:
+    edge_flags = diagnostics.get("grid_edge_flags", {})
+    for label in ("teff", "feh", "logg"):
+        if edge_flags.get(label):
             flags.append("grid_edge_{0}".format(label))
+        for side in ("low", "high"):
+            if edge_flags.get("{0}_{1}".format(label, side)):
+                flags.append("grid_edge_{0}_{1}".format(label, side))
+    if edge_flags.get("fit_bound_hit"):
+        flags.append("fit_bound_hit")
     if diagnostics.get("resolution_metadata_summary", {}).get("missing_count", 0) > 0:
         flags.append("resolution_missing")
 
@@ -2231,8 +2295,11 @@ def fit_phoenix_full_spectrum(
         segment_fwhm_kms=segment_fwhm_kms,
         local_solutions=multistart_diagnostics,
         coarse_initialization=coarse_initialization,
+        rv_kms=float(res.x[3]),
+        rv_bary_kms=rv_bary_kms,
     )
     quality_flags = _phoenix_quality_flags(diagnostics, success=res.success)
+    velocity_convention = diagnostics["velocity_convention"]
 
     return {
         "success": bool(res.success),
@@ -2243,6 +2310,19 @@ def fit_phoenix_full_spectrum(
         "logg": float(res.x[2]),
         "rv_kms": float(res.x[3]),
         "rv_bary_kms": float(rv_bary_kms),
+        "rv_kms_fit": velocity_convention["rv_kms_fit"],
+        "rv_bary_kms_input": velocity_convention["rv_bary_kms_input"],
+        "total_model_shift_kms": velocity_convention["total_model_shift_kms"],
+        "rv_sign_convention": velocity_convention["rv_sign_convention"],
+        "rv_combination_formula": velocity_convention["rv_combination_formula"],
+        "rv_bary_applied_to_model": velocity_convention["rv_bary_applied_to_model"],
+        "rv_bary_term_in_model_formula": velocity_convention[
+            "rv_bary_term_in_model_formula"
+        ],
+        "rv_bary_applied_to_data": velocity_convention["rv_bary_applied_to_data"],
+        "wavelength_frame_assumption": velocity_convention[
+            "wavelength_frame_assumption"
+        ],
         "chi2": chi2,
         "dof": dof,
         "chi2_red": chi2_red,

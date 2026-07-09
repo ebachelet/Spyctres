@@ -5,7 +5,7 @@ matplotlib.use("Agg")
 import numpy as np
 
 from Spyctres.io import SpectrumCollection, SpectrumSegment
-from Spyctres.plotting import plot_fit_referee
+from Spyctres.plotting import plot_fit_referee, plot_xsl_validation_payload
 from Spyctres.results import PhoenixFitResult
 
 
@@ -82,4 +82,63 @@ def test_plot_fit_referee_handles_multisegment_collection():
     assert axes.shape == (2, 2)
     assert axes[0, 0].get_title(loc="left") == "blue"
     assert axes[1, 0].get_title(loc="left") == "red"
+    fig.clf()
+
+
+def test_xsl_validation_payload_defaults_to_global_display_scaling():
+    payload = {
+        "display_defaults": {"scale_mode": "global"},
+        "segments": [
+            {
+                "name": "UVB",
+                "wave_A": [4000.0, 4001.0],
+                "observed_flux": [10.0, 10.0],
+                "model_flux": [9.0, 11.0],
+                "used": [True, True],
+            },
+            {
+                "name": "VIS",
+                "wave_A": [6000.0, 6001.0],
+                "observed_flux": [20.0, 20.0],
+                "model_flux": [18.0, 22.0],
+                "used": [True, True],
+            },
+        ],
+    }
+
+    fig, axes = plot_xsl_validation_payload(payload)
+
+    observed_lines = axes[0].lines[0], axes[0].lines[2]
+    assert np.allclose(observed_lines[0].get_ydata(), [10.0 / 15.0, 10.0 / 15.0])
+    assert np.allclose(observed_lines[1].get_ydata(), [20.0 / 15.0, 20.0 / 15.0])
+    assert axes[0].get_ylabel() == "Flux / global median"
+    assert "One display scale per target" in axes[0].texts[0].get_text()
+    fig.clf()
+
+
+def test_xsl_validation_payload_per_segment_scaling_is_labelled_diagnostic():
+    payload = {
+        "segments": [
+            {
+                "wave_A": [4000.0, 4001.0],
+                "observed_flux": [10.0, 10.0],
+                "model_flux": [10.0, 10.0],
+                "used": [True, True],
+            },
+            {
+                "wave_A": [6000.0, 6001.0],
+                "observed_flux": [20.0, 20.0],
+                "model_flux": [20.0, 20.0],
+                "used": [True, True],
+            },
+        ],
+    }
+
+    fig, axes = plot_xsl_validation_payload(payload, scale_mode="per_segment")
+
+    observed_lines = axes[0].lines[0], axes[0].lines[2]
+    assert np.allclose(observed_lines[0].get_ydata(), [1.0, 1.0])
+    assert np.allclose(observed_lines[1].get_ydata(), [1.0, 1.0])
+    assert axes[0].get_ylabel() == "Flux / segment median"
+    assert "diagnostic line-shape view only" in axes[0].texts[0].get_text()
     fig.clf()

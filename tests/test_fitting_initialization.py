@@ -8,14 +8,16 @@ from Spyctres.fitting import (
     _coarse_physical_start_native_interp,
     _default_coarse_grid,
     _full_spectrum_parameter_count,
+    _grid_edge_flags,
     _make_forward_segments,
     _phoenix_quality_flags,
     _retained_segments_from_meta,
     _resolve_segment_fwhm_kms,
+    _velocity_convention_summary,
     fit_phoenix_full_spectrum,
     reconstruct_phoenix_legendre_models_for_segments,
 )
-from Spyctres.io import ResolutionDescriptor, SpectrumSegment
+from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegment
 
 
 def test_default_coarse_grid_maps_targets_to_unique_nodes():
@@ -141,6 +143,64 @@ def test_parameter_count_uses_only_retained_segments():
     assert _full_spectrum_parameter_count(2, mdeg=2) == 10
 
 
+def test_multisegment_weighted_chi2_and_dof_accounting():
+    class ConstantLibrary:
+        DEFAULT_TEFF_GRID = np.array([4999.0, 5000.0, 5001.0])
+        DEFAULT_FEH_GRID = np.array([-0.1, 0.0, 0.1])
+        DEFAULT_LOGG_GRID = np.array([3.9, 4.0, 4.1])
+
+        def __init__(self):
+            self._n_wave = None
+
+        def interpolator_matches(self, observed_wave, *args, **kwargs):
+            return self._n_wave == len(observed_wave)
+
+        def build_interpolator(self, observed_wave, *args, **kwargs):
+            self._n_wave = len(observed_wave)
+
+        def evaluate(self, teff, feh, logg):
+            return np.ones(self._n_wave, dtype=float)
+
+    first = SpectrumSegment(
+        wave=np.arange(5000.0, 5005.0),
+        flux=[0.9, 1.1, 1.0, 1.0, 1.0],
+        err=np.full(5, 0.1),
+        name="first",
+    )
+    second = SpectrumSegment(
+        wave=np.arange(6000.0, 6005.0),
+        flux=[1.2, 0.8, 1.0, 1.0, 1.0],
+        err=np.full(5, 0.2),
+        name="second",
+    )
+    collection = SpectrumCollection(
+        [first, second],
+        weights=[1.0, 4.0],
+        name="weighted-two-segment",
+    )
+
+    result = fit_phoenix_full_spectrum(
+        collection,
+        phoenix_lib=ConstantLibrary(),
+        p0=(5000.0, 0.0, 4.0, 0.0),
+        bounds=((4999.0, -0.1, 3.9, -1.0), (5001.0, 0.1, 4.1, 1.0)),
+        mdeg=0,
+        rv_init=None,
+        multistart=1,
+        max_nfev=1,
+        forward_model="interp_observed",
+    )
+
+    assert result["n_points"] == 10
+    assert result["diagnostics"]["n_parameters"] == 6
+    assert result["dof"] == 4
+    assert result["chi2"] == pytest.approx(10.0)
+    assert result["chi2_red"] == pytest.approx(2.5)
+    assert result["diagnostics"]["degrees_of_freedom"] == 4
+    assert result["diagnostics"]["segment_diagnostics"][0]["n_fit"] == 5
+    assert result["diagnostics"]["segment_diagnostics"][1]["weight"] == 4.0
+
+
 def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
     segment = SpectrumSegment(
         [5000.0, 5001.0],
@@ -263,6 +323,8 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
             }
         ],
         coarse_initialization=None,
+        rv_kms=12.0,
+        rv_bary_kms=-3.0,
     )
     flags = _phoenix_quality_flags(diagnostics, success=True)
 
@@ -270,13 +332,94 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
     assert diagnostics["n_retained_segments"] == 1
     assert diagnostics["n_dropped_segments"] == 1
     assert diagnostics["grid_edge_flags"]["teff"] is True
+    assert diagnostics["grid_edge_flags"]["teff_low"] is True
+    assert diagnostics["grid_edge_flags"]["teff_high"] is False
+    assert diagnostics["grid_edge_flags"]["feh"] is False
+    assert diagnostics["grid_edge_flags"]["fit_bound_hit"] is True
     assert diagnostics["resolution_metadata_summary"]["missing_count"] == 1
     assert diagnostics["rv_start_values"] == [0.0]
+    assert diagnostics["total_model_shift_kms"] == pytest.approx(9.0)
+    assert diagnostics["velocity_convention"]["rv_kms_fit"] == pytest.approx(12.0)
+    assert diagnostics["velocity_convention"]["rv_bary_kms_input"] == pytest.approx(-3.0)
+    assert diagnostics["velocity_convention"]["total_model_shift_kms"] == pytest.approx(9.0)
+    assert diagnostics["velocity_convention"]["rv_bary_applied_to_model"] is True
+    assert diagnostics["velocity_convention"]["rv_bary_applied_to_data"] == "unknown"
+    assert (
+        diagnostics["velocity_convention"]["rv_combination_formula"]
+        == "total_model_shift_kms = rv_kms_fit + rv_bary_kms_input"
+    )
+    assert (
+        diagnostics["velocity_convention"]["wavelength_frame_assumption"][
+            "stellar_rest_status"
+        ]
+        == "unknown"
+    )
     assert "high_chi2" in flags
     assert "grid_edge_teff" in flags
+    assert "grid_edge_teff_low" in flags
+    assert "fit_bound_hit" in flags
     assert "resolution_missing" in flags
     assert "wavelength_frame_ambiguous" in flags
     assert "metadata_incomplete" in flags
+
+
+def test_grid_edge_flags_report_low_and_high_boundaries():
+    summary = {
+        "teff": {"min": 5000.0, "max": 6000.0, "n": 2},
+        "feh": {"min": -0.5, "max": 0.0, "n": 2},
+        "logg": {"min": 3.0, "max": 4.0, "n": 2},
+    }
+
+    low = _grid_edge_flags(np.array([5000.0, -0.25, 3.5, 0.0]), summary)
+    high = _grid_edge_flags(np.array([5500.0, 0.0, 4.0, 0.0]), summary)
+    interior = _grid_edge_flags(np.array([5500.0, -0.25, 3.5, 0.0]), summary)
+
+    assert low["teff"] is True
+    assert low["teff_low"] is True
+    assert low["teff_high"] is False
+    assert low["fit_bound_hit"] is True
+
+    assert high["feh"] is True
+    assert high["feh_high"] is True
+    assert high["logg_high"] is True
+    assert high["fit_bound_hit"] is True
+
+    assert interior["teff"] is False
+    assert interior["feh"] is False
+    assert interior["logg"] is False
+    assert interior["fit_bound_hit"] is False
+
+
+def test_velocity_convention_summary_reports_mixed_frame_state():
+    first = SpectrumSegment(
+        [5000.0, 5001.0],
+        [1.0, 1.0],
+        wave_medium="air",
+        wave_frame="stellar_rest",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+    )
+    second = SpectrumSegment(
+        [6000.0, 6001.0],
+        [1.0, 1.0],
+        wave_medium="vacuum",
+        wave_frame="topocentric",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+    )
+
+    summary = _velocity_convention_summary(
+        [first, second],
+        rv_kms=10.0,
+        rv_bary_kms=0.0,
+    )
+
+    assert summary["total_model_shift_kms"] == pytest.approx(10.0)
+    assert summary["rv_bary_applied_to_model"] is False
+    assert summary["rv_bary_term_in_model_formula"] is True
+    assert summary["wavelength_frame_assumption"]["observer_frame"] == "mixed"
+    assert summary["wavelength_frame_assumption"]["stellar_rest_status"] == "mixed"
+    assert summary["wavelength_frame_assumption"]["wave_medium"] == "mixed"
 
 
 class _NodeLibrary:

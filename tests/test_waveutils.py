@@ -10,6 +10,7 @@ from Spyctres.phoenix_forward import (
 )
 from Spyctres.waveutils import (
     AIR_VACUUM_MIN_A,
+    C_KMS,
     air_to_vacuum_ciddor,
     air_to_vacuum_vald,
     convert_segment_wavelength_medium,
@@ -375,3 +376,25 @@ def test_stellar_and_barycentric_velocity_terms_add_explicitly():
     )
 
     assert np.allclose(split_terms, combined_term, rtol=0.0, atol=1.0e-12)
+
+
+def test_positive_model_rv_redshifts_absorption_feature():
+    rest_center = 5000.0
+    wave = np.linspace(4995.0, 5005.0, 5001)
+    flux = 1.0 - 0.5 * np.exp(-0.5 * ((wave - rest_center) / 0.05) ** 2)
+    rv_kms = 24.0
+    target = np.linspace(4998.0, 5002.0, 4001)
+
+    shifted = build_phoenix_native_model_to_wave(
+        target,
+        wave,
+        flux,
+        rv_kms=rv_kms,
+        rv_bary_kms=0.0,
+        model_margin_A=0.0,
+    )
+
+    observed_center = target[int(np.nanargmin(shifted))]
+    expected_center = rest_center * (1.0 + rv_kms / C_KMS)
+    assert observed_center > rest_center
+    assert observed_center == pytest.approx(expected_center, abs=0.003)
