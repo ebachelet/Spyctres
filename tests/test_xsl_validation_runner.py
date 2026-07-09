@@ -34,6 +34,15 @@ def test_role_budgets_keep_stress_runs_bounded():
     assert stress["statistics_group"] == "diagnostic_only"
 
 
+def test_manifest_validation_requires_unique_ids():
+    with np.testing.assert_raises_regex(ValueError, "non-empty xsl_id"):
+        xsl_validation._validate_manifest_rows([{"xsl_id": ""}])
+    with np.testing.assert_raises_regex(ValueError, "Duplicate xsl_id"):
+        xsl_validation._validate_manifest_rows(
+            [{"xsl_id": "X0001"}, {"xsl_id": "x0001"}]
+        )
+
+
 def test_json_native_rejects_nonfinite_json_extensions():
     converted = xsl_validation._json_native(
         {"array": np.array([1.0, np.nan]), "scalar": np.float64(2.0)}
@@ -179,6 +188,7 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
     assert writes == [1, 2, 2]
     assert [call["multistart"] for call in fit_calls] == [4, 2]
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["run_configuration"]["mdeg"] == 2
     assert payload["ordinary_recovery_statistics"]["count"] == 1
     assert payload["results"][1]["statistics_group"] == "diagnostic_only"
     assert payload["results"][0]["initialization"]["local_solutions"][0][
@@ -195,3 +205,56 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
     )
     assert fit_calls == []
     assert writes == [2]
+
+    with np.testing.assert_raises_regex(ValueError, "different validation settings"):
+        xsl_validation.main(
+            [
+                str(manifest),
+                "--output",
+                str(output),
+                "--resume",
+                "--mdeg",
+                "3",
+            ]
+        )
+
+
+def test_runner_records_unsupported_zero_budget_without_fit(
+    tmp_path, monkeypatch
+):
+    manifest = tmp_path / "manifest.csv"
+    fieldnames = [
+        "path",
+        "xsl_id",
+        "star_name",
+        "spectral_type",
+        "teff_ref",
+        "logg_ref",
+        "feh_ref",
+        "validation_role",
+    ]
+    with manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "path": "one.fits",
+                "xsl_id": "XHOT",
+                "star_name": "hot",
+                "spectral_type": "B",
+                "teff_ref": "10000",
+                "logg_ref": "4.0",
+                "feh_ref": "0.0",
+                "validation_role": "unsupported_hot",
+            }
+        )
+
+    def fail_fit(*args, **kwargs):
+        raise AssertionError("unsupported zero-budget target should not run a fit")
+
+    monkeypatch.setattr(xsl_validation, "fit_phoenix_spectrum", fail_fit)
+    output = tmp_path / "results.json"
+    xsl_validation.main([str(manifest), "--output", str(output)])
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["results"][0]["status"] == "unsupported_physics"

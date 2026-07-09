@@ -12,6 +12,8 @@ from Spyctres.fitting import (
     _phoenix_quality_flags,
     _retained_segments_from_meta,
     _resolve_segment_fwhm_kms,
+    fit_phoenix_full_spectrum,
+    reconstruct_phoenix_legendre_models_for_segments,
 )
 from Spyctres.io import ResolutionDescriptor, SpectrumSegment
 
@@ -137,6 +139,72 @@ def test_forward_segment_alignment_mismatch_is_rejected():
 
 def test_parameter_count_uses_only_retained_segments():
     assert _full_spectrum_parameter_count(2, mdeg=2) == 10
+
+
+def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
+    segment = SpectrumSegment(
+        [5000.0, 5001.0],
+        [1.0, 1.0],
+        err=[0.1, 0.1],
+    )
+    with pytest.raises(ValueError, match="max_nfev"):
+        fit_phoenix_full_spectrum(
+            segment,
+            phoenix_lib=object(),
+            p0=(5000.0, 0.0, 4.0, 0.0),
+            max_nfev=0,
+        )
+    with pytest.raises(ValueError, match="rv_grid_n"):
+        fit_phoenix_full_spectrum(
+            segment,
+            phoenix_lib=object(),
+            p0=(5000.0, 0.0, 4.0, 0.0),
+            rv_grid_n=1,
+        )
+    with pytest.raises(ValueError, match="p0"):
+        fit_phoenix_full_spectrum(
+            segment,
+            phoenix_lib=object(),
+            p0=(5000.0, 0.0, 4.0),
+        )
+
+
+def test_interp_observed_reconstruction_preserves_invalid_original_pixels():
+    segment = SpectrumSegment(
+        [5000.0, 5001.0, 5002.0],
+        [1.0, np.nan, 1.0],
+        err=[0.1, 0.1, 0.1],
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+    )
+
+    class Library:
+        def evaluate(self, teff, feh, logg):
+            return np.ones(2, dtype=float)
+
+    models, coeffs, used_masks, excluded_masks = (
+        reconstruct_phoenix_legendre_models_for_segments(
+            segment,
+            phoenix_lib=Library(),
+            fit_result={
+                "teff": 5000.0,
+                "feh": 0.0,
+                "logg": 4.0,
+                "rv_kms": 0.0,
+                "rv_bary_kms": 0.0,
+                "forward_model": "interp_observed",
+            },
+            mdeg=0,
+        )
+    )
+
+    assert models[0].shape == segment.wave.shape
+    assert np.isfinite(models[0][[0, 2]]).all()
+    assert np.isnan(models[0][1])
+    assert np.array_equal(used_masks[0], [True, False, True])
+    assert coeffs[0].shape == (1,)
+    assert excluded_masks[0].shape == segment.wave.shape
 
 
 def test_phoenix_diagnostics_and_quality_flags_are_json_safe():

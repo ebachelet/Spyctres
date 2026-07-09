@@ -706,16 +706,16 @@ def plot_fit_referee(
         )
         if continuum is not None:
             finite_cont = np.isfinite(continuum)
-            if np.any(finite_cont):
-                norm = np.nanmedian(flux[used]) if np.any(used) else np.nanmedian(flux)
-                ax_flux.plot(
-                    wave[sel],
-                    continuum[sel] * norm,
-                    color="tab:blue",
-                    lw=0.6,
-                    alpha=0.6,
-                    label="continuum shape",
+            continuum_range = (
+                None
+                if not np.any(finite_cont)
+                else (
+                    float(np.nanmin(continuum[finite_cont])),
+                    float(np.nanmax(continuum[finite_cont])),
                 )
+            )
+        else:
+            continuum_range = None
 
         for wmin, wmax in _mask_to_spans(wave, excluded):
             ax_flux.axvspan(wmin, wmax, color="tab:purple", alpha=0.08)
@@ -763,10 +763,17 @@ def plot_fit_referee(
         seg_diag = diag.get("segment_diagnostics", [])
         if index < len(seg_diag):
             info = seg_diag[index]
-            text = "N={0}, χ flags={1}".format(
-                info.get("n_fit", "?"),
-                ", ".join(getattr(result, "quality_flags", ())) or "none",
-            )
+            text_parts = ["Nfit={0}".format(info.get("n_fit", "?"))]
+            lsf = info.get("lsf_fwhm_kms")
+            if lsf is not None:
+                text_parts.append("LSF FWHM={0:.2f} km/s".format(float(lsf)))
+            if continuum_range is not None:
+                text_parts.append(
+                    "P(λ)={0:.3g}–{1:.3g}".format(*continuum_range)
+                )
+            flags = ", ".join(getattr(result, "quality_flags", ())) or "none"
+            text_parts.append("flags={0}".format(flags))
+            text = "\n".join(text_parts)
             ax_resid.text(
                 0.01,
                 0.98,

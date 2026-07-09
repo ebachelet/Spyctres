@@ -213,6 +213,17 @@ def _estimate_sigma(flux):
     return float(sig)
 
 
+def _segment_support_ok(seg):
+    """Return pixels eligible for model support in the fitter/reconstructor."""
+    w_full = np.asarray(seg.wave, dtype=float)
+    f_full = np.asarray(seg.flux, dtype=float)
+    support_ok = np.isfinite(w_full) & np.isfinite(f_full)
+    if seg.err is not None:
+        e_full = np.asarray(seg.err, dtype=float)
+        support_ok &= np.isfinite(e_full) & (e_full > 0)
+    return support_ok
+
+
 def _build_data_vectors(
     segments,
     segment_weights=None,
@@ -263,18 +274,14 @@ def _build_data_vectors(
         w_full = np.asarray(seg.wave, dtype=float)
         f_full = np.asarray(seg.flux, dtype=float)
 
-        support_ok = np.isfinite(w_full) & np.isfinite(f_full)
+        support_ok = _segment_support_ok(seg)
 
         if seg.err is None:
             e_full = np.ones_like(f_full) * _estimate_sigma(
                 f_full[support_ok] if np.any(support_ok) else f_full
             )
-            err_ok = np.isfinite(e_full) & (e_full > 0)
         else:
             e_full = np.asarray(seg.err, dtype=float)
-            err_ok = np.isfinite(e_full) & (e_full > 0)
-
-        support_ok &= err_ok
 
         if isinstance(regions, dict):
             reg = regions.get(i, regions.get(seg.name, None))
@@ -1226,7 +1233,8 @@ def reconstruct_phoenix_legendre_models_for_segments(
     coeffs_list = []
 
     if forward_model == "interp_observed":
-        support_lengths = [len(seg.wave) for seg in segments]
+        support_masks = [_segment_support_ok(seg) for seg in segments]
+        support_lengths = [int(np.sum(mask)) for mask in support_masks]
         n_support_total = int(sum(support_lengths))
 
         model_support_all = np.asarray(phoenix_lib.evaluate(teff, feh, logg), dtype=float)
@@ -1237,7 +1245,9 @@ def reconstruct_phoenix_legendre_models_for_segments(
             )
 
         i0 = 0
-        for seg, used_mask, seg_fwhm in zip(segments, used_masks, segment_fwhm_kms):
+        for seg, used_mask, seg_fwhm, support_ok in zip(
+            segments, used_masks, segment_fwhm_kms, support_masks
+        ):
             wave_full = np.asarray(seg.wave, dtype=float)
             flux_full = np.asarray(seg.flux, dtype=float)
 
@@ -1247,25 +1257,29 @@ def reconstruct_phoenix_legendre_models_for_segments(
             else:
                 err_full = np.asarray(seg.err, dtype=float)
 
-            n_support = len(wave_full)
+            n_support = int(np.sum(support_ok))
             i1 = i0 + n_support
 
-            model0_full = model_support_all[i0:i1]
-            shifted_full = _apply_observed_grid_rv_shift(
-                wave_full,
-                model0_full,
-                rv_bary_kms + rv_kms,
-            )
-            model_broad_full = _gaussian_broaden_velocity(
-                wave_full,
-                shifted_full,
-                fwhm_kms=seg_fwhm,
-            )
-            if np.any(used_mask):
-                w_used = wave_full[used_mask]
-                f_used = flux_full[used_mask]
-                e_used = err_full[used_mask]
-                m_used = model_broad_full[used_mask]
+            model_broad_full = np.full_like(wave_full, np.nan, dtype=float)
+            if n_support > 0:
+                wave_support = wave_full[support_ok]
+                model0_support = model_support_all[i0:i1]
+                shifted_support = _apply_observed_grid_rv_shift(
+                    wave_support,
+                    model0_support,
+                    rv_bary_kms + rv_kms,
+                )
+                model_broad_full[support_ok] = _gaussian_broaden_velocity(
+                    wave_support,
+                    shifted_support,
+                    fwhm_kms=seg_fwhm,
+                )
+            continuum_pixels = used_mask & np.isfinite(model_broad_full)
+            if np.any(continuum_pixels):
+                w_used = wave_full[continuum_pixels]
+                f_used = flux_full[continuum_pixels]
+                e_used = err_full[continuum_pixels]
+                m_used = model_broad_full[continuum_pixels]
 
                 _model_corr_used, coeffs = _solve_multiplicative_legendre(
                     w_used, f_used, e_used, m_used, mdeg=mdeg
@@ -1822,6 +1836,34 @@ def fit_phoenix_full_spectrum(
         
     if forward_model not in ("interp_observed", "native_interp"):
         raise ValueError("forward_model must be 'interp_observed' or 'native_interp'.")
+
+    p0 = np.asarray(p0, dtype=float)
+    if p0.shape != (4,) or not np.all(np.isfinite(p0)):
+        raise ValueError("p0 must contain four finite values: teff, feh, logg, rv_kms.")
+
+    mdeg = int(mdeg)
+    if mdeg < 0:
+        raise ValueError("mdeg must be >= 0.")
+    coarse_decimate = int(coarse_decimate)
+    if coarse_decimate < 1:
+        raise ValueError("coarse_decimate must be >= 1.")
+    multistart = int(multistart)
+    if multistart < 1:
+        raise ValueError("multistart must be >= 1.")
+    rv_grid_n = int(rv_grid_n)
+    if rv_grid_n < 2:
+        raise ValueError("rv_grid_n must be >= 2.")
+    rv_grid_decimate = int(rv_grid_decimate)
+    if rv_grid_decimate < 1:
+        raise ValueError("rv_grid_decimate must be >= 1.")
+    if max_nfev is None:
+        max_nfev = 200
+    max_nfev = int(max_nfev)
+    if max_nfev < 1:
+        raise ValueError("max_nfev must be >= 1.")
+    rv_bary_kms = float(rv_bary_kms)
+    if not np.isfinite(rv_bary_kms):
+        raise ValueError("rv_bary_kms must be finite.")
             
     (
         support_wave_all,
@@ -1968,6 +2010,19 @@ def fit_phoenix_full_spectrum(
                 +300.0,
             ),
         )
+    lower_bounds = np.asarray(bounds[0], dtype=float)
+    upper_bounds = np.asarray(bounds[1], dtype=float)
+    if (
+        lower_bounds.shape != (4,)
+        or upper_bounds.shape != (4,)
+        or not np.all(np.isfinite(lower_bounds))
+        or not np.all(np.isfinite(upper_bounds))
+        or np.any(upper_bounds <= lower_bounds)
+    ):
+        raise ValueError(
+            "bounds must be two finite four-element arrays with lower < upper."
+        )
+    bounds = (lower_bounds, upper_bounds)
         
     broadening_fwhm_kms = _resolve_broadening_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
     

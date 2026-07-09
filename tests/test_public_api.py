@@ -22,6 +22,9 @@ def test_structured_result_is_mapping_and_json_serializable():
     )
 
     assert result["teff"] == 5772.0
+    assert "diagnostics" in list(result)
+    assert "quality_flags" in list(result)
+    assert "provenance" in list(result)
     assert isinstance(result.diagnostics, PhoenixFitDiagnostics)
     assert result.quality_flags == ("ok",)
     payload = json.loads(result.to_json())
@@ -77,6 +80,24 @@ def test_to_dict_rejects_absolute_plot_paths_without_relative_base():
     result = PhoenixFitResult(summary={"teff": 5772.0})
     with pytest.raises(ValueError, match="Absolute/local paths"):
         result.to_dict(plot_paths={"referee_plot": "/tmp/fit.png"})
+
+
+def test_compact_json_rejects_plot_paths_outside_product_directory(tmp_path):
+    result = PhoenixFitResult(summary={"teff": 5772.0})
+    product_dir = tmp_path / "products"
+    product_dir.mkdir()
+    with pytest.raises(ValueError, match="inside the JSON product directory"):
+        result.to_dict(
+            include_arrays=False,
+            plot_paths={"referee_plot": tmp_path / "fit.png"},
+            relative_to=product_dir,
+        )
+    with pytest.raises(ValueError, match="must not traverse"):
+        result.to_dict(
+            include_arrays=False,
+            plot_paths={"referee_plot": "../fit.png"},
+            relative_to=product_dir,
+        )
 
 
 def test_local_paths_can_be_included_explicitly():

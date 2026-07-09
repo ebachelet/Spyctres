@@ -197,6 +197,54 @@ def _role_budget(row, args):
     return role, budget
 
 
+def _validate_manifest_rows(rows):
+    """Require stable, unique target identifiers for resumable checkpoints."""
+    seen = set()
+    for index, row in enumerate(rows):
+        xsl_id = str(row.get("xsl_id", "")).strip()
+        if not xsl_id:
+            raise ValueError(
+                "Manifest row {0} requires a non-empty xsl_id for resumable "
+                "validation.".format(index + 1)
+            )
+        key = xsl_id.upper()
+        if key in seen:
+            raise ValueError("Duplicate xsl_id in manifest: {0}".format(xsl_id))
+        seen.add(key)
+
+
+def _run_configuration(args):
+    """Return checkpoint-critical settings that make resume scientifically safe."""
+    return {
+        "wave_medium": args.wave_medium,
+        "fit_wave_range_A": [float(args.wave_min), float(args.wave_max)],
+        "mdeg": int(args.mdeg),
+        "neutral_initialization": bool(args.neutral_initialization),
+        "coarse_init_override": args.coarse_init,
+        "multistart_override": args.multistart,
+        "max_nfev_override": args.max_nfev,
+        "coarse_decimate_override": args.coarse_decimate,
+    }
+
+
+def _validate_resume_configuration(previous, current):
+    previous_config = previous.get("run_configuration")
+    if previous_config is None:
+        return
+    mismatches = [
+        key
+        for key, value in current.items()
+        if previous_config.get(key) != value
+    ]
+    if mismatches:
+        raise ValueError(
+            "Existing checkpoint was created with different validation settings "
+            "({0}); use a different --output path.".format(
+                ", ".join(sorted(mismatches))
+            )
+        )
+
+
 def _json_native(value):
     if isinstance(value, np.ndarray):
         return [_json_native(item) for item in value.tolist()]
@@ -326,6 +374,8 @@ def main(argv=None):
         raise ValueError("XSL validation manifest contains no spectra.")
     if "path" not in manifest_rows[0]:
         raise ValueError("XSL validation manifest requires a path column.")
+    _validate_manifest_rows(manifest_rows)
+    run_configuration = _run_configuration(args)
     manifest_order = [row.get("xsl_id", "") for row in manifest_rows]
     manifest_by_id = {row.get("xsl_id", ""): row for row in manifest_rows}
     rows = list(manifest_rows)
@@ -339,6 +389,7 @@ def main(argv=None):
     if args.resume and os.path.exists(args.output):
         with open(args.output, "r", encoding="utf-8") as handle:
             previous = json.load(handle)
+        _validate_resume_configuration(previous, run_configuration)
         for item in previous.get("results", []):
             item = dict(item)
             xsl_id = item.get("xsl_id", "")
@@ -392,6 +443,7 @@ def main(argv=None):
         )
         payload = {
             "schema_version": 2,
+            "run_configuration": dict(run_configuration),
             "wave_medium_assumption": args.wave_medium,
             "fit_wave_range_A": [args.wave_min, args.wave_max],
             "budget_mode": "manifest_role_aware",
@@ -407,7 +459,7 @@ def main(argv=None):
         _atomic_write_json(args.output, payload)
         return payload
 
-    completed_statuses = {"ok", "fit_failed", "unsupported_physics"}
+    completed_statuses = {"ok", "fit_failed", "unsupported_physics", "error"}
     processed_ids = []
     for index, row in enumerate(rows):
         xsl_id = row.get("xsl_id", "")
@@ -453,6 +505,18 @@ def main(argv=None):
             processed_ids.append(xsl_id)
             checkpoint()
             continue
+        if int(budget["max_nfev"]) == 0:
+            record.update(
+                status="unsupported_physics",
+                message=(
+                    "Validation role is configured with max_nfev=0; target was "
+                    "recorded without running an optimizer."
+                ),
+            )
+            records_by_id[xsl_id] = record
+            processed_ids.append(xsl_id)
+            checkpoint()
+            continue
 
         try:
             spectrum = read_spectrum(
@@ -486,7 +550,7 @@ def main(argv=None):
                 coarse_decimate=budget["coarse_decimate"],
                 multistart=budget["multistart"],
             )
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
             record.update(status="error", message=str(exc))
             records_by_id[xsl_id] = record
             processed_ids.append(xsl_id)

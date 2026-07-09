@@ -55,6 +55,8 @@ def test_plot_fit_referee_saves_without_mutating_result(tmp_path):
     assert path.exists()
     assert fig.spyctres_generated_files == {"referee_plot": str(path)}
     assert axes.shape == (1, 2)
+    labels = [line.get_label() for line in axes[0, 0].lines]
+    assert "continuum shape" not in labels
     assert before == after
     fig.clf()
 

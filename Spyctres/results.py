@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 import json
 import os
+import tempfile
 
 import numpy as np
 
@@ -56,9 +57,19 @@ def _relative_path_for_json(value, relative_to=None, include_local_paths=False):
                 "default; pass a relative plot path, set relative_to, or use "
                 "include_local_paths=True."
             )
-        return os.path.relpath(
-            os.path.abspath(os.path.expanduser(value)),
-            os.path.abspath(os.path.expanduser(os.fspath(relative_to))),
+        base = os.path.abspath(os.path.expanduser(os.fspath(relative_to)))
+        path = os.path.abspath(os.path.expanduser(value))
+        if os.path.commonpath([base, path]) != base:
+            raise ValueError(
+                "Generated-file paths must live inside the JSON product "
+                "directory when include_local_paths=False."
+            )
+        return os.path.relpath(path, base)
+    normalized = os.path.normpath(value)
+    if normalized == ".." or normalized.startswith(".." + os.sep):
+        raise ValueError(
+            "Generated-file paths must not traverse outside the JSON product "
+            "directory when include_local_paths=False."
         )
     return value
 
@@ -131,18 +142,27 @@ class PhoenixFitResult(Mapping):
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "quality_flags", tuple(quality_flags))
 
+    def _mapping_keys(self):
+        keys = list(self.summary)
+        for key in ("diagnostics", "quality_flags", "provenance"):
+            if key not in self.summary:
+                keys.append(key)
+        return tuple(keys)
+
     def __getitem__(self, key):
         if key == "diagnostics" and key not in self.summary:
             return self.diagnostics.to_dict()
         if key == "quality_flags" and key not in self.summary:
             return list(self.quality_flags)
+        if key == "provenance" and key not in self.summary:
+            return self.provenance
         return self.summary[key]
 
     def __iter__(self):
-        return iter(self.summary)
+        return iter(self._mapping_keys())
 
     def __len__(self):
-        return len(self.summary)
+        return len(self._mapping_keys())
 
     def to_dict(
         self,
@@ -201,15 +221,32 @@ class PhoenixFitResult(Mapping):
         kwargs.setdefault("allow_nan", False)
         if relative_to is None:
             relative_to = os.path.dirname(os.path.abspath(os.fspath(path))) or "."
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(
-                self.to_dict(
-                    include_arrays=include_arrays,
-                    include_local_paths=include_local_paths,
-                    plot_paths=plot_paths,
-                    relative_to=relative_to,
-                ),
-                handle,
-                **kwargs,
-            )
-            handle.write("\n")
+        path = os.path.abspath(os.path.expanduser(os.fspath(path)))
+        directory = os.path.dirname(path) or "."
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".{0}.".format(os.path.basename(path)),
+            suffix=".tmp",
+            dir=directory,
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(
+                    self.to_dict(
+                        include_arrays=include_arrays,
+                        include_local_paths=include_local_paths,
+                        plot_paths=plot_paths,
+                        relative_to=relative_to,
+                    ),
+                    handle,
+                    **kwargs,
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
