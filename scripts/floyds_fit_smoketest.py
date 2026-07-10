@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from Spyctres.config import load_user_config, get_config_value, resolve_setting
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
+from Spyctres.results import format_fit_quality_report
 from Spyctres.fitting import (
     fit_phoenix_full_spectrum,
     reconstruct_phoenix_legendre_models_for_segments,
@@ -214,8 +215,9 @@ def main():
     print("  chi2_red =", out["chi2_red"])
     print("  success  =", out["success"])
     print("  message  =", out["message"])
+    print(format_fit_quality_report(out))
     print("Continuum coeffs:", coeffs_list[0])
-    
+
     title = (
         "{0}  {1:.0f}-{2:.0f} A  Teff={3:.0f}  [Fe/H]={4:.2f}  "
         "logg={5:.2f}  RV={6:.1f}  chi2_red={7:.2f}".format(

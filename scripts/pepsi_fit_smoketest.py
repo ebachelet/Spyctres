@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
 from Spyctres import Spyctres
+from Spyctres.results import format_fit_quality_report
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import (
     read_spectrum,
@@ -1001,6 +1002,7 @@ def main():
     print("  chi2_red =", out["chi2_red"])
     print("  success  =", out["success"])
     print("  message  =", out["message"])
+    print(format_fit_quality_report(out))
     print("Continuum coeffs per window:")
     for seg_i, coeffs_i in zip(segments, coeffs_list):
         print(" ", seg_i.name, coeffs_i)

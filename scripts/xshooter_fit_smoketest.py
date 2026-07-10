@@ -15,6 +15,7 @@ warnings.filterwarnings(
 import numpy as np
 import matplotlib.pyplot as plt
 
+from Spyctres.results import format_fit_quality_report
 from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segments
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
@@ -910,6 +911,7 @@ def main():
     print("  chi2_red =", result["chi2_red"])
     print("  success  =", result["success"])
     print("  message  =", result["message"])
+    print(format_fit_quality_report(result))
     print("Continuum coeffs per segment:", coeffs_list)
     print("Quality verdict:", quality["verdict"])
     print("Quality reasons:", quality["reasons"])
