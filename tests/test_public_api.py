@@ -80,6 +80,14 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     assert report["segments"][0]["explicit_exclusion_count"] == 10
     assert report["segments"][0]["multiple_rejection_count"] == 2
 
+    text = result.quality_report_text()
+    assert "Quality report:" in text
+    assert "flags: segment_mask_fraction_high" in text
+    assert "chi2_red: 2" in text
+    assert "masked fraction: 25.0%" in text
+    assert "dropped segments: 1" in text
+    assert "VIS; Nfit=42/80" in text
+
 
 def test_structured_result_can_save_compact_json(tmp_path):
     result = PhoenixFitResult(

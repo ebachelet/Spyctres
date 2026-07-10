@@ -93,6 +93,8 @@ def main(argv=None):
         for key in ("success", "teff", "feh", "logg", "rv_kms", "chi2_red")
     }
     print(json.dumps(summary, indent=2))
+    print()
+    print(result.quality_report_text())
     print(
         "\nInterpretation: this example demonstrates ingestion, a native-grid "
         "full-spectrum PHOENIX fit, structured results, and plotting. It is not "

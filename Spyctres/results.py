@@ -243,6 +243,57 @@ class PhoenixFitResult(Mapping):
         }
         return _jsonable(report)
 
+    def quality_report_text(self):
+        """Return a compact human-readable fit-quality summary."""
+        report = self.quality_report()
+        lines = ["Quality report:"]
+        flags = report.get("quality_flags") or ["unknown"]
+        lines.append("  flags: {0}".format(", ".join(str(flag) for flag in flags)))
+        if report.get("reduced_chi2") is not None:
+            lines.append("  chi2_red: {0:.4g}".format(float(report["reduced_chi2"])))
+        point_parts = []
+        if report.get("n_points") is not None:
+            point_parts.append("N={0}".format(int(report["n_points"])))
+        if report.get("degrees_of_freedom") is not None:
+            point_parts.append("dof={0}".format(int(report["degrees_of_freedom"])))
+        if report.get("n_parameters") is not None:
+            point_parts.append("parameters={0}".format(int(report["n_parameters"])))
+        if point_parts:
+            lines.append("  fit size: {0}".format(", ".join(point_parts)))
+        if report.get("mask_fraction") is not None:
+            lines.append("  masked fraction: {0:.1%}".format(float(report["mask_fraction"])))
+        if report.get("n_dropped_segments"):
+            lines.append(
+                "  dropped segments: {0}".format(int(report["n_dropped_segments"]))
+            )
+        segment_lines = []
+        for segment in report.get("segments", []):
+            name = segment.get("name")
+            label = str(name) if name else "segment {0}".format(
+                segment.get("input_index", "?")
+            )
+            pieces = [label]
+            if segment.get("n_fit") is not None and segment.get("n_support") is not None:
+                pieces.append(
+                    "Nfit={0}/{1}".format(
+                        int(segment["n_fit"]),
+                        int(segment["n_support"]),
+                    )
+                )
+            if segment.get("mask_fraction") is not None:
+                pieces.append("masked={0:.1%}".format(float(segment["mask_fraction"])))
+            if segment.get("explicit_exclusion_count") is not None:
+                pieces.append(
+                    "explicit rejects={0}".format(
+                        int(segment["explicit_exclusion_count"])
+                    )
+                )
+            segment_lines.append("; ".join(pieces))
+        if segment_lines:
+            lines.append("  segments:")
+            lines.extend("    - {0}".format(line) for line in segment_lines)
+        return "\n".join(lines)
+
     def to_json(self, **kwargs):
         kwargs.setdefault("allow_nan", False)
         to_dict_keys = {
