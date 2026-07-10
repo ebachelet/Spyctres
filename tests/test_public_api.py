@@ -120,6 +120,21 @@ def test_quality_flag_descriptions_cover_static_and_grid_flags():
     assert "No description" in descriptions["surprise_flag"]
 
 
+def test_wavelength_medium_helpers_are_top_level_public_api():
+    import Spyctres
+
+    wave_air = np.array([5000.0])
+    converted = Spyctres.convert_wavelength_medium(
+        wave_air,
+        from_medium="air",
+        to_medium="vacuum",
+        method="vald3",
+    )
+
+    assert converted[0] > wave_air[0]
+    assert callable(Spyctres.convert_segment_wavelength_medium)
+
+
 def test_structured_result_can_save_compact_json(tmp_path):
     result = PhoenixFitResult(
         summary={"teff": np.float64(5772.0)},

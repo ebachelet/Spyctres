@@ -166,6 +166,15 @@ PHOENIX workflow default, while `vald3` preserves the historical Spyctres line-
 list conversion. Both leave wavelengths at or below 2000 Angstrom unchanged
 and record the selected method when converting a `SpectrumSegment`.
 
+```python
+from Spyctres import convert_wavelength_medium, convert_segment_wavelength_medium
+
+wave_vac = convert_wavelength_medium(
+    wave_air, from_medium="air", to_medium="vacuum", method="ciddor1996"
+)
+segment_vac = convert_segment_wavelength_medium(segment_air, "vacuum")
+```
+
 ## Project structure
 
 Spyctres is organized around four layers:
