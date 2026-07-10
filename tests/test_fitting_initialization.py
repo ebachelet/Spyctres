@@ -237,6 +237,8 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert result["quality_report"]["segments"][0]["explicit_exclusion_fraction"] == 0.0
     assert result["optimizer_loss"] == "soft_l1"
     assert result["optimizer_loss_f_scale"] == 2.0
+    assert result["segment_error_floor_fraction"] == [0.0, 0.0]
+    assert result["segment_error_floor_abs"] == [0.0, 0.0]
     assert library.build_progress_callback_received is callback
     assert any("Prepared fit data" in message for message in messages)
     assert any("Preparing PHOENIX interpolator/cache" in message for message in messages)
@@ -280,6 +282,13 @@ def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
             phoenix_lib=object(),
             p0=(5000.0, 0.0, 4.0, 0.0),
             loss_f_scale=0.0,
+        )
+    with pytest.raises(ValueError, match="error_floor_fraction"):
+        fit_phoenix_full_spectrum(
+            segment,
+            phoenix_lib=object(),
+            p0=(5000.0, 0.0, 4.0, 0.0),
+            error_floor_fraction=-0.1,
         )
     with pytest.raises(ValueError, match="p0"):
         fit_phoenix_full_spectrum(

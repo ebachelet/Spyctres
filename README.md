@@ -145,6 +145,9 @@ fitting functions keep returning dictionaries for backward compatibility.
 For exploratory fits with outliers that are not yet fully masked, the PHOENIX
 fitters expose SciPy's robust least-squares losses through `loss` and
 `loss_f_scale`; the default `loss="linear"` preserves ordinary least squares.
+For spectra whose formal uncertainties are unrealistically small, an optional
+`error_floor_fraction` adds a per-segment fractional uncertainty floor in
+quadrature and records the applied floor in the fit diagnostics.
 
 ## Local line diagnostics
 

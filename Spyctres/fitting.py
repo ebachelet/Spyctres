@@ -273,6 +273,149 @@ def _select_segment_option(option, index, seg):
     return None
 
 
+def _validate_error_floor_fraction(value, label="error_floor_fraction"):
+    value = float(value)
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError("{0} must be finite and >= 0.".format(label))
+    return value
+
+
+def _resolve_per_segment_numeric_options(
+    segments,
+    option,
+    label,
+    default=0.0,
+    strict=True,
+):
+    """Resolve a scalar/sequence/dict numeric option for all input segments."""
+    if option is None:
+        return [_validate_error_floor_fraction(default, label=label)] * len(segments)
+
+    if isinstance(option, dict):
+        resolved = [default] * len(segments)
+        assigned_by = [None] * len(segments)
+        names = [seg.name for seg in segments]
+        named_keys = [key for key in option if isinstance(key, str)]
+
+        if named_keys:
+            seen = {}
+            duplicates = set()
+            for index, name in enumerate(names):
+                if name is None:
+                    continue
+                if name in seen:
+                    duplicates.add(name)
+                seen[name] = index
+            if duplicates and strict:
+                raise ValueError(
+                    "{0} uses name-keyed values, but segment names are not unique: {1}.".format(
+                        label, ", ".join(sorted(str(x) for x in duplicates))
+                    )
+                )
+
+        for key, value in option.items():
+            if isinstance(key, int):
+                index = int(key)
+                if index < 0 or index >= len(segments):
+                    if strict:
+                        raise ValueError(
+                            "{0} index key {1} is out of range for {2} segments.".format(
+                                label, key, len(segments)
+                            )
+                        )
+                    continue
+                source = "index"
+            elif isinstance(key, str):
+                matches = [i for i, name in enumerate(names) if name == key]
+                if len(matches) == 0:
+                    if strict:
+                        raise ValueError(
+                            "{0} segment-name key {1!r} does not match any segment.".format(
+                                label, key
+                            )
+                        )
+                    continue
+                if len(matches) > 1:
+                    if strict:
+                        raise ValueError(
+                            "{0} segment-name key {1!r} matches multiple segments.".format(
+                                label, key
+                            )
+                        )
+                    continue
+                index = matches[0]
+                source = "name"
+            else:
+                if strict:
+                    raise TypeError(
+                        "{0} keys must be integer segment indices or string segment names.".format(
+                            label
+                        )
+                    )
+                continue
+            if assigned_by[index] is not None and strict:
+                raise ValueError(
+                    "{0} assigns segment {1} by both {2} and {3}; use one target form.".format(
+                        label, index, assigned_by[index], source
+                    )
+                )
+            resolved[index] = value
+            assigned_by[index] = source
+        return [
+            _validate_error_floor_fraction(value, label=label)
+            for value in resolved
+        ]
+
+    if np.isscalar(option):
+        value = _validate_error_floor_fraction(option, label=label)
+        return [value] * len(segments)
+
+    values = list(option)
+    if len(values) != len(segments):
+        raise ValueError(
+            "{0} sequence must match the number of segments.".format(label)
+        )
+    return [
+        _validate_error_floor_fraction(value, label=label)
+        for value in values
+    ]
+
+
+def _apply_error_floor_to_fit_errors(flux_fit, err_fit, error_floor_fraction):
+    """Apply an additive-in-quadrature fractional error floor."""
+    error_floor_fraction = _validate_error_floor_fraction(error_floor_fraction)
+    flux_fit = np.asarray(flux_fit, dtype=float)
+    err_fit = np.asarray(err_fit, dtype=float)
+    finite_flux = np.abs(flux_fit[np.isfinite(flux_fit)])
+    flux_scale = (
+        float(np.nanmedian(finite_flux))
+        if finite_flux.size
+        else 0.0
+    )
+    if not np.isfinite(flux_scale):
+        flux_scale = 0.0
+    error_floor_abs = float(error_floor_fraction * flux_scale)
+    if error_floor_abs > 0.0:
+        err_out = np.sqrt(err_fit * err_fit + error_floor_abs * error_floor_abs)
+    else:
+        err_out = np.array(err_fit, dtype=float, copy=True)
+    return err_out, {
+        "error_floor_fraction": float(error_floor_fraction),
+        "error_floor_abs": float(error_floor_abs),
+        "error_floor_flux_scale": float(flux_scale),
+        "median_error_before": (
+            float(np.nanmedian(err_fit[np.isfinite(err_fit)]))
+            if np.any(np.isfinite(err_fit))
+            else None
+        ),
+        "median_error_after": (
+            float(np.nanmedian(err_out[np.isfinite(err_out)]))
+            if np.any(np.isfinite(err_out))
+            else None
+        ),
+    }
+
+
 def _is_global_named_mask_spec(option):
     return (
         isinstance(option, dict)
@@ -374,6 +517,7 @@ def _build_data_vectors(
     exclude_mask=None,
     exclude_masks=None,
     mask_threshold=0.5,
+    error_floor_fraction=0.0,
     mask_assignment_strict=True,
 ):
     """
@@ -423,6 +567,13 @@ def _build_data_vectors(
         "exclude_masks",
         strict=mask_assignment_strict,
     )
+    error_floor_by_segment = _resolve_per_segment_numeric_options(
+        segments,
+        error_floor_fraction,
+        "error_floor_fraction",
+        default=0.0,
+        strict=mask_assignment_strict,
+    )
 
     start_support = 0
     start_fit = 0
@@ -464,7 +615,12 @@ def _build_data_vectors(
 
         w_support = w_full[support_ok].astype(float)
         f_fit = f_full[fit_m].astype(float)
-        e_fit = e_full[fit_m].astype(float)
+        e_fit_raw = e_full[fit_m].astype(float)
+        e_fit, error_floor_meta = _apply_error_floor_to_fit_errors(
+            f_fit,
+            e_fit_raw,
+            error_floor_by_segment[i],
+        )
 
         support_wave_all.append(w_support)
         flux_fit_all.append(f_fit)
@@ -483,6 +639,7 @@ def _build_data_vectors(
             "wave_max": float(w_support.max()),
             "n_support": n_support,
             "n_fit": n_fit,
+            "error_floor": error_floor_meta,
             "mask_provenance": mask_result.to_metadata(label="fit selection"),
             "mask_summary": mask_result.to_summary(),
         })
@@ -848,6 +1005,7 @@ def _build_phoenix_fit_diagnostics(
         n_fit = int(meta.get("n_fit", 0))
         mask_summary = dict(meta.get("mask_summary", {}))
         mask_provenance = dict(meta.get("mask_provenance", {}))
+        error_floor = dict(meta.get("error_floor", {}))
         segment_diagnostics.append(
             {
                 "name": meta.get("name"),
@@ -860,6 +1018,7 @@ def _build_phoenix_fit_diagnostics(
                 ),
                 "wave_min": meta.get("wave_min"),
                 "wave_max": meta.get("wave_max"),
+                "error_floor": error_floor,
                 "mask_summary": mask_summary,
                 "mask_provenance": mask_provenance,
                 "lsf_fwhm_kms": (
@@ -1466,6 +1625,7 @@ def reconstruct_phoenix_legendre_models_for_segments(
     exclude_mask=None,
     exclude_masks=None,
     mask_threshold=0.5,
+    error_floor_fraction=None,
     mdeg=2,
     rv_bary_kms=None,
     R=None,
@@ -1506,6 +1666,18 @@ def reconstruct_phoenix_legendre_models_for_segments(
         forward_model = str(fit_result.get("forward_model", "interp_observed"))
     if model_margin_A is None:
         model_margin_A = float(fit_result.get("model_margin_A", 200.0))
+    if error_floor_fraction is None:
+        error_floor_fraction = fit_result.get(
+            "segment_error_floor_fraction",
+            fit_result.get("error_floor_fraction", 0.0),
+        )
+    error_floor_by_segment = _resolve_per_segment_numeric_options(
+        segments,
+        error_floor_fraction,
+        "error_floor_fraction",
+        default=0.0,
+        strict=True,
+    )
 
     used_masks = []
     excluded_masks = []
@@ -1566,8 +1738,12 @@ def reconstruct_phoenix_legendre_models_for_segments(
             )
 
         i0 = 0
-        for seg, used_mask, seg_fwhm, support_ok in zip(
-            segments, used_masks, segment_fwhm_kms, support_masks
+        for seg, used_mask, seg_fwhm, support_ok, seg_error_floor_fraction in zip(
+            segments,
+            used_masks,
+            segment_fwhm_kms,
+            support_masks,
+            error_floor_by_segment,
         ):
             wave_full = np.asarray(seg.wave, dtype=float)
             flux_full = np.asarray(seg.flux, dtype=float)
@@ -1599,7 +1775,11 @@ def reconstruct_phoenix_legendre_models_for_segments(
             if np.any(continuum_pixels):
                 w_used = wave_full[continuum_pixels]
                 f_used = flux_full[continuum_pixels]
-                e_used = err_full[continuum_pixels]
+                e_used, _error_floor_meta = _apply_error_floor_to_fit_errors(
+                    f_used,
+                    err_full[continuum_pixels],
+                    seg_error_floor_fraction,
+                )
                 m_used = model_broad_full[continuum_pixels]
 
                 _model_corr_used, coeffs = _solve_multiplicative_legendre(
@@ -1636,7 +1816,12 @@ def reconstruct_phoenix_legendre_models_for_segments(
             extrapolate=True,
         )
         
-        for seg, used_mask, model_broad_full in zip(segments, used_masks, model_raw_list):
+        for seg, used_mask, model_broad_full, seg_error_floor_fraction in zip(
+            segments,
+            used_masks,
+            model_raw_list,
+            error_floor_by_segment,
+        ):
             wave_full = np.asarray(seg.wave, dtype=float)
             flux_full = np.asarray(seg.flux, dtype=float)
 
@@ -1649,7 +1834,11 @@ def reconstruct_phoenix_legendre_models_for_segments(
             if np.any(used_mask):
                 w_used = wave_full[used_mask]
                 f_used = flux_full[used_mask]
-                e_used = err_full[used_mask]
+                e_used, _error_floor_meta = _apply_error_floor_to_fit_errors(
+                    f_used,
+                    err_full[used_mask],
+                    seg_error_floor_fraction,
+                )
                 m_used = np.asarray(model_broad_full, dtype=float)[used_mask]
 
                 _model_corr_used, coeffs = _solve_multiplicative_legendre(
@@ -1680,6 +1869,7 @@ def diagnose_phoenix_fixed_params(
     exclude_masks=None,
     mask_threshold=0.5,
     mdeg=2,
+    error_floor_fraction=0.0,
     rv_bary_kms=0.0,
     R=None,
     fwhm_kms=None,
@@ -1757,6 +1947,7 @@ def diagnose_phoenix_fixed_params(
         exclude_mask=exclude_mask,
         exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
+        error_floor_fraction=error_floor_fraction,
     )
 
     if support_wave_all.size == 0 or flux_all.size == 0:
@@ -1938,6 +2129,14 @@ def diagnose_phoenix_fixed_params(
         "segments": segment_results,
         "segment_names": [s["name"] for s in segment_results],
         "segment_weights": [float(w) for w in fit_weights],
+        "segment_error_floor_fraction": [
+            float(m.get("error_floor", {}).get("error_floor_fraction", 0.0))
+            for m in seg_meta
+        ],
+        "segment_error_floor_abs": [
+            float(m.get("error_floor", {}).get("error_floor_abs", 0.0))
+            for m in seg_meta
+        ],
         "segment_lsf_fwhm_kms": [
             None if x is None else float(x) for x in segment_fwhm_kms
         ],
@@ -1976,6 +2175,7 @@ def fit_phoenix_full_spectrum(
     exclude_masks=None,
     mask_threshold=0.5,
     mdeg=2,
+    error_floor_fraction=0.0,
     rv_bary_kms=0.0,
     R=None,
     fwhm_kms=None,
@@ -2071,6 +2271,14 @@ def fit_phoenix_full_spectrum(
         Degree of the multiplicative Legendre polynomial solved independently
         for each segment. `mdeg=0` corresponds to a constant multiplicative
         scale.
+
+    error_floor_fraction : float, sequence, or dict, optional
+        Optional per-segment fractional uncertainty floor. A value ``f`` adds
+        ``f * median(abs(flux_fit))`` in quadrature to each fitted pixel's
+        1-sigma uncertainty for that segment. This is useful when formal
+        uncertainties are unrealistically small in high-S/N spectra. May be a
+        scalar, a sequence matching the input segments, or a dict keyed by
+        segment index/name. The default ``0.0`` preserves historical behavior.
 
     rv_bary_kms : float, optional
         Fixed barycentric velocity term in km/s added to the fitted `rv_kms`.
@@ -2247,6 +2455,7 @@ def fit_phoenix_full_spectrum(
         exclude_mask=exclude_mask,
         exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
+        error_floor_fraction=error_floor_fraction,
     )
     if support_wave_all.size == 0 or flux_all.size == 0:
         raise ValueError("No data points selected for fitting.")
@@ -2718,6 +2927,14 @@ def fit_phoenix_full_spectrum(
         "n_segments": int(len(seg_meta)),
         "segment_names": [m.get("name") for m in seg_meta],
         "segment_weights": [float(w) for w in fit_weights],
+        "segment_error_floor_fraction": [
+            float(m.get("error_floor", {}).get("error_floor_fraction", 0.0))
+            for m in seg_meta
+        ],
+        "segment_error_floor_abs": [
+            float(m.get("error_floor", {}).get("error_floor_abs", 0.0))
+            for m in seg_meta
+        ],
         "collection_name": collection_name,
         "collection_meta": collection_meta,
         "segment_lsf_fwhm_kms": [

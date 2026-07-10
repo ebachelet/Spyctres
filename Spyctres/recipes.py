@@ -34,6 +34,8 @@ from .fitting import (
     _gaussian_broaden_velocity,
     _apply_observed_grid_rv_shift,
     _validate_optimizer_loss,
+    _resolve_per_segment_numeric_options,
+    _apply_error_floor_to_fit_errors,
 )
 from .phoenix_forward import (
     build_phoenix_native_models_for_segments,
@@ -558,6 +560,7 @@ def fit_phoenix_sideband_symmetric(
     rv_grid_n=81,
     verbose=1,
     max_nfev=200,
+    error_floor_fraction=0.0,
     sideband_width=10.0,
     sideband_order=1,
     sideband_poly_order=1,
@@ -598,6 +601,12 @@ def fit_phoenix_sideband_symmetric(
 
     loss_f_scale : float, optional
         Positive robust-loss scale passed to ``least_squares`` as ``f_scale``.
+
+    error_floor_fraction : float, sequence, or dict, optional
+        Optional per-segment fractional uncertainty floor. A value ``f`` adds
+        ``f * median(abs(flux_fit))`` in quadrature to each fitted pixel's
+        uncertainty for that segment. The default ``0.0`` preserves historical
+        behavior.
     """
     def report(message):
         if progress_callback is not None:
@@ -609,6 +618,13 @@ def fit_phoenix_sideband_symmetric(
         segments = [segments]
     else:
         segments = list(segments)
+    error_floor_by_segment = _resolve_per_segment_numeric_options(
+        segments,
+        error_floor_fraction,
+        "error_floor_fraction",
+        default=0.0,
+        strict=True,
+    )
 
     for seg in segments:
         if seg.err is None:
@@ -721,8 +737,12 @@ def fit_phoenix_sideband_symmetric(
             )
             
             i0 = 0
-            for seg, used_mask, n_support, seg_fwhm in zip(
-                segments, used_masks, support_lengths, segment_fwhm_kms
+            for seg, used_mask, n_support, seg_fwhm, seg_error_floor_fraction in zip(
+                segments,
+                used_masks,
+                support_lengths,
+                segment_fwhm_kms,
+                error_floor_by_segment,
             ):
                 i1 = i0 + n_support
 
@@ -752,7 +772,12 @@ def fit_phoenix_sideband_symmetric(
                     order=sideband_poly_order,
                 )
 
-                out.append((flux[used_mask] - model_corr[used_mask]) / err[used_mask])
+                err_used, _error_floor_meta = _apply_error_floor_to_fit_errors(
+                    flux[used_mask],
+                    err[used_mask],
+                    seg_error_floor_fraction,
+                )
+                out.append((flux[used_mask] - model_corr[used_mask]) / err_used)
                 i0 = i1
 
         else:
@@ -768,7 +793,12 @@ def fit_phoenix_sideband_symmetric(
                 bounds_use_fit_mask=True,
                 extrapolate=True,
             )
-            for seg, used_mask, model_full in zip(segments, used_masks, model_list):
+            for seg, used_mask, model_full, seg_error_floor_fraction in zip(
+                segments,
+                used_masks,
+                model_list,
+                error_floor_by_segment,
+            ):
                 wave = np.asarray(seg.wave, dtype=float)
                 flux = np.asarray(seg.flux, dtype=float)
                 err = np.asarray(seg.err, dtype=float)
@@ -789,7 +819,12 @@ def fit_phoenix_sideband_symmetric(
                     order=sideband_poly_order,
                 )
 
-                out.append((flux[used_mask] - model_corr[used_mask]) / err[used_mask])
+                err_used, _error_floor_meta = _apply_error_floor_to_fit_errors(
+                    flux[used_mask],
+                    err[used_mask],
+                    seg_error_floor_fraction,
+                )
+                out.append((flux[used_mask] - model_corr[used_mask]) / err_used)
 
         return np.concatenate(out)
     
@@ -866,6 +901,9 @@ def fit_phoenix_sideband_symmetric(
         "nfev": int(res.nfev),
         "optimizer_loss": str(loss),
         "optimizer_loss_f_scale": float(loss_f_scale),
+        "segment_error_floor_fraction": [
+            float(value) for value in error_floor_by_segment
+        ],
         "forward_model": str(forward_model),
         "model_margin_A": float(model_margin_A),
         "segment_lsf_fwhm_kms": [

@@ -411,6 +411,40 @@ def test_build_data_vectors_selects_per_segment_exclusion_masks_by_name_and_inde
     assert seg_meta[1]["mask_provenance"]["settings"]["exclude_masks"] == ["second_line"]
 
 
+def test_build_data_vectors_applies_per_segment_error_floor_fraction():
+    first = SpectrumSegment(
+        [1.0, 2.0],
+        [1.0, 1.0],
+        err=[0.01, 0.01],
+        name="first",
+    )
+    second = SpectrumSegment(
+        [1.0, 2.0],
+        [2.0, 2.0],
+        err=[0.02, 0.02],
+        name="second",
+    )
+
+    vectors = _build_data_vectors(
+        [first, second],
+        error_floor_fraction={"first": 0.1, 1: 0.2},
+    )
+    _support_wave, _flux, err, _support_slices, fit_slices, _fit_masks, _weights, seg_meta = vectors
+
+    assert np.allclose(
+        err[fit_slices[0]],
+        np.sqrt(0.01**2 + 0.1**2),
+    )
+    assert np.allclose(
+        err[fit_slices[1]],
+        np.sqrt(0.02**2 + 0.4**2),
+    )
+    assert seg_meta[0]["error_floor"]["error_floor_fraction"] == 0.1
+    assert seg_meta[0]["error_floor"]["error_floor_abs"] == pytest.approx(0.1)
+    assert seg_meta[1]["error_floor"]["error_floor_fraction"] == 0.2
+    assert seg_meta[1]["error_floor"]["error_floor_abs"] == pytest.approx(0.4)
+
+
 def test_build_data_vectors_keeps_global_named_mask_dict_as_callable_spec():
     segment = SpectrumSegment(
         [1.0, 2.0, 3.0],
