@@ -173,6 +173,7 @@ def build_effective_fit_mask(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
 ):
     """
@@ -188,6 +189,7 @@ def build_effective_fit_mask(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
     ).effective_mask
 
@@ -197,6 +199,7 @@ def build_excluded_mask(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
 ):
     """
@@ -210,6 +213,7 @@ def build_excluded_mask(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
     ).excluded_mask
 
@@ -251,13 +255,108 @@ def _select_segment_option(option, index, seg):
     return None
 
 
+def _is_global_named_mask_spec(option):
+    return (
+        isinstance(option, dict)
+        and ("callable" in option or "func" in option)
+    )
+
+
+def _resolve_per_segment_mask_options(
+    segments,
+    option,
+    label,
+    strict=True,
+):
+    """Resolve global or per-segment mask options for all input segments."""
+    if option is None:
+        return [None] * len(segments)
+    if not isinstance(option, dict) or _is_global_named_mask_spec(option):
+        return [option] * len(segments)
+
+    resolved = [None] * len(segments)
+    assigned_by = [None] * len(segments)
+    names = [seg.name for seg in segments]
+    named_keys = [key for key in option if isinstance(key, str)]
+
+    if named_keys:
+        seen = {}
+        duplicates = set()
+        for index, name in enumerate(names):
+            if name is None:
+                continue
+            if name in seen:
+                duplicates.add(name)
+            seen[name] = index
+        if duplicates and strict:
+            raise ValueError(
+                "{0} uses name-keyed masks, but segment names are not unique: {1}.".format(
+                    label, ", ".join(sorted(str(x) for x in duplicates))
+                )
+            )
+
+    for key, value in option.items():
+        if isinstance(key, int):
+            index = int(key)
+            if index < 0 or index >= len(segments):
+                if strict:
+                    raise ValueError(
+                        "{0} index key {1} is out of range for {2} segments.".format(
+                            label, key, len(segments)
+                        )
+                    )
+                continue
+            source = "index"
+        elif isinstance(key, str):
+            matches = [i for i, name in enumerate(names) if name == key]
+            if len(matches) == 0:
+                if strict:
+                    raise ValueError(
+                        "{0} segment-name key {1!r} does not match any segment.".format(
+                            label, key
+                        )
+                    )
+                continue
+            if len(matches) > 1:
+                if strict:
+                    raise ValueError(
+                        "{0} segment-name key {1!r} matches multiple segments.".format(
+                            label, key
+                        )
+                    )
+                continue
+            index = matches[0]
+            source = "name"
+        else:
+            if strict:
+                raise TypeError(
+                    "{0} keys must be integer segment indices or string segment names.".format(
+                        label
+                    )
+                )
+            continue
+
+        if assigned_by[index] is not None and strict:
+            raise ValueError(
+                "{0} assigns segment {1} by both {2} and {3}; use one target form.".format(
+                    label, index, assigned_by[index], source
+                )
+            )
+        resolved[index] = value
+        assigned_by[index] = source
+
+    return resolved
+
+
 def _build_data_vectors(
     segments,
     segment_weights=None,
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
+    mask_assignment_strict=True,
 ):
     """
     Build synchronized support-wave and fit-point data vectors.
@@ -294,6 +393,18 @@ def _build_data_vectors(
     fit_masks = []
     fit_weights = []
     seg_meta = []
+    exclude_mask_by_segment = _resolve_per_segment_mask_options(
+        segments,
+        exclude_mask,
+        "exclude_mask",
+        strict=mask_assignment_strict,
+    )
+    exclude_masks_by_segment = _resolve_per_segment_mask_options(
+        segments,
+        exclude_masks,
+        "exclude_masks",
+        strict=mask_assignment_strict,
+    )
 
     start_support = 0
     start_fit = 0
@@ -313,13 +424,15 @@ def _build_data_vectors(
 
         reg = _select_segment_option(regions, i, seg)
         ex = _select_segment_option(exclude_regions, i, seg)
-        ex_mask = _select_segment_option(exclude_mask, i, seg)
+        ex_mask = exclude_mask_by_segment[i]
+        ex_masks = exclude_masks_by_segment[i]
 
         mask_result = compose_fit_mask(
             seg,
             regions=reg,
             exclude_regions=ex,
             exclude_mask=ex_mask,
+            exclude_masks=ex_masks,
             mask_threshold=mask_threshold,
         )
         fit_m = mask_result.effective_mask
@@ -1253,6 +1366,7 @@ def reconstruct_phoenix_legendre_models_for_segments(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
     mdeg=2,
     rv_bary_kms=None,
@@ -1297,16 +1411,30 @@ def reconstruct_phoenix_legendre_models_for_segments(
 
     used_masks = []
     excluded_masks = []
+    exclude_mask_by_segment = _resolve_per_segment_mask_options(
+        segments,
+        exclude_mask,
+        "exclude_mask",
+        strict=True,
+    )
+    exclude_masks_by_segment = _resolve_per_segment_mask_options(
+        segments,
+        exclude_masks,
+        "exclude_masks",
+        strict=True,
+    )
     for index, seg in enumerate(segments):
         reg = _select_segment_option(regions, index, seg)
         ex = _select_segment_option(exclude_regions, index, seg)
-        ex_mask = _select_segment_option(exclude_mask, index, seg)
+        ex_mask = exclude_mask_by_segment[index]
+        ex_masks = exclude_masks_by_segment[index]
         used_masks.append(
             build_effective_fit_mask(
                 seg,
                 regions=reg,
                 exclude_regions=ex,
                 exclude_mask=ex_mask,
+                exclude_masks=ex_masks,
                 mask_threshold=mask_threshold,
             )
         )
@@ -1316,6 +1444,7 @@ def reconstruct_phoenix_legendre_models_for_segments(
                 regions=reg,
                 exclude_regions=ex,
                 exclude_mask=ex_mask,
+                exclude_masks=ex_masks,
                 mask_threshold=mask_threshold,
             )
         )
@@ -1450,6 +1579,7 @@ def diagnose_phoenix_fixed_params(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
     mdeg=2,
     rv_bary_kms=0.0,
@@ -1527,6 +1657,7 @@ def diagnose_phoenix_fixed_params(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
     )
 
@@ -1744,6 +1875,7 @@ def fit_phoenix_full_spectrum(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
     mdeg=2,
     rv_bary_kms=0.0,
@@ -1822,8 +1954,12 @@ def fit_phoenix_full_spectrum(
         Callable applied to each segment wavelength array. Points where the
         returned mask is True are excluded. Non-boolean outputs are converted to
         boolean using a threshold (`> 0.5`), which is useful for Spyctres
-        telluric masks. May also be a dict keyed by segment index or name, or a
-        list of named callables such as ``[("telluric", fn), ("line_core", fn)]``.
+        telluric masks. May also be a dict keyed by segment index or name.
+
+    exclude_masks : sequence or dict, optional
+        Preferred multi-mask API. A sequence of named masks applies globally,
+        for example ``[("telluric", fn), ("line_core", fn)]``. A dict may map
+        segment index or segment name to one or more named masks.
 
     mask_threshold : float, optional
         Numeric threshold used when converting non-boolean exclusion-mask
@@ -1983,6 +2119,7 @@ def fit_phoenix_full_spectrum(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
     )
     if support_wave_all.size == 0 or flux_all.size == 0:

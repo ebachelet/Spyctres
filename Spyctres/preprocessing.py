@@ -15,16 +15,75 @@ class MaskResult:
     settings: dict
 
     @property
+    def fit_use_mask(self):
+        """Alias for ``effective_mask``; True means the pixel is fitted."""
+        return self.effective_mask
+
+    @property
+    def explicit_exclusion_mask(self):
+        """Alias for ``excluded_mask``; True means explicitly rejected."""
+        return self.excluded_mask
+
+    @property
+    def data_invalid_mask(self):
+        """Pixels rejected by the segment mask or invalid wave/flux/error."""
+        out = np.zeros_like(self.effective_mask, dtype=bool)
+        for key in ("segment_mask", "invalid_wave", "invalid_flux", "invalid_error"):
+            if key in self.rejection_masks:
+                out |= np.asarray(self.rejection_masks[key], dtype=bool)
+        return out
+
+    @property
+    def fit_rejection_mask(self):
+        """Pixels rejected for any reason; inverse of ``effective_mask``."""
+        return ~np.asarray(self.effective_mask, dtype=bool)
+
+    @property
     def counts(self):
-        """Return JSON-safe pixel counts for each rejection reason."""
-        counts = {
+        """Return JSON-safe pixel counts for each rejection reason.
+
+        Per-reason counts are raw reason counts: if a pixel is rejected by two
+        reasons, it contributes to both reason counts. The total/union counts
+        below are overlap-aware.
+        """
+        reason_counts = {
             key: int(np.count_nonzero(mask))
             for key, mask in self.rejection_masks.items()
         }
+        overlap_reason_masks = [
+            np.asarray(mask, dtype=bool)
+            for key, mask in self.rejection_masks.items()
+            if key not in {"exclude_mask", "nonfinite_mask_output"}
+        ]
+        reason_stack = (
+            np.vstack(
+                overlap_reason_masks
+            )
+            if overlap_reason_masks
+            else np.zeros((0, self.effective_mask.size), dtype=bool)
+        )
+        n_reasons = (
+            np.sum(reason_stack, axis=0)
+            if reason_stack.size
+            else np.zeros_like(self.effective_mask, dtype=int)
+        )
+        counts = dict(reason_counts)
+        counts["reason_counts"] = dict(reason_counts)
         counts["total"] = int(self.effective_mask.size)
         counts["used"] = int(np.count_nonzero(self.effective_mask))
         counts["rejected"] = counts["total"] - counts["used"]
         counts["explicitly_excluded"] = int(np.count_nonzero(self.excluded_mask))
+        counts["n_pixels"] = counts["total"]
+        counts["n_fit"] = counts["used"]
+        counts["n_rejected_total"] = counts["rejected"]
+        counts["n_rejected_by_reason"] = dict(reason_counts)
+        counts["n_rejected_by_explicit_union"] = int(
+            np.count_nonzero(self.explicit_exclusion_mask)
+        )
+        counts["n_rejected_by_data_invalid"] = int(
+            np.count_nonzero(self.data_invalid_mask)
+        )
+        counts["n_rejected_by_multiple_reasons"] = int(np.count_nonzero(n_reasons > 1))
         return counts
 
     def to_metadata(self, label="fit_mask"):
@@ -36,12 +95,74 @@ class MaskResult:
             "counts": self.counts,
         }
 
+    def to_summary(self):
+        """Return a compact JSON-safe mask summary for notebooks/GUI output."""
+        counts = self.counts
+        total = max(1, int(counts["n_pixels"]))
+        explicit_names = list(self.settings.get("individual_exclusion_masks", []))
+        explicit_counts = {
+            name: int(counts.get("exclude_mask:{0}".format(name), 0))
+            for name in explicit_names
+        }
+        return {
+            "n_pixels": int(counts["n_pixels"]),
+            "n_fit": int(counts["n_fit"]),
+            "n_rejected_total": int(counts["n_rejected_total"]),
+            "fit_fraction": float(counts["n_fit"] / total),
+            "rejected_fraction": float(counts["n_rejected_total"] / total),
+            "n_rejected_by_data_invalid": int(counts["n_rejected_by_data_invalid"]),
+            "n_rejected_by_explicit_union": int(
+                counts["n_rejected_by_explicit_union"]
+            ),
+            "n_rejected_by_multiple_reasons": int(
+                counts["n_rejected_by_multiple_reasons"]
+            ),
+            "explicit_exclusion_counts": explicit_counts,
+            "mask_true_means": self.settings.get("mask_true_means", "use"),
+            "exclude_mask_true_means": self.settings.get(
+                "exclude_mask_true_means",
+                "reject",
+            ),
+        }
 
-def coerce_boolean_mask(values, shape, threshold=0.5, name="mask"):
+
+def convert_mask_polarity(mask, input_true_means="reject", output_true_means="use"):
+    """Convert a mask between common polarity conventions.
+
+    Parameters
+    ----------
+    mask : array-like
+        Boolean-like mask.
+    input_true_means, output_true_means : {"use", "reject"}
+        Input and desired output polarity. ``"reject"`` corresponds to the
+        Astropy/Specutils/NumPy masked-array convention; ``"use"`` corresponds
+        to Spyctres' internal fit-use convention.
+    """
+    input_true_means = str(input_true_means).strip().lower()
+    output_true_means = str(output_true_means).strip().lower()
+    allowed = {"use", "reject"}
+    if input_true_means not in allowed or output_true_means not in allowed:
+        raise ValueError("Mask polarity must be 'use' or 'reject'.")
+    out = np.asarray(mask, dtype=bool)
+    if input_true_means == output_true_means:
+        return np.array(out, dtype=bool, copy=True)
+    return ~out
+
+
+def coerce_boolean_mask(
+    values,
+    shape,
+    threshold=0.5,
+    name="mask",
+    nonfinite_policy="false",
+):
     """Convert boolean/numeric mask values to a validated boolean array."""
     threshold = float(threshold)
     if not np.isfinite(threshold):
         raise ValueError("threshold must be finite.")
+    nonfinite_policy = str(nonfinite_policy).strip().lower()
+    if nonfinite_policy not in {"false", "true", "raise"}:
+        raise ValueError("nonfinite_policy must be 'false', 'true', or 'raise'.")
     array = np.asarray(values)
     if array.shape != tuple(shape):
         raise ValueError(
@@ -55,7 +176,31 @@ def coerce_boolean_mask(values, shape, threshold=0.5, name="mask"):
         array.dtype, np.complexfloating
     ):
         raise TypeError("{0} must contain boolean or real numeric values.".format(name))
-    return np.asarray(array > threshold, dtype=bool)
+    finite = np.isfinite(array)
+    if nonfinite_policy == "raise" and np.any(~finite):
+        raise ValueError("{0} contains nonfinite values.".format(name))
+    out = np.asarray(array > threshold, dtype=bool)
+    if nonfinite_policy == "true":
+        out |= ~finite
+    return out
+
+
+def _nonfinite_numeric_mask(values, shape, name):
+    """Return nonfinite positions for validated real numeric mask values."""
+    array = np.asarray(values)
+    if array.shape != tuple(shape):
+        raise ValueError(
+            "{0} must have shape {1}; got {2}.".format(
+                name, tuple(shape), array.shape
+            )
+        )
+    if array.dtype == bool:
+        return np.zeros(tuple(shape), dtype=bool)
+    if not np.issubdtype(array.dtype, np.number) or np.issubdtype(
+        array.dtype, np.complexfloating
+    ):
+        raise TypeError("{0} must contain boolean or real numeric values.".format(name))
+    return ~np.isfinite(array)
 
 
 def _mask_callable_name(mask_spec, fallback="exclude_mask"):
@@ -210,27 +355,45 @@ def compose_fit_mask(
         reasons["exclude_regions"] = _inside_regions(wave, exclude_regions)
 
     callable_masks = []
+    nonfinite_callable_masks = []
     for callable_name, callable_fn in _normalize_mask_specs(
         exclude_mask=exclude_mask,
         exclude_masks=exclude_masks,
     ):
+        raw_values = callable_fn(wave)
         callable_mask = coerce_boolean_mask(
-            callable_fn(wave),
+            raw_values,
             shape,
             threshold=mask_threshold,
             name="{0} result".format(callable_name),
+            nonfinite_policy="true",
+        )
+        nonfinite_mask = _nonfinite_numeric_mask(
+            raw_values,
+            shape,
+            name="{0} result".format(callable_name),
         )
         callable_masks.append((callable_name, callable_mask))
+        nonfinite_callable_masks.append((callable_name, nonfinite_mask))
 
     if callable_masks:
         exclude_union = np.zeros(shape, dtype=bool)
+        nonfinite_union = np.zeros(shape, dtype=bool)
         for callable_name, callable_mask in callable_masks:
             exclude_union |= callable_mask
             reasons["exclude_mask:{0}".format(callable_name)] = callable_mask
+        for callable_name, nonfinite_mask in nonfinite_callable_masks:
+            nonfinite_union |= nonfinite_mask
+            if np.any(nonfinite_mask):
+                reasons[
+                    "nonfinite_mask_output:{0}".format(callable_name)
+                ] = nonfinite_mask
         reasons["exclude_mask"] = exclude_union
+        reasons["nonfinite_mask_output"] = nonfinite_union
         callable_names = [name for name, _mask in callable_masks]
     else:
         reasons["exclude_mask"] = np.zeros(shape, dtype=bool)
+        reasons["nonfinite_mask_output"] = np.zeros(shape, dtype=bool)
         callable_names = []
 
     rejected = np.zeros(shape, dtype=bool)
@@ -247,9 +410,22 @@ def compose_fit_mask(
         "exclude_regions": _serialize_regions(exclude_regions),
         "exclude_mask": callable_names[0] if len(callable_names) == 1 else None,
         "exclude_masks": list(callable_names),
+        "exclude_masks_api": (
+            "combined"
+            if exclude_mask is not None and exclude_masks is not None
+            else ("exclude_masks" if exclude_masks is not None else "exclude_mask")
+        ),
+        "exclude_mask_summary_kind": "union",
+        "explicit_exclusion_union_mask_name": "exclude_mask",
+        "individual_exclusion_masks": list(callable_names),
+        "exclude_mask_union_derived_from": list(callable_names),
         "mask_threshold": mask_threshold,
+        "numeric_mask_threshold": mask_threshold,
+        "numeric_mask_reject_if": "> threshold",
         "mask_true_means": "use",
+        "boolean_mask_true_means": "reject",
         "exclude_mask_true_means": "reject",
+        "nonfinite_mask_value_policy": "reject",
     }
     return MaskResult(
         effective_mask=~rejected,

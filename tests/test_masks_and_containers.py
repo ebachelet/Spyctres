@@ -13,7 +13,7 @@ from Spyctres.io import (
     SpectrumSegment,
     make_padded_window_segments,
 )
-from Spyctres.preprocessing import apply_fit_mask, compose_fit_mask
+from Spyctres.preprocessing import apply_fit_mask, compose_fit_mask, convert_mask_polarity
 
 
 def test_segment_default_mask_rejects_invalid_data_and_errors():
@@ -24,6 +24,31 @@ def test_segment_default_mask_rejects_invalid_data_and_errors():
     )
 
     assert np.array_equal(segment.mask, [True, False, False, False])
+
+
+def test_segment_valid_and_invalid_mask_aliases_and_constructors():
+    invalid_mask = np.array([False, True, False])
+    segment = SpectrumSegment.from_invalid_mask(
+        wave=[1.0, 2.0, 3.0],
+        flux=[1.0, 1.0, 1.0],
+        invalid_mask=invalid_mask,
+    )
+
+    assert np.array_equal(segment.mask, [True, False, True])
+    assert np.array_equal(segment.valid_mask, segment.mask)
+    assert np.array_equal(segment.use_mask, segment.mask)
+    assert np.array_equal(segment.invalid_mask, invalid_mask)
+    assert np.array_equal(
+        convert_mask_polarity(invalid_mask, input_true_means="reject", output_true_means="use"),
+        segment.mask,
+    )
+
+    valid_segment = SpectrumSegment.from_valid_mask(
+        wave=[1.0, 2.0, 3.0],
+        flux=[1.0, 1.0, 1.0],
+        valid_mask=[True, False, True],
+    )
+    assert np.array_equal(valid_segment.mask, segment.mask)
 
 
 def test_float_exclusion_mask_is_thresholded_and_composed():
@@ -68,11 +93,14 @@ def test_named_multiple_exclusion_masks_are_unionized_and_recorded():
 
     result = compose_fit_mask(
         segment,
-        exclude_mask=[("telluric", telluric), {"name": "line_core", "callable": line_core}],
+        exclude_masks=[("telluric", telluric), {"name": "line_core", "callable": line_core}],
     )
 
     assert np.array_equal(result.effective_mask, [True, False, True, False, True])
     assert np.array_equal(result.excluded_mask, [False, True, False, True, False])
+    assert np.array_equal(result.fit_use_mask, result.effective_mask)
+    assert np.array_equal(result.explicit_exclusion_mask, result.excluded_mask)
+    assert np.array_equal(result.fit_rejection_mask, ~result.effective_mask)
     assert np.array_equal(
         result.rejection_masks["exclude_mask:telluric"],
         [False, True, False, False, False],
@@ -82,8 +110,14 @@ def test_named_multiple_exclusion_masks_are_unionized_and_recorded():
         [False, False, False, True, False],
     )
     assert result.settings["exclude_masks"] == ["telluric", "line_core"]
+    assert result.settings["exclude_masks_api"] == "exclude_masks"
+    assert result.settings["exclude_mask_summary_kind"] == "union"
+    assert result.settings["exclude_mask_union_derived_from"] == ["telluric", "line_core"]
     assert result.settings["mask_true_means"] == "use"
     assert result.settings["exclude_mask_true_means"] == "reject"
+    assert result.settings["numeric_mask_reject_if"] == "> threshold"
+    assert result.counts["n_rejected_by_explicit_union"] == 2
+    assert result.counts["n_rejected_by_multiple_reasons"] == 0
 
 
 def test_mask_threshold_is_exposed_through_fitting_wrappers():
@@ -105,6 +139,59 @@ def test_mask_threshold_is_exposed_through_fitting_wrappers():
 
     assert np.array_equal(default, [True, True, False, False])
     assert np.array_equal(stricter, [True, True, True, False])
+
+
+def test_threshold_equality_keeps_pixel_and_nonfinite_numeric_masks_reject():
+    segment = SpectrumSegment(
+        wave=np.arange(4.0),
+        flux=np.ones(4),
+        err=np.ones(4),
+    )
+
+    def soft_exclusion(_wave):
+        return np.array([0.5, np.nan, np.inf, 0.6])
+
+    result = compose_fit_mask(segment, exclude_masks=[("soft", soft_exclusion)])
+
+    assert np.array_equal(result.rejection_masks["exclude_mask:soft"], [False, True, True, True])
+    assert np.array_equal(result.rejection_masks["nonfinite_mask_output:soft"], [False, True, True, False])
+    assert np.array_equal(result.effective_mask, [True, False, False, False])
+    assert result.settings["nonfinite_mask_value_policy"] == "reject"
+    assert result.counts["nonfinite_mask_output"] == 2
+
+
+def test_overlap_aware_counts_do_not_double_count_total_rejections():
+    segment = SpectrumSegment(
+        wave=np.arange(4.0),
+        flux=np.ones(4),
+        err=np.ones(4),
+    )
+
+    def telluric(wave):
+        return (wave == 1.0) | (wave == 2.0)
+
+    def core(wave):
+        return wave == 2.0
+
+    result = compose_fit_mask(
+        segment,
+        exclude_masks=[("telluric", telluric), ("core", core)],
+    )
+
+    assert result.counts["exclude_mask:telluric"] == 2
+    assert result.counts["exclude_mask:core"] == 1
+    assert result.counts["n_rejected_by_explicit_union"] == 2
+    assert result.counts["n_rejected_total"] == 2
+    assert result.counts["n_rejected_by_multiple_reasons"] == 1
+
+    summary = result.to_summary()
+    assert summary["n_pixels"] == 4
+    assert summary["n_fit"] == 2
+    assert summary["fit_fraction"] == 0.5
+    assert summary["explicit_exclusion_counts"] == {"telluric": 2, "core": 1}
+    assert summary["n_rejected_by_multiple_reasons"] == 1
+    assert summary["mask_true_means"] == "use"
+    assert summary["exclude_mask_true_means"] == "reject"
 
 
 def test_collection_preserves_positive_segment_weights():
@@ -147,6 +234,10 @@ def test_mask_provenance_retains_overlapping_rejection_reasons():
     )
     assert result.counts["used"] == 1
     assert result.counts["rejected"] == 4
+    assert np.array_equal(
+        result.data_invalid_mask,
+        [False, True, True, True, False],
+    )
 
 
 def test_apply_fit_mask_copies_inputs_and_records_json_safe_history():
@@ -271,7 +362,7 @@ def test_build_data_vectors_selects_per_segment_exclusion_masks_by_name_and_inde
 
     vectors = _build_data_vectors(
         [first, second],
-        exclude_mask={
+        exclude_masks={
             "first": ("first_line", first_mask),
             1: ("second_line", second_mask),
         },
@@ -305,6 +396,27 @@ def test_build_data_vectors_keeps_global_named_mask_dict_as_callable_spec():
 
     assert np.array_equal(fit_masks[0], [True, False, True])
     assert seg_meta[0]["mask_provenance"]["settings"]["exclude_masks"] == ["central"]
+
+
+def test_per_segment_mask_assignment_rejects_ambiguous_or_bad_keys():
+    first = SpectrumSegment([1.0, 2.0], [1.0, 1.0], name="dup")
+    second = SpectrumSegment([1.0, 2.0], [1.0, 1.0], name="dup")
+    unique = SpectrumSegment([1.0, 2.0], [1.0, 1.0], name="unique")
+
+    def mask(_wave):
+        return [False, True]
+
+    with pytest.raises(ValueError, match="not unique"):
+        _build_data_vectors([first, second], exclude_masks={"dup": ("m", mask)})
+
+    with pytest.raises(ValueError, match="out of range"):
+        _build_data_vectors([unique], exclude_masks={2: ("m", mask)})
+
+    with pytest.raises(ValueError, match="does not match"):
+        _build_data_vectors([unique], exclude_masks={"missing": ("m", mask)})
+
+    with pytest.raises(ValueError, match="by both"):
+        _build_data_vectors([unique], exclude_masks={0: ("i", mask), "unique": ("n", mask)})
 
 
 def test_reconstruction_masks_match_per_segment_exclusion_dictionary():

@@ -287,6 +287,48 @@ class SpectrumSegment(object):
             resolution=self.resolution if resolution is None else resolution,
         )
 
+    @property
+    def valid_mask(self):
+        """Boolean fit-use mask; True means the pixel is valid/useable."""
+        return np.array(self.mask, dtype=bool, copy=True)
+
+    @property
+    def use_mask(self):
+        """Alias for ``valid_mask``; True means the pixel is valid/useable."""
+        return self.valid_mask
+
+    @property
+    def invalid_mask(self):
+        """Astropy/NumPy-style invalid mask; True means the pixel is rejected."""
+        return ~np.asarray(self.mask, dtype=bool)
+
+    @classmethod
+    def from_valid_mask(cls, wave, flux, valid_mask=None, **kwargs):
+        """Construct a segment from a Spyctres-style valid/use mask.
+
+        ``valid_mask`` uses Spyctres' internal polarity: True means the pixel
+        may be used. This is equivalent to passing ``mask=valid_mask``.
+        """
+        if "mask" in kwargs:
+            raise TypeError("Use either mask= or valid_mask=, not both.")
+        return cls(wave, flux, mask=valid_mask, **kwargs)
+
+    @classmethod
+    def from_invalid_mask(cls, wave, flux, invalid_mask=None, **kwargs):
+        """Construct a segment from an Astropy/Specutils-style invalid mask.
+
+        ``invalid_mask`` follows the masked-array convention: True means the
+        pixel is bad/rejected. It is inverted before storage as Spyctres'
+        valid/use ``mask``.
+        """
+        if "mask" in kwargs:
+            raise TypeError("Use either mask= or invalid_mask=, not both.")
+        if invalid_mask is None:
+            mask = None
+        else:
+            mask = ~np.asarray(invalid_mask, dtype=bool)
+        return cls(wave, flux, mask=mask, **kwargs)
+
     def sorted(self):
         idx = np.argsort(self.wave)
         return self.copy(
