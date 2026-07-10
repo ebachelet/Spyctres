@@ -26,6 +26,16 @@ from Spyctres.plotting import plot_full_spectrum_fit
 from Spyctres.recipes import pick_grid_range
 
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+DEFAULT_FLOYDS_EXAMPLE = os.path.join(
+    REPO_ROOT,
+    "examples",
+    "data",
+    "Gaia21ccu_2024_11_23_FLOYDS.csv",
+)
+
+
 def build_parser():
     return argparse.ArgumentParser(
         description=(
@@ -35,11 +45,25 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
+            "  python scripts/floyds_fit_smoketest.py \\\n"
+            "    --wave-medium vacuum \\\n"
+            "    --forward-model native_interp \\\n"
+            "    --wmin 4000 \\\n"
+            "    --wmax 5200 \\\n"
+            "    --teff-min 8000 \\\n"
+            "    --teff-max 11000 \\\n"
+            "    --feh-min -0.5 \\\n"
+            "    --feh-max 0.0 \\\n"
+            "    --logg-min 3.5 \\\n"
+            "    --logg-max 5.0 \\\n"
+            "    --rv-grid-n 41 \\\n"
+            "    --mdeg 2\n\n"
             "  python scripts/floyds_fit_smoketest.py /path/to/FLOYDS.csv\n\n"
             "  python scripts/floyds_fit_smoketest.py \\\n"
             "    --wave-medium vacuum \\\n"
             "    --forward-model native_interp \\\n"
-            "    --wmin 3800 --wmax 5600 \\\n"
+            "    --wmin 4000 --wmax 5200 \\\n"
+            "    --rv-grid-n 41 \\\n"
             "    /path/to/FLOYDS.csv\n\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
@@ -51,7 +75,15 @@ def build_parser():
 
 def main():
     parser = build_parser()
-    parser.add_argument("file", help="Input FLOYDS CSV spectrum")
+    parser.add_argument(
+        "file",
+        nargs="?",
+        default=DEFAULT_FLOYDS_EXAMPLE,
+        help=(
+            "Input FLOYDS CSV spectrum. Defaults to the packaged Gaia21ccu "
+            "example under examples/data/."
+        ),
+    )
     parser.add_argument(
         "--phoenix-dir",
         default=None,
