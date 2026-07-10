@@ -129,13 +129,17 @@ result = fit_phoenix_spectrum(
     forward_model="native_interp",
 )
 print(result["teff"], result["rv_kms"])
+print(result.quality_report_text())
 result.to_json()
 ```
 
 `PhoenixFitResult` retains dictionary-style access while also carrying model
 arrays, actual fit masks, continuum coefficients, parameter covariance, and
-auditable velocity/cache provenance. Existing low-level fitting functions keep
-returning dictionaries for backward compatibility.
+auditable velocity/cache provenance. The compact `quality_report` and
+`quality_report_text()` summaries surface the main warnings, mask fraction,
+dropped segments, and per-segment fit-pixel counts without requiring users to
+inspect the full nested diagnostics block. Existing low-level fitting functions
+keep returning dictionaries for backward compatibility.
 
 ## Local line diagnostics
 

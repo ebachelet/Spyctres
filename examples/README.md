@@ -4,8 +4,8 @@ This directory contains a worked notebook example of PHOENIX-based full-spectrum
 
 For a shorter non-notebook workflow, use `simple_phoenix_fit.py`. It reads any
 registered instrument format, invokes the public structured API, prints the
-main fitted parameters, and can save compact JSON plus a diagnostic referee
-plot:
+main fitted parameters plus a human-readable fit-quality report, and can save
+compact JSON plus a diagnostic referee plot:
 
 ```bash
 python examples/simple_phoenix_fit.py \
@@ -23,6 +23,8 @@ and interactive plotting. It does not yet fit rotational broadening,
 macroturbulence, non-solar abundance patterns, or wavelength-dependent details
 of an instrument's LSF. Consequently, individual line widths may visibly
 disagree even when the broad atmospheric classification is informative. Use the
+printed quality report to check flags, masked fraction, dropped segments, and
+per-segment fit-pixel counts before interpreting the fitted parameters. Use the
 instrument-specific recipes and local line diagnostics when assessing whether
 line-width residuals arise from the LSF, stellar broadening, masks, or model
 physics.
