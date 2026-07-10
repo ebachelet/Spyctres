@@ -111,11 +111,20 @@ class MaskResult:
             "fit_fraction": float(counts["n_fit"] / total),
             "rejected_fraction": float(counts["n_rejected_total"] / total),
             "n_rejected_by_data_invalid": int(counts["n_rejected_by_data_invalid"]),
+            "data_invalid_fraction": float(
+                counts["n_rejected_by_data_invalid"] / total
+            ),
             "n_rejected_by_explicit_union": int(
                 counts["n_rejected_by_explicit_union"]
             ),
+            "explicit_exclusion_fraction": float(
+                counts["n_rejected_by_explicit_union"] / total
+            ),
             "n_rejected_by_multiple_reasons": int(
                 counts["n_rejected_by_multiple_reasons"]
+            ),
+            "multiple_rejection_fraction": float(
+                counts["n_rejected_by_multiple_reasons"] / total
             ),
             "explicit_exclusion_counts": explicit_counts,
             "mask_true_means": self.settings.get("mask_true_means", "use"),

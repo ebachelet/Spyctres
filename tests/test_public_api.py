@@ -65,7 +65,11 @@ def test_structured_result_quality_report_summarizes_fit_selection():
                     "mask_fraction": np.float64(0.475),
                     "mask_summary": {
                         "n_rejected_by_explicit_union": np.int64(10),
+                        "explicit_exclusion_fraction": np.float64(0.125),
+                        "n_rejected_by_data_invalid": np.int64(4),
+                        "data_invalid_fraction": np.float64(0.05),
                         "n_rejected_by_multiple_reasons": np.int64(2),
+                        "multiple_rejection_fraction": np.float64(0.025),
                     },
                     "lsf_fwhm_kms": np.float64(5.0),
                     "resolution_R_effective": np.float64(59958.0),
@@ -87,7 +91,11 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     assert report["n_dropped_segments"] == 1
     assert report["segments"][0]["name"] == "VIS"
     assert report["segments"][0]["explicit_exclusion_count"] == 10
+    assert report["segments"][0]["explicit_exclusion_fraction"] == 0.125
+    assert report["segments"][0]["data_invalid_count"] == 4
+    assert report["segments"][0]["data_invalid_fraction"] == 0.05
     assert report["segments"][0]["multiple_rejection_count"] == 2
+    assert report["segments"][0]["multiple_rejection_fraction"] == 0.025
 
     text = result.quality_report_text()
     assert "Quality report:" in text

@@ -188,6 +188,9 @@ def test_overlap_aware_counts_do_not_double_count_total_rejections():
     assert summary["n_pixels"] == 4
     assert summary["n_fit"] == 2
     assert summary["fit_fraction"] == 0.5
+    assert summary["explicit_exclusion_fraction"] == 0.5
+    assert summary["data_invalid_fraction"] == 0.0
+    assert summary["multiple_rejection_fraction"] == 0.25
     assert summary["explicit_exclusion_counts"] == {"telluric": 2, "core": 1}
     assert summary["n_rejected_by_multiple_reasons"] == 1
     assert summary["mask_true_means"] == "use"

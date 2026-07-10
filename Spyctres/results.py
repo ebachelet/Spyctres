@@ -231,8 +231,18 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
                 "explicit_exclusion_count": mask_summary.get(
                     "n_rejected_by_explicit_union"
                 ),
+                "explicit_exclusion_fraction": mask_summary.get(
+                    "explicit_exclusion_fraction"
+                ),
+                "data_invalid_count": mask_summary.get(
+                    "n_rejected_by_data_invalid"
+                ),
+                "data_invalid_fraction": mask_summary.get("data_invalid_fraction"),
                 "multiple_rejection_count": mask_summary.get(
                     "n_rejected_by_multiple_reasons"
+                ),
+                "multiple_rejection_fraction": mask_summary.get(
+                    "multiple_rejection_fraction"
                 ),
                 "lsf_fwhm_kms": segment.get("lsf_fwhm_kms"),
                 "resolution_R_effective": segment.get("resolution_R_effective"),
