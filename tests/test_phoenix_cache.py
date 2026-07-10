@@ -87,3 +87,33 @@ def test_interpolator_match_uses_exact_wave_and_parameter_axes(tmp_path):
     assert not library.interpolator_matches(
         [5000.0, 5001.0], [5000.0], [0.0], [4.0], "air"
     )
+
+
+def test_interpolator_uses_scaled_axes_but_preserves_physical_grid(tmp_path):
+    library = make_library(tmp_path)
+    library.wave = np.array([5000.0, 5001.0])
+    teff_grid = np.array([5000.0, 7000.0])
+    feh_grid = np.array([-1.0, 0.5])
+    logg_grid = np.array([3.0, 5.0])
+
+    flux_grid = np.empty((2, 2, 2, 2), dtype=float)
+    for it, teff in enumerate(teff_grid):
+        for iz, feh in enumerate(feh_grid):
+            for ig, logg in enumerate(logg_grid):
+                flux_grid[it, iz, ig, 0] = 0.001 * teff + 10.0 * feh + logg
+                flux_grid[it, iz, ig, 1] = 0.002 * teff - feh + 2.0 * logg
+
+    library._set_interpolator_from_flux_grid(
+        (teff_grid, feh_grid, logg_grid),
+        flux_grid,
+    )
+
+    assert np.array_equal(library._grid[0], teff_grid)
+    assert np.array_equal(library._interp_grid[0], [0.0, 1.0])
+    assert np.array_equal(library._interp_grid[1], [0.0, 1.0])
+    assert np.array_equal(library._interp_grid[2], [0.0, 1.0])
+
+    evaluated = library.evaluate(6000.0, -0.25, 4.0)
+
+    assert evaluated[0] == pytest.approx(0.001 * 6000.0 + 10.0 * -0.25 + 4.0)
+    assert evaluated[1] == pytest.approx(0.002 * 6000.0 - -0.25 + 2.0 * 4.0)

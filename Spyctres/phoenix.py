@@ -191,6 +191,9 @@ class PhoenixLibrary(object):
         self.phoenix_wave = fits.getdata(wave_path).astype(float)
         self._interp = None
         self._grid = None
+        self._interp_grid = None
+        self._grid_scale_origin = None
+        self._grid_scale = None
         self.wave = None  # the wave grid of the interpolator, usually observed_wave
 
     def template_path(self, teff, logg, feh):
@@ -379,6 +382,57 @@ class PhoenixLibrary(object):
         h.update(np.asarray(wave, dtype=float).tobytes())
         return "phoenix_cache_{0}.npz".format(h.hexdigest()[:12])
 
+    @staticmethod
+    def _scaled_parameter_grid(grid):
+        """Return normalized interpolation axes and the affine scaling.
+
+        The physical PHOENIX axes have very different numerical scales
+        (thousands of K for Teff, dex-level values for [Fe/H] and log g).
+        SciPy's RegularGridInterpolator recommends avoiding incommensurate
+        coordinate scales because they can introduce numerical artifacts.  We
+        therefore keep physical axes for cache/provenance but evaluate the
+        interpolator on affine-normalized axes.
+        """
+        axes = tuple(np.asarray(axis, dtype=float) for axis in grid)
+        origins = []
+        scales = []
+        scaled_axes = []
+        for axis in axes:
+            if axis.ndim != 1 or axis.size < 1:
+                raise ValueError("PHOENIX interpolation axes must be non-empty 1D arrays.")
+            origin = float(axis[0])
+            span = float(axis[-1] - axis[0]) if axis.size > 1 else 0.0
+            scale = span if np.isfinite(span) and span != 0.0 else 1.0
+            origins.append(origin)
+            scales.append(scale)
+            scaled_axes.append((axis - origin) / scale)
+        return tuple(scaled_axes), np.asarray(origins, dtype=float), np.asarray(scales, dtype=float)
+
+    def _set_interpolator_from_flux_grid(self, grid, flux_grid):
+        """Install a flux cube and scaled RegularGridInterpolator."""
+        self._grid = tuple(np.asarray(axis, dtype=float) for axis in grid)
+        self._flux_grid = np.asarray(flux_grid, dtype=float)
+        (
+            self._interp_grid,
+            self._grid_scale_origin,
+            self._grid_scale,
+        ) = self._scaled_parameter_grid(self._grid)
+        self._interp = RegularGridInterpolator(
+            self._interp_grid,
+            self._flux_grid,
+            method="linear",
+            bounds_error=True,
+        )
+        return self._interp
+
+    def _scale_parameter_point(self, point):
+        """Scale a physical PHOENIX parameter tuple for interpolation."""
+        if self._grid_scale_origin is None or self._grid_scale is None:
+            raise RuntimeError("Interpolator scaling is not initialized.")
+        point = np.asarray(point, dtype=float)
+        scaled = (point - self._grid_scale_origin) / self._grid_scale
+        return tuple(float(value) for value in scaled)
+
     def build_interpolator(self,
                        observed_wave,
                        teff_grid=None,
@@ -522,9 +576,13 @@ class PhoenixLibrary(object):
         if np.isnan(flux_grid).any() and not allow_missing:
             raise RuntimeError("NaNs present in flux_grid but allow_missing=False.")
 
-        # RegularGridInterpolator expects axes order matching the data
-        self._grid = (teff_grid, feh_grid, logg_grid)
-        self._interp = RegularGridInterpolator(self._grid, flux_grid, method="linear", bounds_error=True)
+        # Keep physical axes for cache identity/provenance, but build the
+        # interpolator on normalized axes to avoid incommensurate-coordinate
+        # numerical artifacts.
+        self._set_interpolator_from_flux_grid(
+            (teff_grid, feh_grid, logg_grid),
+            flux_grid,
+        )
 
         if cache_path is not None:
             report("Saving PHOENIX interpolator cache: {0}".format(cache_path))
@@ -541,7 +599,7 @@ class PhoenixLibrary(object):
         if self._interp is None or self.wave is None:
             raise RuntimeError("Interpolator not built. Call build_interpolator() first.")
         p = (validate_phoenix_teff(teff), float(feh), float(logg))
-        return self._interp(p)
+        return self._interp(self._scale_parameter_point(p))
     
     CACHE_SCHEMA_VERSION = 2
 
@@ -710,14 +768,9 @@ class PhoenixLibrary(object):
                    
         self.wave = wave
         self._observed_wave_medium = cached_observed_wave_medium
-        self._grid = (teff_grid, feh_grid, logg_grid)
-        self._flux_grid = flux_grid.astype(float, copy=False)
-
-        self._interp = RegularGridInterpolator(
-            self._grid,
-            self._flux_grid,
-            method="linear",
-            bounds_error=True,
+        self._set_interpolator_from_flux_grid(
+            (teff_grid, feh_grid, logg_grid),
+            flux_grid,
         )
 
         if self.verbose:
