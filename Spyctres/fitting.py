@@ -168,7 +168,13 @@ def _gaussian_broaden_velocity(wave, flux, fwhm_kms=None):
     )
 
 
-def build_effective_fit_mask(seg, regions=None, exclude_regions=None, exclude_mask=None):
+def build_effective_fit_mask(
+    seg,
+    regions=None,
+    exclude_regions=None,
+    exclude_mask=None,
+    mask_threshold=0.5,
+):
     """
     Build the effective boolean fit mask for a single SpectrumSegment.
 
@@ -182,10 +188,17 @@ def build_effective_fit_mask(seg, regions=None, exclude_regions=None, exclude_ma
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        mask_threshold=mask_threshold,
     ).effective_mask
 
 
-def build_excluded_mask(seg, regions=None, exclude_regions=None, exclude_mask=None):
+def build_excluded_mask(
+    seg,
+    regions=None,
+    exclude_regions=None,
+    exclude_mask=None,
+    mask_threshold=0.5,
+):
     """
     Build a boolean mask of pixels explicitly excluded by region/exclude rules.
 
@@ -197,6 +210,7 @@ def build_excluded_mask(seg, regions=None, exclude_regions=None, exclude_mask=No
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        mask_threshold=mask_threshold,
     ).excluded_mask
 
 
@@ -224,12 +238,26 @@ def _segment_support_ok(seg):
     return support_ok
 
 
+def _select_segment_option(option, index, seg):
+    """Select an optional per-segment setting by index or segment name."""
+    if not isinstance(option, dict):
+        return option
+    if "callable" in option or "func" in option:
+        return option
+    if index in option:
+        return option[index]
+    if seg.name in option:
+        return option[seg.name]
+    return None
+
+
 def _build_data_vectors(
     segments,
     segment_weights=None,
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    mask_threshold=0.5,
 ):
     """
     Build synchronized support-wave and fit-point data vectors.
@@ -283,21 +311,16 @@ def _build_data_vectors(
         else:
             e_full = np.asarray(seg.err, dtype=float)
 
-        if isinstance(regions, dict):
-            reg = regions.get(i, regions.get(seg.name, None))
-        else:
-            reg = regions
-
-        if isinstance(exclude_regions, dict):
-            ex = exclude_regions.get(i, exclude_regions.get(seg.name, None))
-        else:
-            ex = exclude_regions
+        reg = _select_segment_option(regions, i, seg)
+        ex = _select_segment_option(exclude_regions, i, seg)
+        ex_mask = _select_segment_option(exclude_mask, i, seg)
 
         mask_result = compose_fit_mask(
             seg,
             regions=reg,
             exclude_regions=ex,
-            exclude_mask=exclude_mask,
+            exclude_mask=ex_mask,
+            mask_threshold=mask_threshold,
         )
         fit_m = mask_result.effective_mask
         fit_m &= support_ok
@@ -1230,6 +1253,7 @@ def reconstruct_phoenix_legendre_models_for_segments(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    mask_threshold=0.5,
     mdeg=2,
     rv_bary_kms=None,
     R=None,
@@ -1271,24 +1295,30 @@ def reconstruct_phoenix_legendre_models_for_segments(
     if model_margin_A is None:
         model_margin_A = float(fit_result.get("model_margin_A", 200.0))
 
-    used_masks = [
-        build_effective_fit_mask(
-            seg,
-            regions=regions,
-            exclude_regions=exclude_regions,
-            exclude_mask=exclude_mask,
+    used_masks = []
+    excluded_masks = []
+    for index, seg in enumerate(segments):
+        reg = _select_segment_option(regions, index, seg)
+        ex = _select_segment_option(exclude_regions, index, seg)
+        ex_mask = _select_segment_option(exclude_mask, index, seg)
+        used_masks.append(
+            build_effective_fit_mask(
+                seg,
+                regions=reg,
+                exclude_regions=ex,
+                exclude_mask=ex_mask,
+                mask_threshold=mask_threshold,
+            )
         )
-        for seg in segments
-    ]
-    excluded_masks = [
-        build_excluded_mask(
-            seg,
-            regions=regions,
-            exclude_regions=exclude_regions,
-            exclude_mask=exclude_mask,
+        excluded_masks.append(
+            build_excluded_mask(
+                seg,
+                regions=reg,
+                exclude_regions=ex,
+                exclude_mask=ex_mask,
+                mask_threshold=mask_threshold,
+            )
         )
-        for seg in segments
-    ]
     segment_fwhm_kms = [
         _resolve_segment_fwhm_kms(seg, R=R, fwhm_kms=fwhm_kms)
         for seg in segments
@@ -1420,6 +1450,7 @@ def diagnose_phoenix_fixed_params(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    mask_threshold=0.5,
     mdeg=2,
     rv_bary_kms=0.0,
     R=None,
@@ -1496,6 +1527,7 @@ def diagnose_phoenix_fixed_params(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        mask_threshold=mask_threshold,
     )
 
     if support_wave_all.size == 0 or flux_all.size == 0:
@@ -1712,6 +1744,7 @@ def fit_phoenix_full_spectrum(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    mask_threshold=0.5,
     mdeg=2,
     rv_bary_kms=0.0,
     R=None,
@@ -1789,7 +1822,13 @@ def fit_phoenix_full_spectrum(
         Callable applied to each segment wavelength array. Points where the
         returned mask is True are excluded. Non-boolean outputs are converted to
         boolean using a threshold (`> 0.5`), which is useful for Spyctres
-        telluric masks.
+        telluric masks. May also be a dict keyed by segment index or name, or a
+        list of named callables such as ``[("telluric", fn), ("line_core", fn)]``.
+
+    mask_threshold : float, optional
+        Numeric threshold used when converting non-boolean exclusion-mask
+        outputs. Segment masks always use ``True == valid/use``; exclusion
+        callables always use ``True == reject`` after thresholding.
 
     mdeg : int, optional
         Degree of the multiplicative Legendre polynomial solved independently
@@ -1944,6 +1983,7 @@ def fit_phoenix_full_spectrum(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        mask_threshold=mask_threshold,
     )
     if support_wave_all.size == 0 or flux_all.size == 0:
         raise ValueError("No data points selected for fitting.")

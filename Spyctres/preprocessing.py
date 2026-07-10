@@ -58,6 +58,81 @@ def coerce_boolean_mask(values, shape, threshold=0.5, name="mask"):
     return np.asarray(array > threshold, dtype=bool)
 
 
+def _mask_callable_name(mask_spec, fallback="exclude_mask"):
+    """Return a stable, human-readable label for a mask callable spec."""
+    if isinstance(mask_spec, dict):
+        if "name" in mask_spec:
+            return str(mask_spec["name"])
+        mask_spec = mask_spec.get("callable", mask_spec.get("func"))
+    if (
+        isinstance(mask_spec, tuple)
+        and len(mask_spec) == 2
+        and isinstance(mask_spec[0], str)
+    ):
+        return str(mask_spec[0])
+    return getattr(mask_spec, "__name__", type(mask_spec).__name__) or fallback
+
+
+def _is_named_mask_tuple(mask_spec):
+    return (
+        isinstance(mask_spec, tuple)
+        and len(mask_spec) == 2
+        and isinstance(mask_spec[0], str)
+    )
+
+
+def _mask_callable_function(mask_spec):
+    """Extract the callable from a supported mask callable spec."""
+    if isinstance(mask_spec, dict):
+        if "callable" in mask_spec:
+            mask_spec = mask_spec["callable"]
+        elif "func" in mask_spec:
+            mask_spec = mask_spec["func"]
+        else:
+            raise TypeError("Mask spec dictionaries require a 'callable' or 'func' key.")
+    elif _is_named_mask_tuple(mask_spec):
+        mask_spec = mask_spec[1]
+    if not callable(mask_spec):
+        raise TypeError("Mask specs must be callables or named callable specs.")
+    return mask_spec
+
+
+def _normalize_mask_specs(exclude_mask=None, exclude_masks=None):
+    """Normalize one or more mask callable specs to ``(name, callable)`` pairs."""
+    specs = []
+    if exclude_mask is not None:
+        if (
+            not callable(exclude_mask)
+            and not isinstance(exclude_mask, dict)
+            and not _is_named_mask_tuple(exclude_mask)
+        ):
+            specs.extend(list(exclude_mask))
+        else:
+            specs.append(exclude_mask)
+    if exclude_masks is not None:
+        if (
+            callable(exclude_masks)
+            or isinstance(exclude_masks, dict)
+            or _is_named_mask_tuple(exclude_masks)
+        ):
+            specs.append(exclude_masks)
+        else:
+            specs.extend(list(exclude_masks))
+
+    normalized = []
+    used_names = {}
+    for spec in specs:
+        name = _mask_callable_name(spec)
+        fn = _mask_callable_function(spec)
+        base = name
+        count = used_names.get(base, 0)
+        used_names[base] = count + 1
+        if count:
+            name = "{0}_{1}".format(base, count + 1)
+        normalized.append((name, fn))
+    return normalized
+
+
 def _inside_regions(wave, regions):
     mask = np.zeros_like(wave, dtype=bool)
     for region in regions:
@@ -81,6 +156,7 @@ def compose_fit_mask(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
 ):
     """Compose fit masks once and retain a reason-resolved audit trail.
@@ -90,6 +166,11 @@ def compose_fit_mask(
     overlap. ``excluded_mask`` preserves the historical plotting definition:
     it contains wavelength-rule/callable exclusions, but not invalid data or
     pixels disabled by the segment's existing mask.
+
+    Mask polarity is explicit: input segment masks use ``True == valid/use``;
+    exclude-mask callables use ``True == reject/exclude`` after thresholding.
+    A callable may also be supplied as ``("name", fn)`` or
+    ``{"name": "name", "callable": fn}`` so provenance remains readable.
     """
     regions = None if regions is None else tuple(regions)
     exclude_regions = None if exclude_regions is None else tuple(exclude_regions)
@@ -128,17 +209,29 @@ def compose_fit_mask(
     else:
         reasons["exclude_regions"] = _inside_regions(wave, exclude_regions)
 
-    if exclude_mask is None:
-        reasons["exclude_mask"] = np.zeros(shape, dtype=bool)
-        callable_name = None
-    else:
-        reasons["exclude_mask"] = coerce_boolean_mask(
-            exclude_mask(wave),
+    callable_masks = []
+    for callable_name, callable_fn in _normalize_mask_specs(
+        exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
+    ):
+        callable_mask = coerce_boolean_mask(
+            callable_fn(wave),
             shape,
             threshold=mask_threshold,
-            name="exclude_mask result",
+            name="{0} result".format(callable_name),
         )
-        callable_name = getattr(exclude_mask, "__name__", type(exclude_mask).__name__)
+        callable_masks.append((callable_name, callable_mask))
+
+    if callable_masks:
+        exclude_union = np.zeros(shape, dtype=bool)
+        for callable_name, callable_mask in callable_masks:
+            exclude_union |= callable_mask
+            reasons["exclude_mask:{0}".format(callable_name)] = callable_mask
+        reasons["exclude_mask"] = exclude_union
+        callable_names = [name for name, _mask in callable_masks]
+    else:
+        reasons["exclude_mask"] = np.zeros(shape, dtype=bool)
+        callable_names = []
 
     rejected = np.zeros(shape, dtype=bool)
     for reason_mask in reasons.values():
@@ -152,8 +245,11 @@ def compose_fit_mask(
     settings = {
         "regions": _serialize_regions(regions),
         "exclude_regions": _serialize_regions(exclude_regions),
-        "exclude_mask": callable_name,
+        "exclude_mask": callable_names[0] if len(callable_names) == 1 else None,
+        "exclude_masks": list(callable_names),
         "mask_threshold": mask_threshold,
+        "mask_true_means": "use",
+        "exclude_mask_true_means": "reject",
     }
     return MaskResult(
         effective_mask=~rejected,
@@ -168,6 +264,7 @@ def apply_fit_mask(
     regions=None,
     exclude_regions=None,
     exclude_mask=None,
+    exclude_masks=None,
     mask_threshold=0.5,
     label="fit_mask",
 ):
@@ -177,6 +274,7 @@ def apply_fit_mask(
         regions=regions,
         exclude_regions=exclude_regions,
         exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
     )
     meta = dict(seg.meta)
