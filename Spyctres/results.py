@@ -102,6 +102,138 @@ def _normalize_plot_paths(plot_paths, relative_to=None, include_local_paths=Fals
     )
 
 
+def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
+    """Return a compact, JSON-safe summary of fit quality diagnostics.
+
+    Parameters
+    ----------
+    summary : mapping
+        Fit result dictionary or summary payload.
+    diagnostics : mapping, optional
+        Diagnostics block. If omitted, ``summary["diagnostics"]`` is used.
+    quality_flags : sequence, optional
+        Quality flags. If omitted, ``summary["quality_flags"]`` is used.
+
+    Notes
+    -----
+    This report is intentionally redundant with the full diagnostics block. The
+    diagnostics preserve the detailed machine-readable record, while this report
+    gives notebooks, scripts, and reviewers a stable headline view of the main
+    fit-quality concerns.
+    """
+    summary = {} if summary is None else dict(summary)
+    if diagnostics is None:
+        diagnostics = summary.get("diagnostics", {})
+    if hasattr(diagnostics, "to_dict"):
+        diagnostics = diagnostics.to_dict()
+    diagnostics = {} if diagnostics is None else dict(diagnostics)
+    if quality_flags is None:
+        quality_flags = summary.get("quality_flags", ())
+    flags = list(quality_flags or ())
+
+    chi2_red = summary.get("chi2_red", diagnostics.get("reduced_chi2"))
+    segments = []
+    for segment in diagnostics.get("segment_diagnostics", []):
+        mask_summary = dict(segment.get("mask_summary", {}))
+        segments.append(
+            {
+                "name": segment.get("name"),
+                "input_index": segment.get("input_index"),
+                "n_fit": segment.get("n_fit"),
+                "n_support": segment.get("n_support"),
+                "mask_fraction": segment.get("mask_fraction"),
+                "explicit_exclusion_count": mask_summary.get(
+                    "n_rejected_by_explicit_union"
+                ),
+                "multiple_rejection_count": mask_summary.get(
+                    "n_rejected_by_multiple_reasons"
+                ),
+                "lsf_fwhm_kms": segment.get("lsf_fwhm_kms"),
+                "resolution_R_effective": segment.get("resolution_R_effective"),
+            }
+        )
+    report = {
+        "success": summary.get("success"),
+        "quality_flags": flags,
+        "reduced_chi2": chi2_red,
+        "n_points": summary.get("n_points", diagnostics.get("n_pixels")),
+        "n_parameters": diagnostics.get("n_parameters"),
+        "degrees_of_freedom": diagnostics.get("degrees_of_freedom"),
+        "mask_fraction": diagnostics.get("mask_fraction"),
+        "n_input_segments": diagnostics.get("n_input_segments"),
+        "n_retained_segments": diagnostics.get("n_retained_segments"),
+        "n_dropped_segments": diagnostics.get("n_dropped_segments"),
+        "segments": segments,
+    }
+    return _jsonable(report)
+
+
+def format_fit_quality_report(result_or_report):
+    """Return a compact human-readable fit-quality summary.
+
+    Accepts a ``PhoenixFitResult``, a low-level fit-result dictionary, or an
+    already-built quality-report dictionary.
+    """
+    if hasattr(result_or_report, "quality_report"):
+        report = result_or_report.quality_report()
+    elif isinstance(result_or_report, Mapping):
+        if "quality_report" in result_or_report:
+            report = result_or_report["quality_report"]
+        elif "segments" in result_or_report and "quality_flags" in result_or_report:
+            report = result_or_report
+        else:
+            report = build_fit_quality_report(result_or_report)
+    else:
+        report = {}
+
+    report = {} if report is None else dict(report)
+    lines = ["Quality report:"]
+    flags = report.get("quality_flags") or ["unknown"]
+    lines.append("  flags: {0}".format(", ".join(str(flag) for flag in flags)))
+    if report.get("reduced_chi2") is not None:
+        lines.append("  chi2_red: {0:.4g}".format(float(report["reduced_chi2"])))
+    point_parts = []
+    if report.get("n_points") is not None:
+        point_parts.append("N={0}".format(int(report["n_points"])))
+    if report.get("degrees_of_freedom") is not None:
+        point_parts.append("dof={0}".format(int(report["degrees_of_freedom"])))
+    if report.get("n_parameters") is not None:
+        point_parts.append("parameters={0}".format(int(report["n_parameters"])))
+    if point_parts:
+        lines.append("  fit size: {0}".format(", ".join(point_parts)))
+    if report.get("mask_fraction") is not None:
+        lines.append("  masked fraction: {0:.1%}".format(float(report["mask_fraction"])))
+    if report.get("n_dropped_segments"):
+        lines.append("  dropped segments: {0}".format(int(report["n_dropped_segments"])))
+    segment_lines = []
+    for segment in report.get("segments", []):
+        name = segment.get("name")
+        label = str(name) if name else "segment {0}".format(
+            segment.get("input_index", "?")
+        )
+        pieces = [label]
+        if segment.get("n_fit") is not None and segment.get("n_support") is not None:
+            pieces.append(
+                "Nfit={0}/{1}".format(
+                    int(segment["n_fit"]),
+                    int(segment["n_support"]),
+                )
+            )
+        if segment.get("mask_fraction") is not None:
+            pieces.append("masked={0:.1%}".format(float(segment["mask_fraction"])))
+        if segment.get("explicit_exclusion_count") is not None:
+            pieces.append(
+                "explicit rejects={0}".format(
+                    int(segment["explicit_exclusion_count"])
+                )
+            )
+        segment_lines.append("; ".join(pieces))
+    if segment_lines:
+        lines.append("  segments:")
+        lines.extend("    - {0}".format(line) for line in segment_lines)
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class PhoenixFitDiagnostics(Mapping):
     """JSON-safe diagnostic summary for a deterministic PHOENIX fit."""
@@ -196,103 +328,16 @@ class PhoenixFitResult(Mapping):
         return payload
 
     def quality_report(self):
-        """Return a compact, JSON-safe summary of fit quality diagnostics.
-
-        This is intentionally redundant with the full diagnostics block.  The
-        diagnostics preserve the detailed machine-readable record, while this
-        report gives notebooks, scripts, and reviewers a stable headline view
-        of the main fit-quality concerns.
-        """
-        diagnostics = self.diagnostics.to_dict()
-        flags = list(self.quality_flags)
-        chi2_red = self.summary.get("chi2_red", diagnostics.get("reduced_chi2"))
-        segments = []
-        for segment in diagnostics.get("segment_diagnostics", []):
-            mask_summary = dict(segment.get("mask_summary", {}))
-            segments.append(
-                {
-                    "name": segment.get("name"),
-                    "input_index": segment.get("input_index"),
-                    "n_fit": segment.get("n_fit"),
-                    "n_support": segment.get("n_support"),
-                    "mask_fraction": segment.get("mask_fraction"),
-                    "explicit_exclusion_count": mask_summary.get(
-                        "n_rejected_by_explicit_union"
-                    ),
-                    "multiple_rejection_count": mask_summary.get(
-                        "n_rejected_by_multiple_reasons"
-                    ),
-                    "lsf_fwhm_kms": segment.get("lsf_fwhm_kms"),
-                    "resolution_R_effective": segment.get(
-                        "resolution_R_effective"
-                    ),
-                }
-            )
-        report = {
-            "success": self.summary.get("success"),
-            "quality_flags": flags,
-            "reduced_chi2": chi2_red,
-            "n_points": self.summary.get("n_points", diagnostics.get("n_pixels")),
-            "n_parameters": diagnostics.get("n_parameters"),
-            "degrees_of_freedom": diagnostics.get("degrees_of_freedom"),
-            "mask_fraction": diagnostics.get("mask_fraction"),
-            "n_input_segments": diagnostics.get("n_input_segments"),
-            "n_retained_segments": diagnostics.get("n_retained_segments"),
-            "n_dropped_segments": diagnostics.get("n_dropped_segments"),
-            "segments": segments,
-        }
-        return _jsonable(report)
+        """Return a compact, JSON-safe summary of fit quality diagnostics."""
+        return build_fit_quality_report(
+            self.summary,
+            diagnostics=self.diagnostics,
+            quality_flags=self.quality_flags,
+        )
 
     def quality_report_text(self):
         """Return a compact human-readable fit-quality summary."""
-        report = self.quality_report()
-        lines = ["Quality report:"]
-        flags = report.get("quality_flags") or ["unknown"]
-        lines.append("  flags: {0}".format(", ".join(str(flag) for flag in flags)))
-        if report.get("reduced_chi2") is not None:
-            lines.append("  chi2_red: {0:.4g}".format(float(report["reduced_chi2"])))
-        point_parts = []
-        if report.get("n_points") is not None:
-            point_parts.append("N={0}".format(int(report["n_points"])))
-        if report.get("degrees_of_freedom") is not None:
-            point_parts.append("dof={0}".format(int(report["degrees_of_freedom"])))
-        if report.get("n_parameters") is not None:
-            point_parts.append("parameters={0}".format(int(report["n_parameters"])))
-        if point_parts:
-            lines.append("  fit size: {0}".format(", ".join(point_parts)))
-        if report.get("mask_fraction") is not None:
-            lines.append("  masked fraction: {0:.1%}".format(float(report["mask_fraction"])))
-        if report.get("n_dropped_segments"):
-            lines.append(
-                "  dropped segments: {0}".format(int(report["n_dropped_segments"]))
-            )
-        segment_lines = []
-        for segment in report.get("segments", []):
-            name = segment.get("name")
-            label = str(name) if name else "segment {0}".format(
-                segment.get("input_index", "?")
-            )
-            pieces = [label]
-            if segment.get("n_fit") is not None and segment.get("n_support") is not None:
-                pieces.append(
-                    "Nfit={0}/{1}".format(
-                        int(segment["n_fit"]),
-                        int(segment["n_support"]),
-                    )
-                )
-            if segment.get("mask_fraction") is not None:
-                pieces.append("masked={0:.1%}".format(float(segment["mask_fraction"])))
-            if segment.get("explicit_exclusion_count") is not None:
-                pieces.append(
-                    "explicit rejects={0}".format(
-                        int(segment["explicit_exclusion_count"])
-                    )
-                )
-            segment_lines.append("; ".join(pieces))
-        if segment_lines:
-            lines.append("  segments:")
-            lines.extend("    - {0}".format(line) for line in segment_lines)
-        return "\n".join(lines)
+        return format_fit_quality_report(self)
 
     def to_json(self, **kwargs):
         kwargs.setdefault("allow_nan", False)

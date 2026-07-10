@@ -17,6 +17,7 @@ from .phoenix_forward import (
     resolve_gaussian_lsf_fwhm_kms,
 )
 from .preprocessing import compose_fit_mask
+from .results import build_fit_quality_report
 # Profiling linear continuum coefficients inside the nonlinear fit follows the
 # separable least-squares design used by pPXF; see Cappellari (2023):
 # https://doi.org/10.1093/mnras/stad2597
@@ -2513,7 +2514,7 @@ def fit_phoenix_full_spectrum(
     quality_flags = _phoenix_quality_flags(diagnostics, success=res.success)
     velocity_convention = diagnostics["velocity_convention"]
 
-    return {
+    summary = {
         "success": bool(res.success),
         "message": res.message,
         "p_best": res.x,
@@ -2577,3 +2578,5 @@ def fit_phoenix_full_spectrum(
         "quality_flags": quality_flags,
         # Note: did not store poly coeffs in this minimal version to avoid re-evaluating.
     }
+    summary["quality_report"] = build_fit_quality_report(summary)
+    return summary

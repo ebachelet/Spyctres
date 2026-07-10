@@ -5,7 +5,11 @@ import pytest
 
 from Spyctres.api import fit_phoenix_spectrum
 from Spyctres.io import SpectrumSegment
-from Spyctres.results import PhoenixFitDiagnostics, PhoenixFitResult
+from Spyctres.results import (
+    PhoenixFitDiagnostics,
+    PhoenixFitResult,
+    format_fit_quality_report,
+)
 
 
 def test_structured_result_is_mapping_and_json_serializable():
@@ -87,6 +91,10 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     assert "masked fraction: 25.0%" in text
     assert "dropped segments: 1" in text
     assert "VIS; Nfit=42/80" in text
+
+    text_from_dict = format_fit_quality_report(result.to_dict(include_arrays=False))
+    assert "Quality report:" in text_from_dict
+    assert "VIS; Nfit=42/80" in text_from_dict
 
 
 def test_structured_result_can_save_compact_json(tmp_path):

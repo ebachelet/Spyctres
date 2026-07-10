@@ -199,6 +199,9 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert result["diagnostics"]["degrees_of_freedom"] == 4
     assert result["diagnostics"]["segment_diagnostics"][0]["n_fit"] == 5
     assert result["diagnostics"]["segment_diagnostics"][1]["weight"] == 4.0
+    assert result["quality_report"]["n_points"] == 10
+    assert result["quality_report"]["degrees_of_freedom"] == 4
+    assert result["quality_report"]["segments"][0]["n_fit"] == 5
 
 
 def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
