@@ -138,8 +138,10 @@ arrays, actual fit masks, continuum coefficients, parameter covariance, and
 auditable velocity/cache provenance. The compact `quality_report` and
 `quality_report_text()` summaries surface the main warnings, mask fraction,
 dropped segments, and per-segment fit-pixel counts without requiring users to
-inspect the full nested diagnostics block. Existing low-level fitting functions
-keep returning dictionaries for backward compatibility.
+inspect the full nested diagnostics block. `describe_quality_flags()` provides
+short explanations for individual warning strings, and `quality_report`
+includes descriptions for the flags present in that result. Existing low-level
+fitting functions keep returning dictionaries for backward compatibility.
 
 ## Local line diagnostics
 

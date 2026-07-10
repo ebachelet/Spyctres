@@ -102,6 +102,92 @@ def _normalize_plot_paths(plot_paths, relative_to=None, include_local_paths=Fals
     )
 
 
+QUALITY_FLAG_DESCRIPTIONS = {
+    "ok": "No fit-quality warning flags were raised.",
+    "optimizer_local_minimum_suspected": (
+        "The optimizer did not report a clean successful termination; inspect "
+        "local starts and residuals before trusting the result."
+    ),
+    "high_chi2": (
+        "The reduced chi-square is above the configured warning threshold; this "
+        "can indicate model mismatch, underestimated errors, or preprocessing "
+        "problems."
+    ),
+    "structured_residuals": (
+        "Residuals show significant autocorrelation, suggesting unresolved "
+        "spectral structure, continuum errors, or correlated noise."
+    ),
+    "residual_slope": (
+        "Residuals have a large wavelength-dependent slope; inspect continuum "
+        "normalization, arm scaling, and flux calibration."
+    ),
+    "fit_bound_hit": (
+        "At least one fitted physical parameter lies on an allowed grid or fit "
+        "boundary."
+    ),
+    "resolution_missing": (
+        "At least one fitted segment lacks explicit resolution/LSF metadata."
+    ),
+    "wavelength_frame_ambiguous": (
+        "At least one fitted segment has an unknown wavelength frame; RV and "
+        "barycentric assumptions need review."
+    ),
+    "metadata_incomplete": (
+        "One or more wavelength/metadata fields are unknown or incomplete."
+    ),
+    "mask_fraction_high": (
+        "More than half of the global support pixels were excluded from the fit."
+    ),
+    "segment_no_fit_pixels": (
+        "At least one input segment had no usable fit pixels and was dropped."
+    ),
+    "too_few_fit_pixels": (
+        "At least one retained segment has very few fit pixels compared with "
+        "the model complexity."
+    ),
+    "segment_mask_fraction_high": (
+        "At least one retained segment had more than half of its support pixels "
+        "masked out."
+    ),
+    "explicit_exclusion_dominates": (
+        "Explicit user/recipe exclusions removed more pixels than remained in "
+        "at least one segment."
+    ),
+    "nonfinite_mask_output": (
+        "A mask callable produced nonfinite values; those pixels were rejected "
+        "under the mask-output policy."
+    ),
+}
+
+
+def _describe_dynamic_quality_flag(flag):
+    flag = str(flag)
+    if flag.startswith("grid_edge_"):
+        tail = flag[len("grid_edge_"):]
+        parts = tail.split("_")
+        if len(parts) == 1:
+            return (
+                "The fitted {0} value lies on or very near the available model "
+                "grid boundary.".format(parts[0])
+            )
+        if len(parts) == 2 and parts[1] in {"low", "high"}:
+            return (
+                "The fitted {0} value lies on or very near the {1} edge of the "
+                "available model grid.".format(parts[0], parts[1])
+            )
+    return "No description is registered for this quality flag yet."
+
+
+def describe_quality_flags(flags):
+    """Return human-readable descriptions for quality-flag strings."""
+    return {
+        str(flag): QUALITY_FLAG_DESCRIPTIONS.get(
+            str(flag), _describe_dynamic_quality_flag(flag)
+        )
+        for flag in list(flags or [])
+    }
+
+
 def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
     """Return a compact, JSON-safe summary of fit quality diagnostics.
 
@@ -155,6 +241,7 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
     report = {
         "success": summary.get("success"),
         "quality_flags": flags,
+        "quality_flag_descriptions": describe_quality_flags(flags),
         "reduced_chi2": chi2_red,
         "n_points": summary.get("n_points", diagnostics.get("n_pixels")),
         "n_parameters": diagnostics.get("n_parameters"),

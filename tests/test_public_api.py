@@ -8,6 +8,7 @@ from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
     PhoenixFitDiagnostics,
     PhoenixFitResult,
+    describe_quality_flags,
     format_fit_quality_report,
 )
 
@@ -77,6 +78,10 @@ def test_structured_result_quality_report_summarizes_fit_selection():
 
     assert report["success"] is True
     assert report["quality_flags"] == ["segment_mask_fraction_high"]
+    assert (
+        "more than half"
+        in report["quality_flag_descriptions"]["segment_mask_fraction_high"]
+    )
     assert report["reduced_chi2"] == 2.0
     assert report["mask_fraction"] == 0.25
     assert report["n_dropped_segments"] == 1
@@ -95,6 +100,16 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     text_from_dict = format_fit_quality_report(result.to_dict(include_arrays=False))
     assert "Quality report:" in text_from_dict
     assert "VIS; Nfit=42/80" in text_from_dict
+
+
+def test_quality_flag_descriptions_cover_static_and_grid_flags():
+    descriptions = describe_quality_flags(
+        ["metadata_incomplete", "grid_edge_teff_high", "surprise_flag"]
+    )
+
+    assert "metadata" in descriptions["metadata_incomplete"]
+    assert "high edge" in descriptions["grid_edge_teff_high"]
+    assert "No description" in descriptions["surprise_flag"]
 
 
 def test_structured_result_can_save_compact_json(tmp_path):
