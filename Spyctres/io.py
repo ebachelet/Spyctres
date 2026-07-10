@@ -1320,7 +1320,7 @@ def read_pepsi_nor(
             if wasrep is not None:
                 try:
                     resolution_R = float(wasrep)
-                except Exception:
+                except (TypeError, ValueError):
                     resolution_R = None
 
             if resolution_R is None:

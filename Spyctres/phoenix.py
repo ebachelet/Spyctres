@@ -561,7 +561,7 @@ class PhoenixLibrary(object):
                             observed_wave=observed_wave,
                         )
                         flux_grid[it, iz, ig, :] = f
-                    except Exception as e:
+                    except (FileNotFoundError, OSError, ValueError) as e:
                         if not allow_missing:
                             raise
                         if self.verbose:

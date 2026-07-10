@@ -692,7 +692,7 @@ def fit_phoenix_sideband_symmetric(
 
         try:
             model0 = np.asarray(phoenix_lib.evaluate(teff, feh, logg), dtype=float)
-        except Exception:
+        except ValueError:
             return np.ones(n_points, dtype=float) * 1e6
 
         out = []

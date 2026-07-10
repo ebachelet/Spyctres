@@ -576,7 +576,7 @@ def _quality_text(result):
     ):
         try:
             value = result[key]
-        except Exception:
+        except (KeyError, TypeError, AttributeError):
             continue
         if value is None:
             continue
