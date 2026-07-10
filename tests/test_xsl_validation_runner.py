@@ -181,6 +181,10 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
             "multistart_diagnostics": [
                 {"start": np.array([5000.0, 0.0, 4.0, 0.0])}
             ],
+            "quality_report": {
+                "quality_flags": ["ok"],
+                "mask_fraction": np.float64(0.1),
+            },
         }
 
     monkeypatch.setattr(xsl_validation, "fit_phoenix_spectrum", fake_fit)
@@ -201,6 +205,7 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
     assert payload["run_configuration"]["mdeg"] == 2
     assert payload["ordinary_recovery_statistics"]["count"] == 1
     assert payload["results"][1]["statistics_group"] == "diagnostic_only"
+    assert payload["results"][0]["quality_report"]["mask_fraction"] == 0.1
     assert payload["results"][0]["initialization"]["local_solutions"][0][
         "start"
     ] == [5000.0, 0.0, 4.0, 0.0]

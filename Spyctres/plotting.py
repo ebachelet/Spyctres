@@ -565,6 +565,7 @@ def _quality_text(result):
     flags = list(getattr(result, "quality_flags", result.get("quality_flags", [])))
     if not flags:
         flags = ["unknown"]
+    report = result.quality_report() if hasattr(result, "quality_report") else {}
     summary = []
     for key, label in (
         ("teff", "Teff"),
@@ -585,6 +586,12 @@ def _quality_text(result):
             summary.append("{0}={1:.2f} km/s".format(label, float(value)))
         else:
             summary.append("{0}={1:.3g}".format(label, float(value)))
+    mask_fraction = report.get("mask_fraction")
+    if mask_fraction is not None:
+        summary.append("mask={0:.0%}".format(float(mask_fraction)))
+    dropped = report.get("n_dropped_segments")
+    if dropped:
+        summary.append("dropped segments={0}".format(int(dropped)))
     return " | ".join(summary) + "\nflags: " + ", ".join(flags)
 
 

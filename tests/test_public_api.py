@@ -32,6 +32,53 @@ def test_structured_result_is_mapping_and_json_serializable():
     assert payload["models"] == [[1.0, 0.9]]
     assert payload["diagnostics"]["reduced_chi2"] == 1.0
     assert payload["quality_flags"] == ["ok"]
+    assert payload["quality_report"]["quality_flags"] == ["ok"]
+    assert payload["quality_report"]["reduced_chi2"] == 1.0
+
+
+def test_structured_result_quality_report_summarizes_fit_selection():
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "chi2_red": np.float64(2.0),
+            "n_points": np.int64(42),
+            "quality_flags": ["segment_mask_fraction_high"],
+        },
+        diagnostics={
+            "n_parameters": np.int64(6),
+            "degrees_of_freedom": np.int64(36),
+            "mask_fraction": np.float64(0.25),
+            "n_input_segments": 2,
+            "n_retained_segments": 1,
+            "n_dropped_segments": 1,
+            "segment_diagnostics": [
+                {
+                    "name": "VIS",
+                    "input_index": 1,
+                    "n_fit": np.int64(42),
+                    "n_support": np.int64(80),
+                    "mask_fraction": np.float64(0.475),
+                    "mask_summary": {
+                        "n_rejected_by_explicit_union": np.int64(10),
+                        "n_rejected_by_multiple_reasons": np.int64(2),
+                    },
+                    "lsf_fwhm_kms": np.float64(5.0),
+                    "resolution_R_effective": np.float64(59958.0),
+                }
+            ],
+        },
+    )
+
+    report = result.quality_report()
+
+    assert report["success"] is True
+    assert report["quality_flags"] == ["segment_mask_fraction_high"]
+    assert report["reduced_chi2"] == 2.0
+    assert report["mask_fraction"] == 0.25
+    assert report["n_dropped_segments"] == 1
+    assert report["segments"][0]["name"] == "VIS"
+    assert report["segments"][0]["explicit_exclusion_count"] == 10
+    assert report["segments"][0]["multiple_rejection_count"] == 2
 
 
 def test_structured_result_can_save_compact_json(tmp_path):

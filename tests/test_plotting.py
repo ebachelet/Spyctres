@@ -23,6 +23,8 @@ def _fit_result_for_segments(segments):
             "rv_kms": 0.0,
             "chi2_red": 1.1,
             "diagnostics": {
+                "mask_fraction": 0.25,
+                "n_dropped_segments": 0,
                 "segment_diagnostics": [
                     {"name": seg.name, "n_fit": int(np.sum(seg.mask))}
                     for seg in segments
@@ -57,6 +59,7 @@ def test_plot_fit_referee_saves_without_mutating_result(tmp_path):
     assert axes.shape == (1, 2)
     labels = [line.get_label() for line in axes[0, 0].lines]
     assert "continuum shape" not in labels
+    assert "mask=25%" in fig._suptitle.get_text()
     assert before == after
     fig.clf()
 

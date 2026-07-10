@@ -175,6 +175,7 @@ class PhoenixFitResult(Mapping):
         payload["provenance"] = self.provenance
         payload["diagnostics"] = self.diagnostics.to_dict()
         payload["quality_flags"] = list(self.quality_flags)
+        payload["quality_report"] = self.quality_report()
         normalized_plot_paths = _normalize_plot_paths(
             plot_paths,
             relative_to=relative_to,
@@ -193,6 +194,54 @@ class PhoenixFitResult(Mapping):
         if not include_local_paths:
             payload = _without_local_paths(payload)
         return payload
+
+    def quality_report(self):
+        """Return a compact, JSON-safe summary of fit quality diagnostics.
+
+        This is intentionally redundant with the full diagnostics block.  The
+        diagnostics preserve the detailed machine-readable record, while this
+        report gives notebooks, scripts, and reviewers a stable headline view
+        of the main fit-quality concerns.
+        """
+        diagnostics = self.diagnostics.to_dict()
+        flags = list(self.quality_flags)
+        chi2_red = self.summary.get("chi2_red", diagnostics.get("reduced_chi2"))
+        segments = []
+        for segment in diagnostics.get("segment_diagnostics", []):
+            mask_summary = dict(segment.get("mask_summary", {}))
+            segments.append(
+                {
+                    "name": segment.get("name"),
+                    "input_index": segment.get("input_index"),
+                    "n_fit": segment.get("n_fit"),
+                    "n_support": segment.get("n_support"),
+                    "mask_fraction": segment.get("mask_fraction"),
+                    "explicit_exclusion_count": mask_summary.get(
+                        "n_rejected_by_explicit_union"
+                    ),
+                    "multiple_rejection_count": mask_summary.get(
+                        "n_rejected_by_multiple_reasons"
+                    ),
+                    "lsf_fwhm_kms": segment.get("lsf_fwhm_kms"),
+                    "resolution_R_effective": segment.get(
+                        "resolution_R_effective"
+                    ),
+                }
+            )
+        report = {
+            "success": self.summary.get("success"),
+            "quality_flags": flags,
+            "reduced_chi2": chi2_red,
+            "n_points": self.summary.get("n_points", diagnostics.get("n_pixels")),
+            "n_parameters": diagnostics.get("n_parameters"),
+            "degrees_of_freedom": diagnostics.get("degrees_of_freedom"),
+            "mask_fraction": diagnostics.get("mask_fraction"),
+            "n_input_segments": diagnostics.get("n_input_segments"),
+            "n_retained_segments": diagnostics.get("n_retained_segments"),
+            "n_dropped_segments": diagnostics.get("n_dropped_segments"),
+            "segments": segments,
+        }
+        return _jsonable(report)
 
     def to_json(self, **kwargs):
         kwargs.setdefault("allow_nan", False)

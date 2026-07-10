@@ -620,6 +620,11 @@ def main(argv=None):
                 ),
                 "local_solutions": result.get("multistart_diagnostics", []),
             },
+            quality_report=(
+                result.quality_report()
+                if hasattr(result, "quality_report")
+                else result.get("quality_report")
+            ),
         )
         plot_payload = _validation_plot_payload(
             spectrum, result, args.plot_points_per_segment
