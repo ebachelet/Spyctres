@@ -142,6 +142,9 @@ inspect the full nested diagnostics block. `describe_quality_flags()` provides
 short explanations for individual warning strings, and `quality_report`
 includes descriptions for the flags present in that result. Existing low-level
 fitting functions keep returning dictionaries for backward compatibility.
+For exploratory fits with outliers that are not yet fully masked, the PHOENIX
+fitters expose SciPy's robust least-squares losses through `loss` and
+`loss_f_scale`; the default `loss="linear"` preserves ordinary least squares.
 
 ## Local line diagnostics
 

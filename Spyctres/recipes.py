@@ -33,6 +33,7 @@ from .fitting import (
     _resolve_segment_fwhm_kms,
     _gaussian_broaden_velocity,
     _apply_observed_grid_rv_shift,
+    _validate_optimizer_loss,
 )
 from .phoenix_forward import (
     build_phoenix_native_models_for_segments,
@@ -561,6 +562,8 @@ def fit_phoenix_sideband_symmetric(
     sideband_order=1,
     sideband_poly_order=1,
     bounds=None,
+    loss="linear",
+    loss_f_scale=1.0,
     progress_callback=None,
 ):
     """
@@ -588,10 +591,19 @@ def fit_phoenix_sideband_symmetric(
     progress_callback : callable, optional
         Called with short status strings before cache load/rebuild, RV grid
         scanning, and local optimizer start/finish.
+
+    loss : {"linear", "soft_l1", "huber", "cauchy", "arctan"}, optional
+        Robust loss passed to ``scipy.optimize.least_squares``. The default
+        preserves ordinary least squares.
+
+    loss_f_scale : float, optional
+        Positive robust-loss scale passed to ``least_squares`` as ``f_scale``.
     """
     def report(message):
         if progress_callback is not None:
             progress_callback(str(message))
+
+    loss, loss_f_scale = _validate_optimizer_loss(loss, loss_f_scale)
 
     if isinstance(segments, SpectrumSegment):
         segments = [segments]
@@ -819,6 +831,8 @@ def fit_phoenix_sideband_symmetric(
         method="trf",
         x_scale=np.array([100.0, 0.1, 0.1, 10.0], dtype=float),
         max_nfev=int(max_nfev),
+        loss=loss,
+        f_scale=loss_f_scale,
         verbose=2 if verbose else 0,
     )
     report(
@@ -850,6 +864,8 @@ def fit_phoenix_sideband_symmetric(
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),
+        "optimizer_loss": str(loss),
+        "optimizer_loss_f_scale": float(loss_f_scale),
         "forward_model": str(forward_model),
         "model_margin_A": float(model_margin_A),
         "segment_lsf_fwhm_kms": [

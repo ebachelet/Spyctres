@@ -152,6 +152,23 @@ def _resolve_segment_fwhm_kms(seg, R=None, fwhm_kms=None):
             ) from exc
 
     return _resolve_broadening_fwhm_kms(R=R, fwhm_kms=fwhm_kms)
+
+
+def _validate_optimizer_loss(loss, loss_f_scale):
+    """Validate scipy.optimize.least_squares robust-loss controls."""
+    allowed = {"linear", "soft_l1", "huber", "cauchy", "arctan"}
+    loss = str(loss)
+    if loss not in allowed:
+        raise ValueError(
+            "loss must be one of {0}; got {1!r}.".format(
+                ", ".join(sorted(allowed)),
+                loss,
+            )
+        )
+    loss_f_scale = float(loss_f_scale)
+    if not np.isfinite(loss_f_scale) or loss_f_scale <= 0.0:
+        raise ValueError("loss_f_scale must be finite and > 0.")
+    return loss, loss_f_scale
     
     
 def _gaussian_broaden_velocity(wave, flux, fwhm_kms=None):
@@ -1981,6 +1998,8 @@ def fit_phoenix_full_spectrum(
     x_scale=None,
     verbose=0,
     max_nfev=200,
+    loss="linear",
+    loss_f_scale=1.0,
     progress_callback=None,
     ):
     """
@@ -2145,6 +2164,17 @@ def fit_phoenix_full_spectrum(
     max_nfev : int, optional
         Maximum number of function evaluations for the nonlinear optimizer.
 
+    loss : {"linear", "soft_l1", "huber", "cauchy", "arctan"}, optional
+        Robust loss passed to ``scipy.optimize.least_squares``. The default
+        ``"linear"`` preserves ordinary least squares and historical behavior.
+        ``"soft_l1"`` or ``"cauchy"`` can be useful for exploratory fits with
+        outliers that are not yet captured by masks.
+
+    loss_f_scale : float, optional
+        Positive scale parameter passed to ``least_squares`` as ``f_scale``.
+        Residuals are already normalized by uncertainty, so values near 1 are
+        the natural starting point.
+
     progress_callback : callable, optional
         Called with short status strings before long operations such as cache
         load/rebuild, RV grid scan, and local optimizer starts/finishes. For
@@ -2195,6 +2225,7 @@ def fit_phoenix_full_spectrum(
     max_nfev = int(max_nfev)
     if max_nfev < 1:
         raise ValueError("max_nfev must be >= 1.")
+    loss, loss_f_scale = _validate_optimizer_loss(loss, loss_f_scale)
     rv_bary_kms = float(rv_bary_kms)
     if not np.isfinite(rv_bary_kms):
         raise ValueError("rv_bary_kms must be finite.")
@@ -2562,6 +2593,8 @@ def fit_phoenix_full_spectrum(
             method="trf",
             x_scale=x_scale,
             max_nfev=int(max_nfev),
+            loss=loss,
+            f_scale=loss_f_scale,
             verbose=2 if verbose else 0,
         )
         local_results.append(candidate_result)
@@ -2664,6 +2697,8 @@ def fit_phoenix_full_spectrum(
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),
+        "optimizer_loss": str(loss),
+        "optimizer_loss_f_scale": float(loss_f_scale),
         "invalid_model_evaluations": int(invalid_model_evaluations["count"]),
         "physical_initialization": physical_init,
         "coarse_initialization": coarse_initialization,
