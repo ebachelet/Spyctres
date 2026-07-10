@@ -49,6 +49,29 @@ def test_local_multistarts_can_force_zero_rv_independently():
     assert starts[1][3] == 0.0
 
 
+def test_local_multistarts_use_ranked_physical_candidates_when_supplied():
+    center = np.array([5000.0, -0.5, 4.0, 12.0])
+    bounds = ((4500.0, -1.0, 3.0, -100.0), (5500.0, 0.5, 5.0, 100.0))
+    starts = _build_local_multistarts(
+        center,
+        bounds,
+        4,
+        alternate_rv=0.0,
+        candidate_points=[
+            center[:3],  # duplicate of selected best coarse node
+            [4400.0, -0.5, 4.0],  # outside local Teff bounds
+            [5200.0, -0.25, 4.5],
+            [4800.0, 0.0, 3.5, 15.0],
+        ],
+    )
+
+    assert len(starts) == 4
+    assert np.allclose(starts[0], center)
+    assert np.allclose(starts[1], [5000.0, -0.5, 4.0, 0.0])
+    assert np.allclose(starts[2], [5200.0, -0.25, 4.5, 12.0])
+    assert np.allclose(starts[3], [4800.0, 0.0, 3.5, 15.0])
+
+
 def test_local_multistarts_reject_an_unavailable_alternate_rv():
     center = np.array([5000.0, -0.5, 4.0, 20.0])
     bounds = ((4500.0, -1.0, 3.0, 10.0), (5500.0, 0.5, 5.0, 100.0))

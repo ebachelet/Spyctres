@@ -1256,8 +1256,30 @@ def _coarse_physical_start_native_interp(
     return scores[0], scores
 
 
-def _build_local_multistarts(center, bounds, count, alternate_rv=None):
-    """Return deterministic interior starts sharing one local interpolator."""
+def _start_is_duplicate(candidate, starts):
+    """Return whether a candidate local start is already represented."""
+    return any(
+        np.allclose(candidate, existing, rtol=0.0, atol=1e-10)
+        for existing in starts
+    )
+
+
+def _build_local_multistarts(
+    center,
+    bounds,
+    count,
+    alternate_rv=None,
+    candidate_points=None,
+):
+    """Return deterministic interior starts sharing one local interpolator.
+
+    ``candidate_points`` may contain physically motivated starts from an
+    external coarse search. Each row may be ``(teff, feh, logg)`` or
+    ``(teff, feh, logg, rv_kms)``. Candidate starts are accepted only if they
+    are finite, inside the current local-interpolator bounds, and not
+    duplicates. This keeps physical multistart bounded by the user-requested
+    ``count``.
+    """
     count = int(count)
     if count < 1:
         raise ValueError("multistart must be >= 1.")
@@ -1275,14 +1297,30 @@ def _build_local_multistarts(center, bounds, count, alternate_rv=None):
             raise ValueError("alternate_rv must lie inside the RV bounds.")
         alternate = center.copy()
         alternate[3] = alternate_rv
-        if not np.allclose(alternate, center, rtol=0.0, atol=0.0):
+        if not _start_is_duplicate(alternate, starts):
             starts.append(alternate)
+    if candidate_points is not None:
+        for candidate in candidate_points:
+            if len(starts) >= count:
+                break
+            candidate = np.asarray(candidate, dtype=float)
+            if candidate.shape == (3,):
+                candidate = np.r_[candidate, center[3]]
+            if candidate.shape != (4,) or not np.all(np.isfinite(candidate)):
+                continue
+            if np.any(candidate <= lower + eps) or np.any(candidate >= upper - eps):
+                continue
+            if _start_is_duplicate(candidate, starts):
+                continue
+            starts.append(candidate)
     for axis in range(3):
         for fraction in (0.25, 0.75):
             if len(starts) >= count:
                 break
             candidate = center.copy()
             candidate[axis] = lower[axis] + fraction * (upper[axis] - lower[axis])
+            if _start_is_duplicate(candidate, starts):
+                continue
             starts.append(candidate)
         if len(starts) >= count:
             break
@@ -1297,11 +1335,18 @@ def _build_local_multistarts(center, bounds, count, alternate_rv=None):
             break
         candidate = center.copy()
         candidate[:3] = lower[:3] + np.asarray(pattern) * (upper[:3] - lower[:3])
+        if _start_is_duplicate(candidate, starts):
+            continue
         starts.append(candidate)
     while len(starts) < count:
         fraction = len(starts) / float(count + 1)
         candidate = center.copy()
         candidate[:3] = lower[:3] + fraction * (upper[:3] - lower[:3])
+        if _start_is_duplicate(candidate, starts):
+            candidate = center.copy()
+            candidate[:3] = lower[:3] + (fraction + 1e-6) * (
+                upper[:3] - lower[:3]
+            )
         starts.append(candidate)
     return starts
 
@@ -2059,7 +2104,9 @@ def fit_phoenix_full_spectrum(
         If ``"coarse"``, score a sparse set of widely separated installed
         PHOENIX nodes before constructing the local interpolator. This removes
         dependence on the physical part of ``p0`` without allocating a dense
-        full-library cache. Currently available for ``native_interp`` only.
+        full-library cache. When ``multistart > 1``, the best compatible
+        coarse candidates are promoted into the local optimizer start queue.
+        Currently available for ``native_interp`` only.
 
     coarse_teff_grid, coarse_feh_grid, coarse_logg_grid : array-like, optional
         Sparse PHOENIX node axes used by ``physical_init="coarse"``. Compact
@@ -2072,7 +2119,9 @@ def fit_phoenix_full_spectrum(
         Number of deterministic local least-squares starts. All starts share
         the same local PHOENIX interpolator; ``1`` preserves historical
         behavior. A stellar-rest input always adds/tests an explicit zero-RV
-        start when the selected start has nonzero RV.
+        start when the selected start has nonzero RV. If coarse physical
+        initialization is enabled, ranked coarse candidates are preferred
+        before generic deterministic perturbations.
 
     rv_init : {"grid", None}, optional
         Strategy for initializing the radial velocity:
@@ -2470,11 +2519,29 @@ def fit_phoenix_full_spectrum(
         and not np.isclose(float(p0[3]), 0.0, rtol=0.0, atol=1e-12)
     ):
         effective_multistart = max(2, effective_multistart)
+    coarse_candidate_points = None
+    if coarse_initialization is not None and effective_multistart > 1:
+        coarse_candidate_points = [
+            (
+                float(candidate["teff"]),
+                float(candidate["feh"]),
+                float(candidate["logg"]),
+                float(p0[3]),
+            )
+            for candidate in coarse_initialization.get("candidates", [])[
+                : max(1, effective_multistart * 3)
+            ]
+        ]
+        if coarse_candidate_points:
+            report(
+                "Adding top coarse physical candidates to the local multistart queue."
+            )
     starts = _build_local_multistarts(
         p0,
         bounds,
         effective_multistart,
         alternate_rv=alternate_rv,
+        candidate_points=coarse_candidate_points,
     )
     local_results = []
     for start_index, start in enumerate(starts):
