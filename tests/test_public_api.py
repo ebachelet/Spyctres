@@ -135,6 +135,15 @@ def test_wavelength_medium_helpers_are_top_level_public_api():
     assert callable(Spyctres.convert_segment_wavelength_medium)
 
 
+def test_exclusion_mask_helper_is_top_level_public_api():
+    import Spyctres
+
+    spec = Spyctres.exclusion_mask("demo", lambda wave: wave == wave)
+
+    assert isinstance(spec, Spyctres.ExclusionMaskSpec)
+    assert spec.name == "demo"
+
+
 def test_structured_result_can_save_compact_json(tmp_path):
     result = PhoenixFitResult(
         summary={"teff": np.float64(5772.0)},

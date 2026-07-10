@@ -13,7 +13,13 @@ from Spyctres.io import (
     SpectrumSegment,
     make_padded_window_segments,
 )
-from Spyctres.preprocessing import apply_fit_mask, compose_fit_mask, convert_mask_polarity
+from Spyctres.preprocessing import (
+    ExclusionMaskSpec,
+    apply_fit_mask,
+    compose_fit_mask,
+    convert_mask_polarity,
+    exclusion_mask,
+)
 
 
 def test_segment_default_mask_rejects_invalid_data_and_errors():
@@ -158,6 +164,32 @@ def test_threshold_equality_keeps_pixel_and_nonfinite_numeric_masks_reject():
     assert np.array_equal(result.effective_mask, [True, False, False, False])
     assert result.settings["nonfinite_mask_value_policy"] == "reject"
     assert result.counts["nonfinite_mask_output"] == 2
+
+
+def test_exclusion_mask_spec_helper_and_duplicate_name_validation():
+    segment = SpectrumSegment(
+        wave=[1.0, 2.0, 3.0, 4.0],
+        flux=[1.0, 1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1, 0.1],
+    )
+
+    spec = exclusion_mask("central", lambda wave: (wave >= 2.0) & (wave <= 3.0))
+    assert isinstance(spec, ExclusionMaskSpec)
+
+    result = compose_fit_mask(segment, exclude_mask=[spec])
+
+    assert np.array_equal(result.effective_mask, [True, False, False, True])
+    assert result.settings["exclude_masks"] == ["central"]
+    assert result.counts["exclude_mask:central"] == 2
+
+    with pytest.raises(ValueError, match="Duplicate exclusion mask name"):
+        compose_fit_mask(
+            segment,
+            exclude_mask=[
+                exclusion_mask("central", lambda wave: wave == 1.0),
+                exclusion_mask("central", lambda wave: wave == 4.0),
+            ],
+        )
 
 
 def test_overlap_aware_counts_do_not_double_count_total_rejections():

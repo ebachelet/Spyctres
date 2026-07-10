@@ -6,6 +6,46 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class ExclusionMaskSpec:
+    """Named exclusion-mask callable.
+
+    Exclusion masks use the opposite polarity from ``SpectrumSegment.mask``:
+    after numeric thresholding, True means the pixel is rejected/excluded.
+    ``ExclusionMaskSpec`` gives that callable a stable provenance name without
+    requiring users to remember the accepted tuple/dict shorthand forms.
+    """
+
+    name: str
+    callable: object
+
+    def __post_init__(self):
+        name = str(self.name).strip()
+        if not name:
+            raise ValueError("ExclusionMaskSpec.name must be a non-empty string.")
+        if not callable(self.callable):
+            raise TypeError("ExclusionMaskSpec.callable must be callable.")
+        object.__setattr__(self, "name", name)
+
+    def __call__(self, wave):
+        return self.callable(wave)
+
+
+def exclusion_mask(name, fn):
+    """Return a named exclusion-mask specification.
+
+    Examples
+    --------
+    ``exclude_mask=[exclusion_mask("telluric", telluric_fn)]``
+
+    The callable should return boolean-like or numeric values on the supplied
+    wavelength grid. Boolean True means reject; numeric values reject where
+    ``value > mask_threshold``. Nonfinite numeric outputs are rejected and
+    recorded in mask provenance.
+    """
+    return ExclusionMaskSpec(name=name, callable=fn)
+
+
+@dataclass(frozen=True)
 class MaskResult:
     """Result of composing all masks for one spectrum segment."""
 
@@ -214,6 +254,8 @@ def _nonfinite_numeric_mask(values, shape, name):
 
 def _mask_callable_name(mask_spec, fallback="exclude_mask"):
     """Return a stable, human-readable label for a mask callable spec."""
+    if isinstance(mask_spec, ExclusionMaskSpec):
+        return mask_spec.name
     if isinstance(mask_spec, dict):
         if "name" in mask_spec:
             return str(mask_spec["name"])
@@ -237,17 +279,29 @@ def _is_named_mask_tuple(mask_spec):
 
 def _mask_callable_function(mask_spec):
     """Extract the callable from a supported mask callable spec."""
+    if isinstance(mask_spec, ExclusionMaskSpec):
+        return mask_spec.callable
     if isinstance(mask_spec, dict):
         if "callable" in mask_spec:
             mask_spec = mask_spec["callable"]
         elif "func" in mask_spec:
             mask_spec = mask_spec["func"]
         else:
-            raise TypeError("Mask spec dictionaries require a 'callable' or 'func' key.")
+            raise TypeError(
+                "Mask spec dictionaries require a 'callable' or 'func' key. "
+                "Accepted exclusion-mask forms are: callable, "
+                "('name', callable), {'name': 'name', 'callable': callable}, "
+                "ExclusionMaskSpec, or a list/tuple of those forms."
+            )
     elif _is_named_mask_tuple(mask_spec):
         mask_spec = mask_spec[1]
     if not callable(mask_spec):
-        raise TypeError("Mask specs must be callables or named callable specs.")
+        raise TypeError(
+            "Mask specs must be callables or named callable specs. Accepted "
+            "forms are: callable, ('name', callable), "
+            "{'name': 'name', 'callable': callable}, ExclusionMaskSpec, "
+            "or a list/tuple of those forms."
+        )
     return mask_spec
 
 
@@ -274,15 +328,16 @@ def _normalize_mask_specs(exclude_mask=None, exclude_masks=None):
             specs.extend(list(exclude_masks))
 
     normalized = []
-    used_names = {}
+    used_names = set()
     for spec in specs:
         name = _mask_callable_name(spec)
         fn = _mask_callable_function(spec)
-        base = name
-        count = used_names.get(base, 0)
-        used_names[base] = count + 1
-        if count:
-            name = "{0}_{1}".format(base, count + 1)
+        if name in used_names:
+            raise ValueError(
+                "Duplicate exclusion mask name {0!r}; use unique names so "
+                "mask provenance and overlap counts remain unambiguous.".format(name)
+            )
+        used_names.add(name)
         normalized.append((name, fn))
     return normalized
 
