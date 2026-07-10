@@ -354,6 +354,11 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
         ]
         == "unknown"
     )
+    assert diagnostics["segment_diagnostics"][0]["mask_summary"]["n_fit"] == 3
+    assert (
+        diagnostics["segment_diagnostics"][0]["mask_provenance"]["label"]
+        == "fit selection"
+    )
     assert "high_chi2" in flags
     assert "grid_edge_teff" in flags
     assert "grid_edge_teff_low" in flags
@@ -361,6 +366,40 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
     assert "resolution_missing" in flags
     assert "wavelength_frame_ambiguous" in flags
     assert "metadata_incomplete" in flags
+    assert "segment_no_fit_pixels" in flags
+    assert "too_few_fit_pixels" in flags
+
+
+def test_quality_flags_include_mask_derived_warnings():
+    diagnostics = {
+        "reduced_chi2": 1.0,
+        "n_parameters": 4,
+        "n_dropped_segments": 0,
+        "mask_fraction": 0.2,
+        "grid_edge_flags": {},
+        "wavelength_metadata_summary": {},
+        "resolution_metadata_summary": {"missing_count": 0},
+        "segment_diagnostics": [
+            {
+                "n_fit": 12,
+                "mask_fraction": 0.6,
+                "mask_summary": {
+                    "n_fit": 12,
+                    "n_rejected_by_explicit_union": 20,
+                },
+                "mask_provenance": {
+                    "counts": {"nonfinite_mask_output": 1},
+                },
+            }
+        ],
+    }
+
+    flags = _phoenix_quality_flags(diagnostics, success=True)
+
+    assert "too_few_fit_pixels" in flags
+    assert "segment_mask_fraction_high" in flags
+    assert "explicit_exclusion_dominates" in flags
+    assert "nonfinite_mask_output" in flags
 
 
 def test_grid_edge_flags_report_low_and_high_boundaries():

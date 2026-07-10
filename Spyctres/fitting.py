@@ -466,6 +466,7 @@ def _build_data_vectors(
             "n_support": n_support,
             "n_fit": n_fit,
             "mask_provenance": mask_result.to_metadata(label="fit selection"),
+            "mask_summary": mask_result.to_summary(),
         })
 
         start_support += n_support
@@ -827,6 +828,8 @@ def _build_phoenix_fit_diagnostics(
     for index, meta in enumerate(seg_meta):
         n_support = int(meta.get("n_support", 0))
         n_fit = int(meta.get("n_fit", 0))
+        mask_summary = dict(meta.get("mask_summary", {}))
+        mask_provenance = dict(meta.get("mask_provenance", {}))
         segment_diagnostics.append(
             {
                 "name": meta.get("name"),
@@ -839,6 +842,8 @@ def _build_phoenix_fit_diagnostics(
                 ),
                 "wave_min": meta.get("wave_min"),
                 "wave_max": meta.get("wave_max"),
+                "mask_summary": mask_summary,
+                "mask_provenance": mask_provenance,
                 "lsf_fwhm_kms": (
                     None
                     if segment_fwhm_kms[index] is None
@@ -962,6 +967,36 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
 
     if diagnostics.get("mask_fraction") is not None and diagnostics["mask_fraction"] > 0.5:
         flags.append("mask_fraction_high")
+    if int(diagnostics.get("n_dropped_segments", 0)) > 0:
+        flags.append("segment_no_fit_pixels")
+
+    segment_diagnostics = diagnostics.get("segment_diagnostics", [])
+    n_parameters = int(diagnostics.get("n_parameters", 0) or 0)
+    min_pixels = max(20, n_parameters + 5)
+    if any(int(segment.get("n_fit", 0)) < min_pixels for segment in segment_diagnostics):
+        flags.append("too_few_fit_pixels")
+    if any(
+        segment.get("mask_fraction") is not None
+        and float(segment.get("mask_fraction")) > 0.5
+        for segment in segment_diagnostics
+    ):
+        flags.append("segment_mask_fraction_high")
+    if any(
+        int(segment.get("mask_summary", {}).get("n_rejected_by_explicit_union", 0))
+        > int(segment.get("mask_summary", {}).get("n_fit", 0))
+        for segment in segment_diagnostics
+    ):
+        flags.append("explicit_exclusion_dominates")
+    if any(
+        int(
+            segment.get("mask_provenance", {})
+            .get("counts", {})
+            .get("nonfinite_mask_output", 0)
+        )
+        > 0
+        for segment in segment_diagnostics
+    ):
+        flags.append("nonfinite_mask_output")
 
     return ["ok"] if not flags else sorted(set(flags))
 
