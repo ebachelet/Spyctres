@@ -295,6 +295,7 @@ def run_legacy_pepsi_fit(args, parser):
 
     raw_segments = []
     for path in files:
+        print("Reading PEPSI spectrum: {0}".format(path), flush=True)
         seg = read_spectrum(
             path,
             instrument="pepsi",
@@ -304,6 +305,7 @@ def run_legacy_pepsi_fit(args, parser):
         meta["source_file"] = path
         raw_segments.append(seg.copy(meta=meta))
 
+    print("Preparing PEPSI legacy windows...", flush=True)
     input_segments, segments, window_defs = build_pepsi_legacy_segments(
         raw_segments,
         wave_hypothesis=args.wave_hypothesis,
@@ -315,6 +317,7 @@ def run_legacy_pepsi_fit(args, parser):
     )
 
     if args.use_telluric_mask:
+        print("Loading telluric mask...", flush=True)
         _, telluric_mask = Spyctres.load_telluric_lines(args.telluric_threshold)
 
         def exclude_mask(wave):
@@ -329,8 +332,10 @@ def run_legacy_pepsi_fit(args, parser):
     segments = list(collection.segments)
     segment_weights = np.asarray(collection.weights, dtype=float)
 
+    print("Loading PHOENIX library...", flush=True)
     phoenix_lib = PhoenixLibrary(args.phoenix_dir, verbose=bool(args.verbose))
 
+    print("Selecting PHOENIX grid...", flush=True)
     teff_avail, feh_avail, logg_avail = phoenix_lib.available_axes()
     teff_grid_req = pick_grid_range(teff_avail, args.teff_min, args.teff_max)
     feh_grid_req = pick_grid_range(feh_avail, args.feh_min, args.feh_max)
@@ -376,6 +381,7 @@ def run_legacy_pepsi_fit(args, parser):
         window_pad_A=args.window_pad,
     )
 
+    print("Preparing PHOENIX native interpolation cache...", flush=True)
     model_wave_grid, model_wave_medium = ensure_phoenix_native_interpolator_for_segments(
         segments=cache_support_segments,
         phoenix_lib=phoenix_lib,
@@ -384,6 +390,7 @@ def run_legacy_pepsi_fit(args, parser):
         logg_grid=logg_grid_fit,
         cache_path=args.cache_path,
         model_margin_A=args.model_margin,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
     lo = np.array(
@@ -468,6 +475,7 @@ def run_legacy_pepsi_fit(args, parser):
         x0[3] = float(rv_grid[ibest])
         print("Legacy RV init grid best:", x0[3])
 
+    print("Running PEPSI legacy optimization...", flush=True)
     res = minimize(
         objective,
         x0,
@@ -589,6 +597,7 @@ def run_legacy_pepsi_fit(args, parser):
         )
     )
 
+    print("Building diagnostic plot...", flush=True)
     fig, axes = plot_full_spectrum_fit(
         wave=wave_plot,
         flux=flux_plot,
@@ -881,6 +890,7 @@ def main():
             "Use --wave-hypothesis air, vacuum, or air_to_vac, or use native_interp."
         )
 
+    print("Reading PEPSI spectrum...", flush=True)
     seg0 = read_spectrum(
         args.file,
         instrument="pepsi",
@@ -899,10 +909,12 @@ def main():
             window_preset_used = args.window_preset
         window_defs = WINDOW_PRESETS[window_preset_used]
 
+    print("Preparing PEPSI fit windows...", flush=True)
     segments = build_window_segments(seg, window_defs, pad=args.window_pad)
 
     exclude_mask = None
     if args.use_telluric_mask:
+        print("Loading telluric mask...", flush=True)
         _, telluric_mask = Spyctres.load_telluric_lines(args.telluric_threshold)
 
         def exclude_mask(wave):
@@ -915,8 +927,10 @@ def main():
     if not any(np.any(m) for m in used_masks_plot):
         raise ValueError("No usable points remain after masking.")
 
+    print("Loading PHOENIX library...", flush=True)
     phoenix_lib = PhoenixLibrary(args.phoenix_dir, verbose=bool(args.verbose))
 
+    print("Selecting PHOENIX grid...", flush=True)
     teff_avail, feh_avail, logg_avail = phoenix_lib.available_axes()
     teff_grid_req = pick_grid_range(teff_avail, args.teff_min, args.teff_max)
     feh_grid_req = pick_grid_range(feh_avail, args.feh_min, args.feh_max)
@@ -939,6 +953,7 @@ def main():
         tag = os.path.basename(args.file).replace(".", "_")
         args.cache_path = "/tmp/spyctres_{0}_{1}_cache.npz".format(tag, args.wave_hypothesis)
 
+    print("Running PHOENIX fit...", flush=True)
     out = fit_phoenix_full_spectrum(
         segments,
         phoenix_lib=phoenix_lib,
@@ -957,8 +972,10 @@ def main():
         rv_grid_n=args.rv_grid_n,
         verbose=args.verbose,
         max_nfev=300,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
+    print("Reconstructing best-fit model for plotting...", flush=True)
     model_list, coeffs_list, used_masks, excluded_masks = reconstruct_phoenix_legendre_models_for_segments(
         segments=segments,
         phoenix_lib=phoenix_lib,

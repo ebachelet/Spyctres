@@ -54,6 +54,7 @@ def make_synthetic_segment(phoenix_dir):
         logg_grid=np.array([4.0, 4.5]),
         cache_path=None,
         allow_missing=False,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
     flux = np.asarray(lib_truth.evaluate(truth["teff"], truth["feh"], truth["logg"]), dtype=float)
@@ -89,6 +90,7 @@ def run_fit(seg, phoenix_dir, cache_path, teff_grid, label):
         rv_init="grid",
         mdeg=2,
         verbose=False,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
     print(

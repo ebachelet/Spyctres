@@ -164,6 +164,7 @@ def main():
         logg_grid=logg_grid,
         cache_path=args.cache_path,
         allow_missing=False,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
     # Synthetic truth (must lie inside the grid bounds)
@@ -221,6 +222,7 @@ def main():
         rv_bary_kms=0.0,
         verbose=args.verbose,
         max_nfev=500,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
     print("Truth:", truth)

@@ -615,6 +615,7 @@ def main():
     if args.wmax <= args.wmin:
         parser.error("--wmax must be greater than --wmin.")
 
+    print("Reading X-SHOOTER spectrum...", flush=True)
     seg0 = read_spectrum(args.file, instrument="xshooter")
     arm = str(seg0.meta.get("arm", "")).strip().upper()
     if arm and arm != "UVB":
@@ -622,6 +623,7 @@ def main():
             "This script is currently configured for X-SHOOTER UVB fitting, but the reader reported arm={0!r}.".format(arm)
         )
 
+    print("Preparing fit window and segments...", flush=True)
     seg_clip = seg0.window(
         wmin=args.wmin,
         wmax=args.wmax,
@@ -668,6 +670,7 @@ def main():
     exclude_mask_list = []
 
     if args.use_telluric_mask:
+        print("Loading telluric mask...", flush=True)
         _, telluric_mask = load_telluric_lines(args.telluric_threshold)
         exclude_mask_list.append(telluric_mask)
 
@@ -696,9 +699,11 @@ def main():
     if not any(np.any(m) for m in used_masks_plot):
         raise ValueError("No usable points remain after masking.")
 
+    print("Loading PHOENIX library...", flush=True)
     phoenix_lib = PhoenixLibrary(args.phoenix_dir, verbose=bool(args.verbose))
 
     if args.balmer_only:
+        print("Selecting PHOENIX grid...", flush=True)
         teff_avail, feh_avail, logg_avail = phoenix_lib.available_axes()
         print("Installed Teff range:", float(np.min(teff_avail)), float(np.max(teff_avail)))
         print("Installed FeH  range:", float(np.min(feh_avail)), float(np.max(feh_avail)))
@@ -738,9 +743,10 @@ def main():
     records = []
 
     for i, p0_i in enumerate(start_list, start=1):
-        print("\n=== START {0}/{1}: p0={2} ===".format(i, len(start_list), p0_i))
+        print("\n=== START {0}/{1}: p0={2} ===".format(i, len(start_list), p0_i), flush=True)
 
         if args.norm_mode == "sideband":
+            print("Running sideband-symmetric PHOENIX fit...", flush=True)
             result_i = fit_phoenix_sideband_symmetric(
                 segments=segments,
                 phoenix_lib=phoenix_lib,
@@ -761,8 +767,10 @@ def main():
                 sideband_width=args.sideband_width,
                 sideband_order=args.sideband_order,
                 sideband_poly_order=args.sideband_poly_order,
+                progress_callback=lambda message: print(message, flush=True),
             )
         else:
+            print("Running PHOENIX fit...", flush=True)
             result_i = fit_phoenix_full_spectrum(
                 segments=segments,
                 phoenix_lib=phoenix_lib,
@@ -781,8 +789,10 @@ def main():
                 rv_grid_n=args.rv_grid_n,
                 verbose=args.verbose,
                 max_nfev=200,
+                progress_callback=lambda message: print(message, flush=True),
             )
 
+        print("Reconstructing best-fit model for plotting...", flush=True)
         model_corr_list_i, coeffs_list_i, used_masks_i, excluded_masks_i = build_plot_models_for_segments(
             segments=segments,
             phoenix_lib=phoenix_lib,
@@ -977,6 +987,7 @@ def main():
         fig.tight_layout()
         plt.show()
     else:
+        print("Building diagnostic plot...", flush=True)
         fig, axes = plot_full_spectrum_fit(
             wave=segments[0].wave,
             flux=segments[0].flux,

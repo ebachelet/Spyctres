@@ -224,6 +224,7 @@ def ensure_phoenix_interpolator_for_segments(
     feh_grid,
     logg_grid,
     cache_path=None,
+    progress_callback=None,
 ):
     """
     Ensure the PHOENIX interpolator is built on the concatenated support grid
@@ -241,6 +242,7 @@ def ensure_phoenix_interpolator_for_segments(
         logg_grid=np.asarray(logg_grid, dtype=float),
         cache_path=cache_path,
         observed_wave_medium=observed_wave_medium,
+        progress_callback=progress_callback,
     )
 
     return support_wave_all
@@ -559,6 +561,7 @@ def fit_phoenix_sideband_symmetric(
     sideband_order=1,
     sideband_poly_order=1,
     bounds=None,
+    progress_callback=None,
 ):
     """
     Sideband-normalized fitter for line-window workflows.
@@ -581,7 +584,15 @@ def fit_phoenix_sideband_symmetric(
     Spyctres.fitting: positive RV redshifts the template/model. The observed-grid
     branch uses `_apply_observed_grid_rv_shift()` internally to preserve this
     convention while leaving the legacy Spyctres.velocity_correction API unchanged.
+
+    progress_callback : callable, optional
+        Called with short status strings before cache load/rebuild, RV grid
+        scanning, and local optimizer start/finish.
     """
+    def report(message):
+        if progress_callback is not None:
+            progress_callback(str(message))
+
     if isinstance(segments, SpectrumSegment):
         segments = [segments]
     else:
@@ -628,6 +639,7 @@ def fit_phoenix_sideband_symmetric(
         for seg in segments
     ]
     if forward_model == "interp_observed":
+        report("Preparing observed-grid PHOENIX interpolator/cache.")
         support_wave_all = ensure_phoenix_interpolator_for_segments(
             segments=segments,
             phoenix_lib=phoenix_lib,
@@ -635,8 +647,10 @@ def fit_phoenix_sideband_symmetric(
             feh_grid=feh_grid_req,
             logg_grid=logg_grid_req,
             cache_path=cache_path,
+            progress_callback=progress_callback,
         )
     else:
+        report("Building native PHOENIX interpolation wavelength grid.")
         model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
             segments=segments,
             phoenix_lib=phoenix_lib,
@@ -650,6 +664,7 @@ def fit_phoenix_sideband_symmetric(
             logg_grid_req,
             observed_wave_medium=model_wave_medium,
         ):
+            report("Preparing PHOENIX interpolator/cache.")
             phoenix_lib.build_interpolator(
                 observed_wave=model_wave_grid,
                 teff_grid=teff_grid_req,
@@ -657,7 +672,10 @@ def fit_phoenix_sideband_symmetric(
                 logg_grid=logg_grid_req,
                 cache_path=cache_path,
                 observed_wave_medium=model_wave_medium,
+                progress_callback=progress_callback,
             )
+        else:
+            report("Reusing existing in-memory PHOENIX interpolator.")
 
     if bounds is None:
         tg, zg, gg = phoenix_lib._grid
@@ -766,6 +784,11 @@ def fit_phoenix_sideband_symmetric(
     if rv_init == "grid":
         rv_lo, rv_hi = float(bounds[0][3]), float(bounds[1][3])
         rv_grid = np.linspace(rv_lo, rv_hi, int(rv_grid_n))
+        report(
+            "Running sideband coarse RV grid scan with {0} trial velocities.".format(
+                int(rv_grid.size)
+            )
+        )
         chi2s = np.array(
             [np.sum(residuals((teff0, feh0, logg0, float(rv))) ** 2) for rv in rv_grid],
             dtype=float,
@@ -773,12 +796,22 @@ def fit_phoenix_sideband_symmetric(
         rv0_use = float(rv_grid[np.argmin(chi2s)])
         if verbose:
             print("RV init grid best:", rv0_use)
+        report("Sideband coarse RV grid scan selected rv_kms={0:.6g}.".format(rv0_use))
         p0_use = (teff0, feh0, logg0, rv0_use)
     elif rv_init is None:
+        report("Skipping sideband coarse RV grid scan; using supplied initial rv_kms.")
         p0_use = (teff0, feh0, logg0, rv0)
     else:
         raise ValueError("rv_init must be 'grid' or None.")
 
+    report(
+        "Starting sideband local optimizer: p0=({0:g}, {1:g}, {2:g}, {3:g}).".format(
+            float(p0_use[0]),
+            float(p0_use[1]),
+            float(p0_use[2]),
+            float(p0_use[3]),
+        )
+    )
     res = least_squares(
         residuals,
         x0=np.array(p0_use, dtype=float),
@@ -787,6 +820,12 @@ def fit_phoenix_sideband_symmetric(
         x_scale=np.array([100.0, 0.1, 0.1, 10.0], dtype=float),
         max_nfev=int(max_nfev),
         verbose=2 if verbose else 0,
+    )
+    report(
+        "Finished sideband local optimizer: chi2={0:.6g}, success={1}.".format(
+            float(np.sum(res.fun * res.fun)),
+            bool(res.success),
+        )
     )
 
     r = res.fun
@@ -1271,6 +1310,7 @@ def ensure_phoenix_native_interpolator_for_segments(
     logg_grid,
     cache_path=None,
     model_margin_A=20.0,
+    progress_callback=None,
 ):
     model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
         segments=segments,
@@ -1289,6 +1329,7 @@ def ensure_phoenix_native_interpolator_for_segments(
         logg_grid=logg_grid,
         cache_path=cache_path,
         observed_wave_medium=model_wave_medium,
+        progress_callback=progress_callback,
     )
 
     return model_wave_grid, model_wave_medium

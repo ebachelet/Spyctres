@@ -151,12 +151,14 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
 
         def __init__(self):
             self._n_wave = None
+            self.build_progress_callback_received = None
 
         def interpolator_matches(self, observed_wave, *args, **kwargs):
             return self._n_wave == len(observed_wave)
 
         def build_interpolator(self, observed_wave, *args, **kwargs):
             self._n_wave = len(observed_wave)
+            self.build_progress_callback_received = kwargs.get("progress_callback")
 
         def evaluate(self, teff, feh, logg):
             return np.ones(self._n_wave, dtype=float)
@@ -179,16 +181,21 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
         name="weighted-two-segment",
     )
 
+    messages = []
+    callback = messages.append
+    library = ConstantLibrary()
     result = fit_phoenix_full_spectrum(
         collection,
-        phoenix_lib=ConstantLibrary(),
+        phoenix_lib=library,
         p0=(5000.0, 0.0, 4.0, 0.0),
         bounds=((4999.0, -0.1, 3.9, -1.0), (5001.0, 0.1, 4.1, 1.0)),
         mdeg=0,
-        rv_init=None,
+        rv_init="grid",
+        rv_grid_n=3,
         multistart=1,
         max_nfev=1,
         forward_model="interp_observed",
+        progress_callback=callback,
     )
 
     assert result["n_points"] == 10
@@ -203,6 +210,14 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert result["quality_report"]["degrees_of_freedom"] == 4
     assert result["quality_report"]["segments"][0]["n_fit"] == 5
     assert result["quality_report"]["segments"][0]["explicit_exclusion_fraction"] == 0.0
+    assert library.build_progress_callback_received is callback
+    assert any("Prepared fit data" in message for message in messages)
+    assert any("Preparing PHOENIX interpolator/cache" in message for message in messages)
+    assert any("Running coarse RV grid scan" in message for message in messages)
+    assert any("Coarse RV grid scan selected" in message for message in messages)
+    assert any("Starting local optimizer" in message for message in messages)
+    assert any("Finished local optimizer" in message for message in messages)
+    assert any("Selected best fit" in message for message in messages)
 
 
 def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():

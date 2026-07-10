@@ -386,7 +386,8 @@ class PhoenixLibrary(object):
                        logg_grid=None,
                        observed_wave_medium=None,
                        cache_path=None,
-                       allow_missing=False):
+                       allow_missing=False,
+                       progress_callback=None):
         """
         Build or load a RegularGridInterpolator on (Teff, [Fe/H], logg).
 
@@ -414,12 +415,19 @@ class PhoenixLibrary(object):
         allow_missing : bool
             If True, missing templates are skipped and left as NaN in the flux cube.
             If False, missing templates raise immediately.
+        progress_callback : callable, optional
+            Called with short status strings before cache load/rebuild and
+            template-grid construction steps.
 
         Returns
         -------
         scipy.interpolate.RegularGridInterpolator
             Interpolator returning flux on `observed_wave`.
         """
+        def report(message):
+            if progress_callback is not None:
+                progress_callback(str(message))
+
         observed_wave = _as_float_array(observed_wave)
         observed_wave_medium = (
             self.phoenix_wave_medium
@@ -438,6 +446,7 @@ class PhoenixLibrary(object):
         if cache_path is not None:
             cache_path = os.path.abspath(os.path.expanduser(cache_path))
             if os.path.exists(cache_path):
+                report("Loading PHOENIX interpolator cache: {0}".format(cache_path))
                 try:
                     self.load_cache(
                         cache_path,
@@ -447,15 +456,22 @@ class PhoenixLibrary(object):
                         expected_logg_grid=logg_grid,
                         expected_observed_wave_medium=observed_wave_medium,
                     )
+                    report("Loaded PHOENIX interpolator cache.")
                     return self._interp
                 except ValueError as e:
+                    report("PHOENIX cache mismatch; rebuilding: {0}".format(str(e)))
                     if self.verbose:
                         print("Cache mismatch, rebuilding:", cache_path)
                         print(str(e))
+            else:
+                report("No PHOENIX interpolator cache found; building a new one.")
+        else:
+            report("Building PHOENIX interpolator without an on-disk cache.")
 
         # Precompute the PHOENIX support grid in the requested wavelength medium
         # and its overlap with the observed wavelength grid once, outside the
         # template loop.                                
+        report("Preparing PHOENIX wavelength support grid.")
         wave_clip, mask = self._prepare_resampling_grid(
             observed_wave=observed_wave,
             observed_wave_medium=observed_wave_medium,
@@ -469,6 +485,13 @@ class PhoenixLibrary(object):
 
         # Fast observed-grid build: read only the template flux array for each
         # grid point, then resample using the precomputed wavelength support.
+        report(
+            "Building PHOENIX flux cube ({0} Teff x {1} [Fe/H] x {2} logg).".format(
+                len(teff_grid),
+                len(feh_grid),
+                len(logg_grid),
+            )
+        )
         for it, teff in enumerate(teff_grid):
             for iz, feh in enumerate(feh_grid):
                 for ig, logg in enumerate(logg_grid):
@@ -504,8 +527,10 @@ class PhoenixLibrary(object):
         self._interp = RegularGridInterpolator(self._grid, flux_grid, method="linear", bounds_error=True)
 
         if cache_path is not None:
+            report("Saving PHOENIX interpolator cache: {0}".format(cache_path))
             self.save_cache(cache_path, observed_wave_medium=observed_wave_medium)
 
+        report("PHOENIX interpolator is ready.")
         return self._interp
 
     def evaluate(self, teff, feh, logg):
@@ -544,6 +569,7 @@ class PhoenixLibrary(object):
         logg_grid,
         observed_wave_medium,
         cache_path=None,
+        progress_callback=None,
     ):
         """Build/load an interpolator only when its scientific grid changed."""
         if not self.interpolator_matches(
@@ -560,6 +586,7 @@ class PhoenixLibrary(object):
                 logg_grid=logg_grid,
                 observed_wave_medium=observed_wave_medium,
                 cache_path=cache_path,
+                progress_callback=progress_callback,
             )
         return self._interp
 

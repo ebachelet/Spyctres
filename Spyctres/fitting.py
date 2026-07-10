@@ -1936,6 +1936,7 @@ def fit_phoenix_full_spectrum(
     x_scale=None,
     verbose=0,
     max_nfev=200,
+    progress_callback=None,
     ):
     """
     Fit PHOENIX templates to one or more SpectrumSegment objects.
@@ -2095,6 +2096,11 @@ def fit_phoenix_full_spectrum(
     max_nfev : int, optional
         Maximum number of function evaluations for the nonlinear optimizer.
 
+    progress_callback : callable, optional
+        Called with short status strings before long operations such as cache
+        load/rebuild, RV grid scan, and local optimizer starts/finishes. For
+        command-line use, pass ``lambda msg: print(msg, flush=True)``.
+
     Returns
     -------
     result : dict
@@ -2107,6 +2113,10 @@ def fit_phoenix_full_spectrum(
         - `lsf_fwhm_kms`: Gaussian LSF FWHM in km/s, if any
         - `segment_names`, `segment_weights`, `collection_name`, `collection_meta`
     """
+    def report(message):
+        if progress_callback is not None:
+            progress_callback(str(message))
+
     segments, segment_weights, collection_name, collection_meta = _coerce_segments_input(segments)
         
     if forward_model not in ("interp_observed", "native_interp"):
@@ -2160,6 +2170,12 @@ def fit_phoenix_full_spectrum(
     )
     if support_wave_all.size == 0 or flux_all.size == 0:
         raise ValueError("No data points selected for fitting.")
+    report(
+        "Prepared fit data: {0} retained segment(s), {1} fitted pixel(s).".format(
+            len(seg_meta),
+            int(flux_all.size),
+        )
+    )
 
     retained_segments = _retained_segments_from_meta(segments, seg_meta)
     forward_segments = _make_forward_segments(
@@ -2186,6 +2202,7 @@ def fit_phoenix_full_spectrum(
         else:
             model_wave_medium = None
     else:
+        report("Building native PHOENIX interpolation wavelength grid.")
         model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
             segments=forward_segments,
             phoenix_lib=phoenix_lib,
@@ -2198,6 +2215,7 @@ def fit_phoenix_full_spectrum(
     if physical_init == "coarse":
         if forward_model != "native_interp":
             raise ValueError("physical_init='coarse' requires forward_model='native_interp'.")
+        report("Running coarse physical-parameter initialization.")
         coarse_best, coarse_scores = _coarse_physical_start_native_interp(
             forward_segments=forward_segments,
             flux_all=flux_all,
@@ -2230,6 +2248,13 @@ def fit_phoenix_full_spectrum(
         }
         if verbose:
             print("Coarse physical init best:", coarse_best)
+        report(
+            "Coarse physical initialization selected Teff={0:g}, [Fe/H]={1:g}, logg={2:g}.".format(
+                teff0,
+                feh0,
+                logg0,
+            )
+        )
 
     # Materialize one local interpolation grid around either p0 or the best
     # sparse-grid node. Every local multistart below reuses this same grid.
@@ -2261,6 +2286,7 @@ def fit_phoenix_full_spectrum(
         logg_grid_req,
         observed_wave_medium=model_wave_medium,
     ):
+        report("Preparing PHOENIX interpolator/cache.")
         phoenix_lib.build_interpolator(
             observed_wave=model_wave_grid,
             teff_grid=teff_grid_req,
@@ -2269,7 +2295,10 @@ def fit_phoenix_full_spectrum(
             cache_path=cache_path,
             allow_missing=allow_missing,
             observed_wave_medium=model_wave_medium,
+            progress_callback=progress_callback,
         )
+    else:
+        report("Reusing existing in-memory PHOENIX interpolator.")
     
     # Set default bounds from the interpolator grid if none supplied
     if bounds is None:
@@ -2370,6 +2399,11 @@ def fit_phoenix_full_spectrum(
     if rv_init == "grid":
         rv_lo, rv_hi = float(bounds[0][3]), float(bounds[1][3])
         rv_grid = np.linspace(rv_lo, rv_hi, int(rv_grid_n))
+        report(
+            "Running coarse RV grid scan with {0} trial velocities.".format(
+                int(rv_grid.size)
+            )
+        )
         
         chi2s = np.empty(rv_grid.size, dtype=float)
         for j, rv in enumerate(rv_grid):
@@ -2414,8 +2448,10 @@ def fit_phoenix_full_spectrum(
         rv0_best = float(rv_grid[int(np.argmin(chi2s))])
         if verbose:
             print("RV init grid best:", rv0_best)
+        report("Coarse RV grid scan selected rv_kms={0:.6g}.".format(rv0_best))
         p0 = (teff0, feh0, logg0, rv0_best)
     elif rv_init is None:
+        report("Skipping coarse RV grid scan; using supplied initial rv_kms.")
         p0 = (teff0, feh0, logg0, rv0)
     else:
         raise ValueError("rv_init must be 'grid' or None.")
@@ -2442,6 +2478,16 @@ def fit_phoenix_full_spectrum(
     )
     local_results = []
     for start_index, start in enumerate(starts):
+        report(
+            "Starting local optimizer {0}/{1}: p0=({2:g}, {3:g}, {4:g}, {5:g}).".format(
+                start_index + 1,
+                len(starts),
+                float(start[0]),
+                float(start[1]),
+                float(start[2]),
+                float(start[3]),
+            )
+        )
         candidate_result = least_squares(
             residuals,
             x0=np.asarray(start, dtype=float),
@@ -2452,12 +2498,21 @@ def fit_phoenix_full_spectrum(
             verbose=2 if verbose else 0,
         )
         local_results.append(candidate_result)
+        candidate_chi2 = float(np.sum(candidate_result.fun * candidate_result.fun))
+        report(
+            "Finished local optimizer {0}/{1}: chi2={2:.6g}, success={3}.".format(
+                start_index + 1,
+                len(starts),
+                candidate_chi2,
+                bool(candidate_result.success),
+            )
+        )
         if verbose and len(starts) > 1:
             print(
                 "Local start {0}/{1}: chi2={2:.6g}".format(
                     start_index + 1,
                     len(starts),
-                    float(np.sum(candidate_result.fun * candidate_result.fun)),
+                    candidate_chi2,
                 )
             )
     res = min(local_results, key=lambda item: float(np.sum(item.fun * item.fun)))
@@ -2579,4 +2634,13 @@ def fit_phoenix_full_spectrum(
         # Note: did not store poly coeffs in this minimal version to avoid re-evaluating.
     }
     summary["quality_report"] = build_fit_quality_report(summary)
+    report(
+        "Selected best fit: Teff={0:.6g}, [Fe/H]={1:.6g}, logg={2:.6g}, rv_kms={3:.6g}, chi2_red={4:.6g}.".format(
+            summary["teff"],
+            summary["feh"],
+            summary["logg"],
+            summary["rv_kms"],
+            summary["chi2_red"],
+        )
+    )
     return summary

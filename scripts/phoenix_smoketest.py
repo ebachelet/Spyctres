@@ -130,6 +130,7 @@ def main():
         logg_grid=logg_grid,
         cache_path=None,
         allow_missing=False,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
     f_mid = lib.evaluate(5050, -0.25, 4.25)
@@ -152,6 +153,7 @@ def main():
         logg_grid=logg_grid,
         cache_path=cache_path,
         allow_missing=False,
+        progress_callback=lambda message: print(message, flush=True),
     )
     f1 = lib.evaluate(5050, -0.25, 4.25)
 
@@ -163,6 +165,7 @@ def main():
         logg_grid=logg_grid,
         cache_path=cache_path,
         allow_missing=False,
+        progress_callback=lambda message: print(message, flush=True),
     )
     f2 = lib2.evaluate(5050, -0.25, 4.25)
 

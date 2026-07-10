@@ -193,6 +193,7 @@ def main():
             "Use --wave-medium air or vacuum, or use --forward-model native_interp."
         )
 
+    print("Reading Gemini spectrum...", flush=True)
     seg0 = read_spectrum(args.file, instrument="gemini")
 
     strict_mask = build_gemini_fit_mask(
@@ -207,6 +208,7 @@ def main():
         meta["wave_medium"] = args.wave_medium
         seg0 = seg0.copy(meta=meta, wave_medium=args.wave_medium)
 
+    print("Preparing fit window...", flush=True)
     seg = seg0.window(
         wmin=args.wmin,
         wmax=args.wmax,
@@ -221,8 +223,10 @@ def main():
     if seg.err is None:
         print("WARNING: no uncertainty column found; chi2_red is only heuristic in this quicklook fit.")
 
+    print("Loading PHOENIX library...", flush=True)
     phoenix_lib = PhoenixLibrary(args.phoenix_dir, verbose=bool(args.verbose))
 
+    print("Selecting PHOENIX grid...", flush=True)
     teff_avail, feh_avail, logg_avail = phoenix_lib.available_axes()
     teff_grid_req = pick_grid_range(teff_avail, args.teff_min, args.teff_max)
     feh_grid_req = pick_grid_range(feh_avail, args.feh_min, args.feh_max)
@@ -237,6 +241,7 @@ def main():
     if R is None:
         print("WARNING: no resolving power supplied; model is not instrumentally broadened.")
         
+    print("Running PHOENIX fit...", flush=True)
     out = fit_phoenix_full_spectrum(
         [seg],
         phoenix_lib=phoenix_lib,
@@ -255,8 +260,10 @@ def main():
         rv_grid_n=args.rv_grid_n,
         verbose=args.verbose,
         max_nfev=300,
+        progress_callback=lambda message: print(message, flush=True),
     )
 
+    print("Reconstructing best-fit model for plotting...", flush=True)
     model_list, coeffs_list, used_masks, excluded_masks = reconstruct_phoenix_legendre_models_for_segments(
         segments=[seg],
         phoenix_lib=phoenix_lib,
@@ -310,6 +317,7 @@ def main():
         )
     )
 
+    print("Building diagnostic plot...", flush=True)
     fig, axes = plot_full_spectrum_fit(
         wave=seg.wave,
         flux=seg.flux,
