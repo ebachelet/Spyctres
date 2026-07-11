@@ -2,8 +2,9 @@
 
 Purpose
 -------
-This script demonstrates the shortest complete path from a reduced spectrum to
-a structured PHOENIX result and an interactive diagnostic plot. The plot is a
+This script demonstrates the recommended public `fit_stellar_spectrum()`
+workflow from a reduced spectrum to a structured PHOENIX result and an
+interactive diagnostic plot. The plot is a
 wide, stacked diagnostic view: observed spectrum and model on top, residuals
 underneath. This makes it easier to inspect broad failures, masked regions, and
 line-profile mismatches than a small square pop-up.
@@ -29,7 +30,7 @@ import argparse
 import json
 
 import matplotlib.pyplot as plt
-from Spyctres import fit_phoenix_spectrum, prepare_phoenix_fit_kwargs
+from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum
 from Spyctres.plotting import plot_fit_referee
 
@@ -37,7 +38,7 @@ from Spyctres.plotting import plot_fit_referee
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Minimal public-API full-spectrum PHOENIX demonstration. This is "
+            "Minimal fit_stellar_spectrum() PHOENIX demonstration. This is "
             "not a precision line-profile fit: rotation, macroturbulence, "
             "abundance variations, and detailed LSF structure are not fitted."
         ),
@@ -141,10 +142,13 @@ def main(argv=None):
             print("  - {0}".format(reason), flush=True)
         for warning in suggestion.warnings:
             print("  WARNING: {0}".format(warning), flush=True)
-    print("Running PHOENIX fit...", flush=True)
-    result = fit_phoenix_spectrum(
+    print("Running public fit_stellar_spectrum() workflow...", flush=True)
+    result = fit_stellar_spectrum(
         spectrum,
+        model="phoenix",
         phoenix_dir=args.phoenix_dir,
+        auto_defaults=False,
+        science_case="classification",
         progress_callback=lambda event: print(event, flush=True),
         **fit_kwargs,
     )
