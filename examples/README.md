@@ -11,7 +11,6 @@ compact JSON plus a diagnostic referee plot:
 python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --teff 6000 --feh 0.0 --logg 4.0 --rv 0.0 \
   --output-json /tmp/spyctres_result.json \
   --output-plot /tmp/spyctres_fit.png
 ```
@@ -27,7 +26,11 @@ printed quality report to check flags, masked fraction, dropped segments, and
 per-segment fit-pixel counts before interpreting the fitted parameters. Use the
 instrument-specific recipes and local line diagnostics when assessing whether
 line-width residuals arise from the LSF, stellar broadening, masks, or model
-physics.
+physics. The script uses `prepare_phoenix_fit_kwargs()` by default to choose a
+conservative first-pass window, bounds, RV scan, and coarse initialization from
+the loaded spectrum metadata. Expert users can still override those choices
+with flags such as `--wmin`, `--wmax`, `--teff`, `--teff-min`, or
+`--no-auto-defaults`.
 
 ## XSL real-spectrum validation
 
@@ -75,11 +78,12 @@ The example notebook shows how to:
 1. resolve the local PHOENIX template path from environment or config
 2. read a reduced 1D spectrum with `Spyctres.io.read_spectrum`
 3. inspect the returned `SpectrumSegment` metadata
-4. define Balmer-window fitting segments
-5. exclude line-core pixels with a simple mask
-6. run a PHOENIX fit for `(Teff, [Fe/H], logg, RV)`
-7. reconstruct and plot the fitted model
-8. interpret the result as a first model-based spectral classification
+4. ask Spyctres for auditable first-pass PHOENIX defaults
+5. define Balmer-window fitting segments
+6. exclude line-core pixels with a simple mask
+7. run a PHOENIX fit for `(Teff, [Fe/H], logg, RV)`
+8. reconstruct and plot the fitted model
+9. interpret the result as a first model-based spectral classification
 
 The fitter returns physical parameters rather than a formal MK spectral class label. In practice, the fitted parameters can be used as the basis for parameter-based classification.
 
@@ -144,6 +148,8 @@ When adapting the example, you should check:
 - resolving power or effective line broadening
 - whether the Balmer-window choice is still appropriate
 - whether the default line-core mask is sensible for your science case
+- whether the suggested first-pass fit bounds should be narrowed, widened, or
+  replaced by expert values
 
 ## Advanced workflows
 
