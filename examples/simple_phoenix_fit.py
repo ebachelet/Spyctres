@@ -81,12 +81,15 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    print("Reading spectrum...", flush=True)
     spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
+    print("Running PHOENIX fit...", flush=True)
     result = fit_phoenix_spectrum(
         spectrum,
         phoenix_dir=args.phoenix_dir,
         p0=(args.teff, args.feh, args.logg, args.rv),
         R=args.resolution_R,
+        progress_callback=lambda event: print(event, flush=True),
     )
     summary = {
         key: result[key]
@@ -106,6 +109,7 @@ def main(argv=None):
         if args.output_json:
             result.save_json(args.output_json)
         raise RuntimeError("Fit did not converge, so no model is available to plot.")
+    print("Building diagnostic plot...", flush=True)
     fig, _axes = plot_fit_referee(
         result,
         segment=spectrum,

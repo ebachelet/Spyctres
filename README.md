@@ -67,10 +67,37 @@ phoenix_dir = "/path/to/PHOENIXv2"
 
 ## Quick start
 
-Useful entry points in the repository include:
+First check that the local environment and optional PHOENIX configuration are
+visible to Spyctres:
+
+```bash
+python scripts/check_spyctres_setup.py \
+  --spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter
+```
+
+If PHOENIX is not configured yet, the checker reports the missing path as a
+warning unless `--require-phoenix` is supplied. Once `SPYCTRES_PHOENIX_DIR` or
+`~/.config/spyctres/config.toml` points to the local PHOENIX root, run the
+short command-line example:
+
+```bash
+python examples/simple_phoenix_fit.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --teff 6000 --feh 0.0 --logg 4.0 --rv 0.0
+```
+
+This example reads the spectrum, runs the native-grid PHOENIX fit, prints a
+compact result and quality report, and opens a wide observed/model/residual
+diagnostic plot. It is a first-contact classification example, not a precision
+line-width or abundance analysis.
+
+Other useful entry points include:
 
 - `quick_example.py` for the legacy fitting workflow
-- `examples/full_spectrum_classification.ipynb` for PHOENIX classification
+- `examples/full_spectrum_classification.ipynb` for a longer PHOENIX classification walkthrough
+- `examples/xshooter_multiarm_classification.ipynb` for multi-arm fitting
 - smoke tests under `scripts/`
 
 To open the PHOENIX example notebook:
