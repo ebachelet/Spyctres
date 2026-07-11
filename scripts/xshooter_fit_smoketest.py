@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from Spyctres.results import format_fit_quality_report
+from Spyctres.defaults import prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segments
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
@@ -551,19 +552,34 @@ def main():
         default=200.0,
         help="Margin in Angstrom for native_interp model preparation",
     )
-    parser.add_argument("--wmin", type=float, default=3980.0, help="Minimum wavelength in Angstrom")
-    parser.add_argument("--wmax", type=float, default=5500.0, help="Maximum wavelength in Angstrom")
-    parser.add_argument("--teff-min", type=float, default=9000.0,
+    parser.add_argument(
+        "--auto-defaults",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use spectrum metadata/coverage to choose first-pass fit defaults. "
+            "Explicit CLI values and named presets still override suggestions."
+        ),
+    )
+    parser.add_argument(
+        "--defaults-mode",
+        choices=("quicklook", "standard", "diagnostic"),
+        default="quicklook",
+        help="Search-budget mode used by --auto-defaults.",
+    )
+    parser.add_argument("--wmin", type=float, default=None, help="Minimum wavelength in Angstrom")
+    parser.add_argument("--wmax", type=float, default=None, help="Maximum wavelength in Angstrom")
+    parser.add_argument("--teff-min", type=float, default=None,
                         help="Minimum Teff for explicit PHOENIX grid in Balmer-only mode")
-    parser.add_argument("--teff-max", type=float, default=11600.0,
+    parser.add_argument("--teff-max", type=float, default=None,
                         help="Maximum Teff for explicit PHOENIX grid in Balmer-only mode")
-    parser.add_argument("--feh-min", type=float, default=-2.0,
+    parser.add_argument("--feh-min", type=float, default=None,
                         help="Minimum [Fe/H] for explicit PHOENIX grid in Balmer-only mode")
-    parser.add_argument("--feh-max", type=float, default=0.0,
+    parser.add_argument("--feh-max", type=float, default=None,
                         help="Maximum [Fe/H] for explicit PHOENIX grid in Balmer-only mode")
-    parser.add_argument("--logg-min", type=float, default=2.0,
+    parser.add_argument("--logg-min", type=float, default=None,
                         help="Minimum logg for explicit PHOENIX grid in Balmer-only mode")
-    parser.add_argument("--logg-max", type=float, default=4.5,
+    parser.add_argument("--logg-max", type=float, default=None,
                         help="Maximum logg for explicit PHOENIX grid in Balmer-only mode")
     parser.add_argument("--clip-left", type=int, default=0, help="Clip this many pixels from the left edge")
     parser.add_argument("--clip-right", type=int, default=0, help="Clip this many pixels from the right edge")
@@ -579,13 +595,13 @@ def main():
         default="current",
         help="Use the current narrow Balmer windows or the broader notebook-style windows. The validated benchmark uses 'notebook'.",
     )
-    parser.add_argument("--mdeg", type=int, default=2, help="Legendre continuum degree")
-    parser.add_argument("--teff0", type=float, default=5000.0, help="Initial Teff")
-    parser.add_argument("--feh0", type=float, default=-0.5, help="Initial [Fe/H]")
-    parser.add_argument("--logg0", type=float, default=4.0, help="Initial logg")
-    parser.add_argument("--rv0", type=float, default=0.0, help="Initial stellar RV in km/s")
+    parser.add_argument("--mdeg", type=int, default=None, help="Legendre continuum degree")
+    parser.add_argument("--teff0", type=float, default=None, help="Initial Teff")
+    parser.add_argument("--feh0", type=float, default=None, help="Initial [Fe/H]")
+    parser.add_argument("--logg0", type=float, default=None, help="Initial logg")
+    parser.add_argument("--rv0", type=float, default=None, help="Initial stellar RV in km/s")
     parser.add_argument("--rv-init", choices=["grid", "none"], default="grid", help="RV initialization strategy")
-    parser.add_argument("--rv-grid-n", type=int, default=81, help="Number of trial RV points in coarse RV scan")
+    parser.add_argument("--rv-grid-n", type=int, default=None, help="Number of trial RV points in coarse RV scan")
     parser.add_argument("--telluric-threshold", type=float, default=0.90, help="Telluric mask threshold")
     parser.add_argument("--use-telluric-mask", action="store_true", help="Apply built-in telluric mask")
     parser.add_argument("--use-barycorr", action="store_true", help="Pass header barycentric correction into fit")
@@ -612,7 +628,7 @@ def main():
             "or [paths].phoenix_dir in ~/.config/spyctres/config.toml."
         )
 
-    if args.wmax <= args.wmin:
+    if args.wmin is not None and args.wmax is not None and args.wmax <= args.wmin:
         parser.error("--wmax must be greater than --wmin.")
 
     print("Reading X-SHOOTER spectrum...", flush=True)
@@ -623,10 +639,65 @@ def main():
             "This script is currently configured for X-SHOOTER UVB fitting, but the reader reported arm={0!r}.".format(arm)
         )
 
+    try:
+        fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+            seg0,
+            auto_defaults=args.auto_defaults,
+            defaults_mode=args.defaults_mode,
+            science_case="classification",
+            fallback_p0=(5000.0, -0.5, 4.0, 0.0),
+            fallback_bounds=(
+                (9000.0, -2.0, 2.0, -300.0),
+                (11600.0, 0.0, 4.5, 300.0),
+            ),
+            p0_overrides=(args.teff0, args.feh0, args.logg0, args.rv0),
+            lower_bound_overrides=(
+                args.teff_min,
+                args.feh_min,
+                args.logg_min,
+                None,
+            ),
+            upper_bound_overrides=(
+                args.teff_max,
+                args.feh_max,
+                args.logg_max,
+                None,
+            ),
+            window=(
+                args.wmin,
+                args.wmax,
+            ) if args.wmin is not None or args.wmax is not None else None,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    fit_kwargs["forward_model"] = args.forward_model
+    if args.mdeg is not None:
+        fit_kwargs["mdeg"] = int(args.mdeg)
+    if args.rv_grid_n is not None:
+        fit_kwargs["rv_grid_n"] = int(args.rv_grid_n)
+    if args.rv_init == "none":
+        fit_kwargs["rv_init"] = None
+
+    args.teff0, args.feh0, args.logg0, args.rv0 = fit_kwargs["p0"]
+    args.mdeg = int(fit_kwargs["mdeg"])
+    args.rv_grid_n = int(fit_kwargs["rv_grid_n"])
+
+    if suggestion is not None:
+        print("Suggested first-pass fit defaults:", flush=True)
+        for reason in suggestion.reasons:
+            print("  - {0}".format(reason), flush=True)
+        for warning in suggestion.warnings:
+            print("  WARNING: {0}".format(warning), flush=True)
+
+    fit_regions = fit_kwargs.get("regions", [(None, None)])
+    if len(fit_regions) != 1:
+        parser.error("X-SHOOTER smoke test expects a single selected wavelength range.")
+    fit_wmin, fit_wmax = fit_regions[0]
+
     print("Preparing fit window and segments...", flush=True)
     seg_clip = seg0.window(
-        wmin=args.wmin,
-        wmax=args.wmax,
+        wmin=fit_wmin,
+        wmax=fit_wmax,
         clip_left=args.clip_left,
         clip_right=args.clip_right,
         name_suffix="fitwin",
@@ -709,9 +780,10 @@ def main():
         print("Installed FeH  range:", float(np.min(feh_avail)), float(np.max(feh_avail)))
         print("Installed logg range:", float(np.min(logg_avail)), float(np.max(logg_avail)))
 
-        teff_grid_req = pick_grid_range(teff_avail, args.teff_min, args.teff_max)
-        feh_grid_req = pick_grid_range(feh_avail, args.feh_min, args.feh_max)
-        logg_grid_req = pick_grid_range(logg_avail, args.logg_min, args.logg_max)
+        bounds = fit_kwargs["bounds"]
+        teff_grid_req = pick_grid_range(teff_avail, bounds[0][0], bounds[1][0])
+        feh_grid_req = pick_grid_range(feh_avail, bounds[0][1], bounds[1][1])
+        logg_grid_req = pick_grid_range(logg_avail, bounds[0][2], bounds[1][2])
 
         teff_grid_fit, feh_grid_fit, logg_grid_fit = phoenix_lib.complete_subgrid(
             teff_grid_req, feh_grid_req, logg_grid_req
@@ -751,16 +823,17 @@ def main():
                 segments=segments,
                 phoenix_lib=phoenix_lib,
                 p0=p0_i,
+                bounds=fit_kwargs["bounds"],
                 exclude_mask=exclude_mask,
                 rv_bary_kms=rv_bary_kms,
                 R=R,
-                forward_model=args.forward_model,
+                forward_model=fit_kwargs["forward_model"],
                 model_margin_A=args.model_margin,
                 teff_grid=teff_grid_fit,
                 feh_grid=feh_grid_fit,
                 logg_grid=logg_grid_fit,
                 cache_path=args.cache_path,
-                rv_init=None if args.rv_init == "none" else "grid",
+                rv_init=fit_kwargs.get("rv_init"),
                 rv_grid_n=args.rv_grid_n,
                 verbose=args.verbose,
                 max_nfev=200,
@@ -775,17 +848,24 @@ def main():
                 segments=segments,
                 phoenix_lib=phoenix_lib,
                 p0=p0_i,
+                bounds=fit_kwargs["bounds"],
                 exclude_mask=exclude_mask,
                 mdeg=fit_mdeg,
                 rv_bary_kms=rv_bary_kms,
                 R=R,
-                forward_model=args.forward_model,
+                forward_model=fit_kwargs["forward_model"],
                 model_margin_A=args.model_margin,
                 teff_grid=teff_grid_fit,
                 feh_grid=feh_grid_fit,
                 logg_grid=logg_grid_fit,
                 cache_path=args.cache_path,
-                rv_init=None if args.rv_init == "none" else "grid",
+                physical_init=fit_kwargs.get("physical_init"),
+                coarse_teff_grid=fit_kwargs.get("coarse_teff_grid"),
+                coarse_feh_grid=fit_kwargs.get("coarse_feh_grid"),
+                coarse_logg_grid=fit_kwargs.get("coarse_logg_grid"),
+                coarse_decimate=fit_kwargs.get("coarse_decimate", 12),
+                multistart=fit_kwargs.get("multistart", 1),
+                rv_init=fit_kwargs.get("rv_init"),
                 rv_grid_n=args.rv_grid_n,
                 verbose=args.verbose,
                 max_nfev=200,
@@ -806,7 +886,7 @@ def main():
             sideband_width=args.sideband_width,
             sideband_order=args.sideband_order,
             sideband_poly_order=args.sideband_poly_order,
-            forward_model=args.forward_model,
+            forward_model=fit_kwargs["forward_model"],
             model_margin_A=args.model_margin,
         )
 
@@ -885,7 +965,7 @@ def main():
     print("Object:", seg_ref.meta.get("object"))
     print("Arm:", seg_ref.meta.get("arm"))
     print("Pixels used:", int(sum(np.sum(m) for m in used_masks_plot)), "/", int(sum(len(s.wave) for s in segments)))
-    print("Window [A]:", (args.wmin, args.wmax))
+    print("Window [A]:", (fit_wmin, fit_wmax))
     print("Telluric mask:", bool(args.use_telluric_mask))
     print("Barycorr used [km/s]:", rv_bary_kms)
     print("R used:", R)
@@ -945,8 +1025,8 @@ def main():
 
     title = "{0}  {1:.0f}-{2:.0f} A  Teff={3:.0f}  [Fe/H]={4:.2f}  logg={5:.2f}  RV={6:.1f}  chi2_red={7:.2f}".format(
         os.path.basename(args.file),
-        args.wmin,
-        args.wmax,
+        fit_wmin,
+        fit_wmax,
         result["teff"],
         result["feh"],
         result["logg"],
