@@ -1,4 +1,6 @@
 import numpy as np
+from .matplotlib_setup import ensure_matplotlib_config_dir
+ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from scipy import interpolate
@@ -1098,5 +1100,4 @@ def derive_AB_correction(filters):
         correction.append(fil.get_ab_magnitude(VEGA(wave).value*1.98644746*10**-8/wave,wave))
         
     return np.array(correction)
-
 

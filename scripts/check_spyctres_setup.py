@@ -41,9 +41,9 @@ OPTIONAL_MODULES = (
 
 
 if "MPLCONFIGDIR" not in os.environ:
-    os.environ["MPLCONFIGDIR"] = str(
-        Path(tempfile.gettempdir()) / "spyctres_matplotlib_cache"
-    )
+    mpl_cache = Path(tempfile.gettempdir()) / "spyctres_matplotlib_cache"
+    mpl_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(mpl_cache)
 
 
 def _status(ok, label, detail=""):

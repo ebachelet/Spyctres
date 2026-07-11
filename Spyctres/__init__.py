@@ -1,3 +1,6 @@
+from .matplotlib_setup import ensure_matplotlib_config_dir
+ensure_matplotlib_config_dir()
+
 from .api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
 from .defaults import (
     PhoenixFitDefaults,
@@ -23,6 +26,7 @@ from .io import SpectrumCollection, SpectrumSegment, read_spectrum
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
     "read_spectrum", "SpectrumSegment", "SpectrumCollection",
+    "ensure_matplotlib_config_dir",
     "PhoenixFitDiagnostics", "PhoenixFitResult",
     "PhoenixFitDefaults", "clip_grid_to_bounds",
     "prepare_phoenix_fit_kwargs", "spectrum_wavelength_range",

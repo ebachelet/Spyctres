@@ -1,4 +1,6 @@
 import numpy as np
+from .matplotlib_setup import ensure_matplotlib_config_dir
+ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from scipy import interpolate

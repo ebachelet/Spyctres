@@ -13,6 +13,8 @@ warnings.filterwarnings(
 )
 
 import numpy as np
+from Spyctres import ensure_matplotlib_config_dir
+ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 

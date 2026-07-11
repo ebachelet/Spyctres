@@ -29,6 +29,8 @@ python examples/simple_phoenix_fit.py \
 import argparse
 import json
 
+from Spyctres import ensure_matplotlib_config_dir
+ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum
