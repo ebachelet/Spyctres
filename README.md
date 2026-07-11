@@ -161,10 +161,32 @@ Scientific references supporting implemented algorithms are maintained in
 `references.json`, together with their affected code paths and validation
 notes.
 
-## Public PHOENIX fitting API
+## Public fitting API
 
-The high-level API accepts a `SpectrumSegment`, `SpectrumCollection`, or any
-input supported by the canonical ingestion layer:
+For the shortest out-of-the-box PHOENIX workflow, pass a spectrum file plus the
+reader name:
+
+```python
+from Spyctres import fit_stellar_spectrum
+
+result = fit_stellar_spectrum(
+    "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
+    instrument="xshooter",
+    phoenix_dir="/path/to/PHOENIXv2",
+)
+print(result["teff"], result["rv_kms"])
+print(result.quality_report_text())
+```
+
+`classify_spectrum()` is an alias for the same workflow. It reads the spectrum
+when given a path, asks `prepare_phoenix_fit_kwargs()` for conservative
+first-pass PHOENIX defaults, runs the native-grid PHOENIX fit, reconstructs the
+best-fit model, and returns a structured `PhoenixFitResult`. Expert users can
+override any fitting keyword directly, for example `regions`, `p0`, `bounds`,
+`rv_grid_n`, or `mdeg`.
+
+The lower-level PHOENIX API accepts a `SpectrumSegment`, `SpectrumCollection`,
+or any input supported by the canonical ingestion layer:
 
 ```python
 from Spyctres import fit_phoenix_spectrum, suggest_phoenix_fit_defaults

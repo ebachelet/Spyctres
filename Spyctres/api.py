@@ -1,13 +1,15 @@
 """High-level, instrument-independent Spyctres fitting API."""
 
 import inspect
+import os
 
 from .config import resolve_phoenix_dir
+from .defaults import prepare_phoenix_fit_kwargs
 from .fitting import (
     fit_phoenix_full_spectrum,
     reconstruct_phoenix_legendre_models_for_segments,
 )
-from .io import coerce_spectrum
+from .io import coerce_spectrum, read_spectrum
 from .phoenix import PhoenixLibrary
 from .results import PhoenixFitResult
 
@@ -80,3 +82,103 @@ def fit_phoenix_spectrum(
         excluded_masks=tuple(excluded_masks),
         provenance=provenance,
     )
+
+
+def fit_stellar_spectrum(
+    spectrum,
+    instrument=None,
+    model="phoenix",
+    phoenix_lib=None,
+    phoenix_dir=None,
+    auto_defaults=True,
+    defaults_mode="quicklook",
+    science_case="classification",
+    reader_kwargs=None,
+    reconstruct=True,
+    warn_unknown=True,
+    progress_callback=None,
+    **fit_kwargs,
+):
+    """Fit a reduced stellar spectrum with the recommended public workflow.
+
+    This is the "out of the box" entry point for users who should not need to
+    know the internal module layout. It accepts either an already-loaded
+    ``SpectrumSegment``/``SpectrumCollection``/array-like spectrum, or a path
+    plus an ``instrument`` reader name. For the current alpha workflow,
+    ``model="phoenix"`` is supported.
+
+    The function applies Spyctres' conservative first-pass PHOENIX defaults by
+    default, records the reasons/warnings in the returned result, and lets any
+    explicit fit keyword override the suggestion. For example, pass ``regions``,
+    ``p0``, ``bounds``, ``rv_grid_n``, or ``mdeg`` to take expert control.
+    """
+    model_name = str(model).strip().lower()
+    if model_name not in {"phoenix", "phoenix_hires", "phoenix-hires"}:
+        raise ValueError(
+            "fit_stellar_spectrum currently supports model='phoenix' only."
+        )
+
+    reader_kwargs = {} if reader_kwargs is None else dict(reader_kwargs)
+    input_was_path = isinstance(spectrum, (str, os.PathLike))
+    if input_was_path:
+        if instrument is None:
+            raise ValueError(
+                "Pass instrument='xshooter', 'pepsi', 'floyds', 'gemini', "
+                "or another registered reader when spectrum is a path."
+            )
+        canonical = read_spectrum(
+            spectrum,
+            instrument=instrument,
+            warn_unknown=warn_unknown,
+            **reader_kwargs,
+        )
+    else:
+        canonical = coerce_spectrum(
+            spectrum,
+            warn_unknown=warn_unknown,
+            source="fit_stellar_spectrum",
+        )
+
+    if progress_callback is not None:
+        if "progress_callback" in fit_kwargs:
+            raise ValueError(
+                "Pass progress_callback either as a named argument or in "
+                "fit_kwargs, not both."
+            )
+        fit_kwargs["progress_callback"] = progress_callback
+
+    resolved_fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+        canonical,
+        auto_defaults=auto_defaults,
+        defaults_mode=defaults_mode,
+        science_case=science_case,
+        extra_kwargs=fit_kwargs,
+    )
+
+    result = fit_phoenix_spectrum(
+        canonical,
+        phoenix_lib=phoenix_lib,
+        phoenix_dir=phoenix_dir,
+        reconstruct=reconstruct,
+        warn_unknown=warn_unknown,
+        **resolved_fit_kwargs,
+    )
+    if suggestion is not None:
+        result.summary["fit_default_suggestion"] = suggestion.to_dict()
+    result.provenance.update(
+        {
+            "workflow_api": "fit_stellar_spectrum",
+            "workflow_model": "phoenix",
+            "input_was_path": bool(input_was_path),
+            "instrument": None if instrument is None else str(instrument),
+            "auto_defaults": bool(auto_defaults),
+            "defaults_mode": str(defaults_mode),
+            "science_case": str(science_case),
+        }
+    )
+    return result
+
+
+def classify_spectrum(*args, **kwargs):
+    """Alias for :func:`fit_stellar_spectrum` for classification workflows."""
+    return fit_stellar_spectrum(*args, **kwargs)

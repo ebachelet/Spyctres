@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from Spyctres.api import fit_phoenix_spectrum
+from Spyctres.api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
 from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
     PhoenixFitDiagnostics,
@@ -291,3 +291,104 @@ def test_public_api_skips_reconstruction_after_failed_fit(monkeypatch):
 
     assert result.models == ()
     assert result.provenance["reconstruction_performed"] is False
+
+
+def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 20),
+        np.ones(20),
+        err=np.full(20, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "XSHOOTER", "arm": "UVB"},
+        resolution=5000.0,
+    )
+
+    def fake_read(path, instrument, warn_unknown=True, **kwargs):
+        captured["read"] = {
+            "path": path,
+            "instrument": instrument,
+            "warn_unknown": warn_unknown,
+            "kwargs": kwargs,
+        }
+        return segment
+
+    def fake_fit(spectrum, **kwargs):
+        captured["fit_spectrum"] = spectrum
+        captured["fit_kwargs"] = kwargs
+        return PhoenixFitResult(
+            summary={
+                "success": True,
+                "teff": 6000.0,
+                "feh": 0.0,
+                "logg": 4.0,
+                "rv_kms": 0.0,
+                "chi2_red": 1.0,
+            },
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.read_spectrum", fake_read)
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    result = fit_stellar_spectrum(
+        "example.fits",
+        instrument="xshooter",
+        phoenix_lib=object(),
+        reader_kwargs={"product_profile": "demo"},
+        regions=[(4000.0, 5000.0)],
+        rv_grid_n=11,
+    )
+
+    assert captured["read"]["instrument"] == "xshooter"
+    assert captured["read"]["kwargs"] == {"product_profile": "demo"}
+    assert captured["fit_spectrum"] is segment
+    assert captured["fit_kwargs"]["regions"] == [(4000.0, 5000.0)]
+    assert captured["fit_kwargs"]["rv_grid_n"] == 11
+    assert captured["fit_kwargs"]["forward_model"] == "native_interp"
+    assert "fit_default_suggestion" in result.summary
+    assert result.provenance["workflow_api"] == "fit_stellar_spectrum"
+    assert result.provenance["input_was_path"] is True
+    assert result.provenance["instrument"] == "xshooter"
+
+
+def test_classify_spectrum_alias_and_manual_defaults(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment([5000.0, 5010.0], [1.0, 1.0])
+
+    def fake_fit(spectrum, **kwargs):
+        captured["kwargs"] = kwargs
+        return PhoenixFitResult(
+            summary={"success": True, "teff": 5750.0},
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    result = classify_spectrum(
+        segment,
+        phoenix_lib=object(),
+        auto_defaults=False,
+        p0=(5100.0, -0.2, 4.0, 3.0),
+        reconstruct=False,
+        warn_unknown=False,
+    )
+
+    assert captured["kwargs"]["p0"] == pytest.approx((5100.0, -0.2, 4.0, 3.0))
+    assert captured["kwargs"]["reconstruct"] is False
+    assert "fit_default_suggestion" not in result.summary
+    assert result.provenance["workflow_api"] == "fit_stellar_spectrum"
+    assert result.provenance["auto_defaults"] is False
+
+
+def test_fit_stellar_spectrum_rejects_missing_instrument_for_paths():
+    with pytest.raises(ValueError, match="Pass instrument"):
+        fit_stellar_spectrum("example.fits", phoenix_lib=object())
+
+
+def test_fit_stellar_spectrum_rejects_non_phoenix_model():
+    segment = SpectrumSegment([5000.0], [1.0])
+    with pytest.raises(ValueError, match="model='phoenix'"):
+        fit_stellar_spectrum(segment, model="kurucz", phoenix_lib=object())
