@@ -1,4 +1,7 @@
 # Spyctres/fitting.py
+from dataclasses import dataclass
+import time
+
 import numpy as np
 from scipy.optimize import least_squares
 from numpy.polynomial.legendre import legvander
@@ -29,6 +32,74 @@ from .results import build_fit_quality_report
 # call _apply_observed_grid_rv_shift(), not velocity_correction() directly.
 
 from .waveutils import C_KMS, resample_flux_with_velocity_shift_observed_grid
+
+
+@dataclass(frozen=True)
+class FitProgressEvent:
+    """Structured progress event emitted by long PHOENIX fitting operations.
+
+    ``str(event)`` returns the human-readable message so existing callbacks
+    such as ``lambda event: print(event, flush=True)`` keep working. GUI and
+    notebook widgets can use the structured fields instead of parsing text.
+
+    If a user-supplied progress callback raises, Spyctres intentionally lets
+    that exception propagate. Progress callbacks should therefore be lightweight
+    and side-effect safe.
+    """
+
+    phase: str
+    message: str
+    current: object = None
+    total: object = None
+    fraction: object = None
+    elapsed_s: object = None
+    payload: object = None
+    severity: str = "info"
+
+    def __str__(self):
+        return str(self.message)
+
+    def __contains__(self, item):
+        return str(item) in str(self.message)
+
+    def __getattr__(self, name):
+        # Backward-compatible convenience for simple string-like callback tests
+        # and notebooks, e.g. event.startswith("Prepared").
+        return getattr(str(self.message), name)
+
+
+def _make_progress_reporter(progress_callback):
+    """Return a reporter that emits ``FitProgressEvent`` objects."""
+    start_time = time.monotonic()
+
+    def report(
+        message,
+        phase="progress",
+        current=None,
+        total=None,
+        fraction=None,
+        payload=None,
+        severity="info",
+    ):
+        if progress_callback is None:
+            return None
+        if isinstance(message, FitProgressEvent):
+            event = message
+        else:
+            event = FitProgressEvent(
+                phase=str(phase),
+                message=str(message),
+                current=None if current is None else int(current),
+                total=None if total is None else int(total),
+                fraction=None if fraction is None else float(fraction),
+                elapsed_s=float(time.monotonic() - start_time),
+                payload={} if payload is None else payload,
+                severity=str(severity),
+            )
+        progress_callback(event)
+        return event
+
+    return report
 
 
 def _coerce_segments_input(segments):
@@ -664,6 +735,30 @@ def _build_data_vectors(
     )
     
     
+def _nominal_fit_errors_for_retained_segments(segments, seg_meta, fit_masks):
+    """Reconstruct nominal pre-floor fit errors in retained-segment order."""
+    err_parts = []
+    for meta, fit_mask in zip(seg_meta, fit_masks):
+        seg = segments[int(meta["index"])]
+        w_full = np.asarray(seg.wave, dtype=float)
+        f_full = np.asarray(seg.flux, dtype=float)
+        support_ok = _segment_support_ok(seg)
+        if seg.err is None:
+            e_full = np.ones_like(f_full, dtype=float) * _estimate_sigma(
+                f_full[support_ok] if np.any(support_ok) else f_full
+            )
+        else:
+            e_full = np.asarray(seg.err, dtype=float)
+        e_support = e_full[support_ok]
+        fit_mask = np.asarray(fit_mask, dtype=bool)
+        if fit_mask.shape != e_support.shape:
+            raise ValueError(
+                "Retained fit mask and nominal-error support grid are misaligned."
+            )
+        err_parts.append(e_support[fit_mask].astype(float))
+    return np.concatenate(err_parts) if err_parts else np.array([], dtype=float)
+
+
 def _pick_subgrid(full_grid, center, half_width, n_min=3, n_max=None):
     """
     Pick a small sorted subgrid around 'center' from a known full_grid.
@@ -987,6 +1082,16 @@ def _build_phoenix_fit_diagnostics(
     coarse_initialization,
     rv_kms=0.0,
     rv_bary_kms=0.0,
+    optimizer_loss="linear",
+    optimizer_loss_f_scale=1.0,
+    optimizer_cost=None,
+    optimizer_cost_twice=None,
+    effective_chi2=None,
+    effective_chi2_red=None,
+    raw_chi2=None,
+    raw_chi2_red=None,
+    error_model="nominal",
+    error_floor_applied=False,
 ):
     """Build a compact, JSON-safe diagnostics block for PHOENIX fits."""
     retained_count = int(len(seg_meta))
@@ -1074,6 +1179,28 @@ def _build_phoenix_fit_diagnostics(
         "degrees_of_freedom": int(dof),
         "chi2": float(chi2),
         "reduced_chi2": float(chi2_red),
+        "effective_chi2": float(chi2 if effective_chi2 is None else effective_chi2),
+        "effective_chi2_red": float(
+            chi2_red if effective_chi2_red is None else effective_chi2_red
+        ),
+        "raw_chi2": float(chi2 if raw_chi2 is None else raw_chi2),
+        "raw_chi2_red": float(chi2_red if raw_chi2_red is None else raw_chi2_red),
+        "error_model": str(error_model),
+        "error_floor_applied": bool(error_floor_applied),
+        "optimizer_loss": str(optimizer_loss),
+        "optimizer_loss_f_scale": float(optimizer_loss_f_scale),
+        "optimizer_cost": (
+            None if optimizer_cost is None else float(optimizer_cost)
+        ),
+        "optimizer_cost_twice": (
+            None if optimizer_cost_twice is None else float(optimizer_cost_twice)
+        ),
+        "chi2_interpretation": (
+            "Ordinary chi-square interpretation is modified because a robust "
+            "least-squares loss was used."
+            if str(optimizer_loss) != "linear"
+            else "Ordinary least-squares objective with sigma-normalized residuals."
+        ),
         "segment_diagnostics": segment_diagnostics,
         "grid_summary": grid_summary,
         "grid_edge_flags": edge_flags,
@@ -1114,6 +1241,10 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
     reduced_chi2 = diagnostics.get("reduced_chi2")
     if reduced_chi2 is not None and float(reduced_chi2) > float(high_chi2_threshold):
         flags.append("high_chi2")
+    if str(diagnostics.get("optimizer_loss", "linear")) != "linear":
+        flags.append("robust_loss_active")
+    if bool(diagnostics.get("error_floor_applied", False)):
+        flags.append("error_floor_applied")
     if diagnostics.get("residual_autocorrelation_flag"):
         flags.append("structured_residuals")
     slope = diagnostics.get("residual_slope")
@@ -2278,7 +2409,9 @@ def fit_phoenix_full_spectrum(
         1-sigma uncertainty for that segment. This is useful when formal
         uncertainties are unrealistically small in high-S/N spectra. May be a
         scalar, a sequence matching the input segments, or a dict keyed by
-        segment index/name. The default ``0.0`` preserves historical behavior.
+        segment index/name. The median-flux scale is a cheap continuum proxy
+        and can be biased low for heavily line-blanketed spectra. The default
+        ``0.0`` preserves historical behavior.
 
     rv_bary_kms : float, optional
         Fixed barycentric velocity term in km/s added to the fitted `rv_kms`.
@@ -2375,8 +2508,9 @@ def fit_phoenix_full_spectrum(
     loss : {"linear", "soft_l1", "huber", "cauchy", "arctan"}, optional
         Robust loss passed to ``scipy.optimize.least_squares``. The default
         ``"linear"`` preserves ordinary least squares and historical behavior.
-        ``"soft_l1"`` or ``"cauchy"`` can be useful for exploratory fits with
-        outliers that are not yet captured by masks.
+        ``"soft_l1"`` or ``"huber"`` are the recommended first exploratory
+        choices for outliers that are not yet captured by masks. ``"cauchy"``
+        and ``"arctan"`` are more aggressive and may make optimization harder.
 
     loss_f_scale : float, optional
         Positive scale parameter passed to ``least_squares`` as ``f_scale``.
@@ -2384,9 +2518,11 @@ def fit_phoenix_full_spectrum(
         the natural starting point.
 
     progress_callback : callable, optional
-        Called with short status strings before long operations such as cache
-        load/rebuild, RV grid scan, and local optimizer starts/finishes. For
-        command-line use, pass ``lambda msg: print(msg, flush=True)``.
+        Called with ``FitProgressEvent`` objects before long operations such as
+        cache load/rebuild, RV grid scan, and local optimizer starts/finishes.
+        ``str(event)`` is the human-readable status message, so command-line
+        use can remain ``lambda event: print(event, flush=True)``. Exceptions
+        raised by callbacks propagate.
 
     Returns
     -------
@@ -2400,9 +2536,7 @@ def fit_phoenix_full_spectrum(
         - `lsf_fwhm_kms`: Gaussian LSF FWHM in km/s, if any
         - `segment_names`, `segment_weights`, `collection_name`, `collection_meta`
     """
-    def report(message):
-        if progress_callback is not None:
-            progress_callback(str(message))
+    report = _make_progress_reporter(progress_callback)
 
     segments, segment_weights, collection_name, collection_meta = _coerce_segments_input(segments)
         
@@ -2463,7 +2597,10 @@ def fit_phoenix_full_spectrum(
         "Prepared fit data: {0} retained segment(s), {1} fitted pixel(s).".format(
             len(seg_meta),
             int(flux_all.size),
-        )
+        ),
+        phase="prepare_data",
+        total=int(flux_all.size),
+        payload={"n_segments": int(len(seg_meta)), "n_fit_pixels": int(flux_all.size)},
     )
 
     retained_segments = _retained_segments_from_meta(segments, seg_meta)
@@ -2491,7 +2628,10 @@ def fit_phoenix_full_spectrum(
         else:
             model_wave_medium = None
     else:
-        report("Building native PHOENIX interpolation wavelength grid.")
+        report(
+            "Building native PHOENIX interpolation wavelength grid.",
+            phase="wavelength_grid",
+        )
         model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
             segments=forward_segments,
             phoenix_lib=phoenix_lib,
@@ -2504,7 +2644,10 @@ def fit_phoenix_full_spectrum(
     if physical_init == "coarse":
         if forward_model != "native_interp":
             raise ValueError("physical_init='coarse' requires forward_model='native_interp'.")
-        report("Running coarse physical-parameter initialization.")
+        report(
+            "Running coarse physical-parameter initialization.",
+            phase="coarse_grid_search",
+        )
         coarse_best, coarse_scores = _coarse_physical_start_native_interp(
             forward_segments=forward_segments,
             flux_all=flux_all,
@@ -2542,7 +2685,13 @@ def fit_phoenix_full_spectrum(
                 teff0,
                 feh0,
                 logg0,
-            )
+            ),
+            phase="coarse_grid_search",
+            payload={
+                "teff": float(teff0),
+                "feh": float(feh0),
+                "logg": float(logg0),
+            },
         )
 
     # Materialize one local interpolation grid around either p0 or the best
@@ -2575,7 +2724,7 @@ def fit_phoenix_full_spectrum(
         logg_grid_req,
         observed_wave_medium=model_wave_medium,
     ):
-        report("Preparing PHOENIX interpolator/cache.")
+        report("Preparing PHOENIX interpolator/cache.", phase="phoenix_cache")
         phoenix_lib.build_interpolator(
             observed_wave=model_wave_grid,
             teff_grid=teff_grid_req,
@@ -2584,10 +2733,13 @@ def fit_phoenix_full_spectrum(
             cache_path=cache_path,
             allow_missing=allow_missing,
             observed_wave_medium=model_wave_medium,
-            progress_callback=progress_callback,
+            progress_callback=lambda message: report(message, phase="phoenix_cache"),
         )
     else:
-        report("Reusing existing in-memory PHOENIX interpolator.")
+        report(
+            "Reusing existing in-memory PHOENIX interpolator.",
+            phase="phoenix_cache",
+        )
     
     # Set default bounds from the interpolator grid if none supplied
     if bounds is None:
@@ -2691,7 +2843,9 @@ def fit_phoenix_full_spectrum(
         report(
             "Running coarse RV grid scan with {0} trial velocities.".format(
                 int(rv_grid.size)
-            )
+            ),
+            phase="rv_scan",
+            total=int(rv_grid.size),
         )
         
         chi2s = np.empty(rv_grid.size, dtype=float)
@@ -2737,10 +2891,20 @@ def fit_phoenix_full_spectrum(
         rv0_best = float(rv_grid[int(np.argmin(chi2s))])
         if verbose:
             print("RV init grid best:", rv0_best)
-        report("Coarse RV grid scan selected rv_kms={0:.6g}.".format(rv0_best))
+        report(
+            "Coarse RV grid scan selected rv_kms={0:.6g}.".format(rv0_best),
+            phase="rv_scan",
+            current=int(rv_grid.size),
+            total=int(rv_grid.size),
+            fraction=1.0,
+            payload={"rv_kms": float(rv0_best)},
+        )
         p0 = (teff0, feh0, logg0, rv0_best)
     elif rv_init is None:
-        report("Skipping coarse RV grid scan; using supplied initial rv_kms.")
+        report(
+            "Skipping coarse RV grid scan; using supplied initial rv_kms.",
+            phase="rv_scan",
+        )
         p0 = (teff0, feh0, logg0, rv0)
     else:
         raise ValueError("rv_init must be 'grid' or None.")
@@ -2774,7 +2938,8 @@ def fit_phoenix_full_spectrum(
         ]
         if coarse_candidate_points:
             report(
-                "Adding top coarse physical candidates to the local multistart queue."
+                "Adding top coarse physical candidates to the local multistart queue.",
+                phase="multistart",
             )
     starts = _build_local_multistarts(
         p0,
@@ -2793,7 +2958,12 @@ def fit_phoenix_full_spectrum(
                 float(start[1]),
                 float(start[2]),
                 float(start[3]),
-            )
+            ),
+            phase="local_optimize",
+            current=start_index + 1,
+            total=len(starts),
+            fraction=float(start_index / max(1, len(starts))),
+            payload={"start": np.asarray(start, dtype=float).tolist()},
         )
         candidate_result = least_squares(
             residuals,
@@ -2814,7 +2984,15 @@ def fit_phoenix_full_spectrum(
                 len(starts),
                 candidate_chi2,
                 bool(candidate_result.success),
-            )
+            ),
+            phase="local_optimize",
+            current=start_index + 1,
+            total=len(starts),
+            fraction=float((start_index + 1) / max(1, len(starts))),
+            payload={
+                "chi2": float(candidate_chi2),
+                "success": bool(candidate_result.success),
+            },
         )
         if verbose and len(starts) > 1:
             print(
@@ -2847,6 +3025,31 @@ def fit_phoenix_full_spectrum(
     k = _full_spectrum_parameter_count(len(forward_segments), mdeg)
     dof = max(1, n - k)
     chi2_red = chi2 / dof
+    nominal_err_all = _nominal_fit_errors_for_retained_segments(
+        segments,
+        seg_meta,
+        fit_masks,
+    )
+    if nominal_err_all.shape != err_all.shape:
+        raise ValueError("Nominal and effective fit-error vectors are misaligned.")
+    raw_error_scale = np.divide(
+        err_all,
+        nominal_err_all,
+        out=np.ones_like(err_all, dtype=float),
+        where=nominal_err_all > 0,
+    )
+    raw_residuals = r * raw_error_scale
+    raw_chi2 = float(np.sum(raw_residuals * raw_residuals))
+    raw_chi2_red = float(raw_chi2 / dof)
+    error_floor_applied = bool(
+        any(
+            float(m.get("error_floor", {}).get("error_floor_abs", 0.0)) > 0.0
+            for m in seg_meta
+        )
+    )
+    error_model = "floor_inflated" if error_floor_applied else "nominal"
+    optimizer_cost = float(res.cost)
+    optimizer_cost_twice = float(2.0 * res.cost)
 
     covariance = None
     parameter_errors = None
@@ -2874,6 +3077,16 @@ def fit_phoenix_full_spectrum(
         coarse_initialization=coarse_initialization,
         rv_kms=float(res.x[3]),
         rv_bary_kms=rv_bary_kms,
+        optimizer_loss=loss,
+        optimizer_loss_f_scale=loss_f_scale,
+        optimizer_cost=optimizer_cost,
+        optimizer_cost_twice=optimizer_cost_twice,
+        effective_chi2=chi2,
+        effective_chi2_red=chi2_red,
+        raw_chi2=raw_chi2,
+        raw_chi2_red=raw_chi2_red,
+        error_model=error_model,
+        error_floor_applied=error_floor_applied,
     )
     quality_flags = _phoenix_quality_flags(diagnostics, success=res.success)
     velocity_convention = diagnostics["velocity_convention"]
@@ -2903,11 +3116,19 @@ def fit_phoenix_full_spectrum(
         "chi2": chi2,
         "dof": dof,
         "chi2_red": chi2_red,
+        "effective_chi2": chi2,
+        "effective_chi2_red": chi2_red,
+        "raw_chi2": raw_chi2,
+        "raw_chi2_red": raw_chi2_red,
+        "error_model": error_model,
+        "error_floor_applied": error_floor_applied,
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),
         "optimizer_loss": str(loss),
         "optimizer_loss_f_scale": float(loss_f_scale),
+        "optimizer_cost": optimizer_cost,
+        "optimizer_cost_twice": optimizer_cost_twice,
         "invalid_model_evaluations": int(invalid_model_evaluations["count"]),
         "physical_initialization": physical_init,
         "coarse_initialization": coarse_initialization,
@@ -2960,6 +3181,15 @@ def fit_phoenix_full_spectrum(
             summary["logg"],
             summary["rv_kms"],
             summary["chi2_red"],
-        )
+        ),
+        phase="complete",
+        fraction=1.0,
+        payload={
+            "teff": float(summary["teff"]),
+            "feh": float(summary["feh"]),
+            "logg": float(summary["logg"]),
+            "rv_kms": float(summary["rv_kms"]),
+            "chi2_red": float(summary["chi2_red"]),
+        },
     )
     return summary

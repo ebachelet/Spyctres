@@ -117,3 +117,9 @@ def test_interpolator_uses_scaled_axes_but_preserves_physical_grid(tmp_path):
 
     assert evaluated[0] == pytest.approx(0.001 * 6000.0 + 10.0 * -0.25 + 4.0)
     assert evaluated[1] == pytest.approx(0.002 * 6000.0 - -0.25 + 2.0 * 4.0)
+
+    for it, teff in enumerate(teff_grid):
+        for iz, feh in enumerate(feh_grid):
+            for ig, logg in enumerate(logg_grid):
+                node_eval = library.evaluate(teff, feh, logg)
+                assert np.array_equal(node_eval, flux_grid[it, iz, ig])

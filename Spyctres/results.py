@@ -157,6 +157,15 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "A mask callable produced nonfinite values; those pixels were rejected "
         "under the mask-output policy."
     ),
+    "robust_loss_active": (
+        "The optimizer used a robust least-squares loss, so the optimizer cost "
+        "is not an ordinary Gaussian chi-square likelihood; compare raw/effective "
+        "linear chi-square diagnostics separately."
+    ),
+    "error_floor_applied": (
+        "A fractional uncertainty floor was added in quadrature for at least "
+        "one segment; inspect raw and effective chi-square diagnostics."
+    ),
 }
 
 
@@ -253,6 +262,32 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
         "quality_flags": flags,
         "quality_flag_descriptions": describe_quality_flags(flags),
         "reduced_chi2": chi2_red,
+        "effective_chi2": summary.get(
+            "effective_chi2", diagnostics.get("effective_chi2")
+        ),
+        "effective_chi2_red": summary.get(
+            "effective_chi2_red", diagnostics.get("effective_chi2_red")
+        ),
+        "raw_chi2": summary.get("raw_chi2", diagnostics.get("raw_chi2")),
+        "raw_chi2_red": summary.get(
+            "raw_chi2_red", diagnostics.get("raw_chi2_red")
+        ),
+        "error_model": summary.get("error_model", diagnostics.get("error_model")),
+        "error_floor_applied": summary.get(
+            "error_floor_applied", diagnostics.get("error_floor_applied")
+        ),
+        "optimizer_loss": summary.get(
+            "optimizer_loss", diagnostics.get("optimizer_loss")
+        ),
+        "optimizer_loss_f_scale": summary.get(
+            "optimizer_loss_f_scale", diagnostics.get("optimizer_loss_f_scale")
+        ),
+        "optimizer_cost": summary.get(
+            "optimizer_cost", diagnostics.get("optimizer_cost")
+        ),
+        "optimizer_cost_twice": summary.get(
+            "optimizer_cost_twice", diagnostics.get("optimizer_cost_twice")
+        ),
         "n_points": summary.get("n_points", diagnostics.get("n_pixels")),
         "n_parameters": diagnostics.get("n_parameters"),
         "degrees_of_freedom": diagnostics.get("degrees_of_freedom"),
@@ -289,6 +324,26 @@ def format_fit_quality_report(result_or_report):
     lines.append("  flags: {0}".format(", ".join(str(flag) for flag in flags)))
     if report.get("reduced_chi2") is not None:
         lines.append("  chi2_red: {0:.4g}".format(float(report["reduced_chi2"])))
+    if report.get("optimizer_loss") and report.get("optimizer_loss") != "linear":
+        lines.append(
+            "  optimizer loss: {0} (f_scale={1})".format(
+                report.get("optimizer_loss"),
+                report.get("optimizer_loss_f_scale"),
+            )
+        )
+    if report.get("error_model") and report.get("error_model") != "nominal":
+        lines.append("  error model: {0}".format(report.get("error_model")))
+    if (
+        report.get("raw_chi2_red") is not None
+        and report.get("effective_chi2_red") is not None
+        and report.get("error_model") != "nominal"
+    ):
+        lines.append(
+            "  chi2_red raw/effective: {0:.4g}/{1:.4g}".format(
+                float(report["raw_chi2_red"]),
+                float(report["effective_chi2_red"]),
+            )
+        )
     point_parts = []
     if report.get("n_points") is not None:
         point_parts.append("N={0}".format(int(report["n_points"])))

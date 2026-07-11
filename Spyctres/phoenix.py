@@ -388,10 +388,11 @@ class PhoenixLibrary(object):
 
         The physical PHOENIX axes have very different numerical scales
         (thousands of K for Teff, dex-level values for [Fe/H] and log g).
-        SciPy's RegularGridInterpolator recommends avoiding incommensurate
-        coordinate scales because they can introduce numerical artifacts.  We
-        therefore keep physical axes for cache/provenance but evaluate the
-        interpolator on affine-normalized axes.
+        For the current linear RegularGridInterpolator this affine rescaling is
+        mathematically neutral for interpolation weights, while giving a stable
+        normalized coordinate representation for optimizer-facing evaluation
+        and future interpolation methods. Physical axes remain the cache and
+        provenance contract.
         """
         axes = tuple(np.asarray(axis, dtype=float) for axis in grid)
         origins = []

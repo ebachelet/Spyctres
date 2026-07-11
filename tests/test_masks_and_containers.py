@@ -126,6 +126,34 @@ def test_named_multiple_exclusion_masks_are_unionized_and_recorded():
     assert result.counts["n_rejected_by_multiple_reasons"] == 0
 
 
+def test_exclusion_mask_apis_are_mutually_exclusive():
+    segment = SpectrumSegment(
+        wave=np.arange(3.0),
+        flux=np.ones(3),
+        err=np.ones(3),
+    )
+
+    def legacy_mask(wave):
+        return wave == 1.0
+
+    def named_mask(wave):
+        return wave == 2.0
+
+    with pytest.raises(ValueError, match="either exclude_mask or exclude_masks"):
+        compose_fit_mask(
+            segment,
+            exclude_mask=legacy_mask,
+            exclude_masks=[("named", named_mask)],
+        )
+
+    with pytest.raises(ValueError, match="either exclude_mask or exclude_masks"):
+        _build_data_vectors(
+            [segment],
+            exclude_mask=legacy_mask,
+            exclude_masks=[("named", named_mask)],
+        )
+
+
 def test_mask_threshold_is_exposed_through_fitting_wrappers():
     segment = SpectrumSegment(
         wave=np.arange(4.0),

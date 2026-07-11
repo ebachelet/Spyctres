@@ -36,6 +36,7 @@ from .fitting import (
     _validate_optimizer_loss,
     _resolve_per_segment_numeric_options,
     _apply_error_floor_to_fit_errors,
+    _make_progress_reporter,
 )
 from .phoenix_forward import (
     build_phoenix_native_models_for_segments,
@@ -592,8 +593,9 @@ def fit_phoenix_sideband_symmetric(
     convention while leaving the legacy Spyctres.velocity_correction API unchanged.
 
     progress_callback : callable, optional
-        Called with short status strings before cache load/rebuild, RV grid
-        scanning, and local optimizer start/finish.
+        Called with ``FitProgressEvent`` objects before cache load/rebuild, RV
+        grid scanning, and local optimizer start/finish. ``str(event)`` is the
+        human-readable status message.
 
     loss : {"linear", "soft_l1", "huber", "cauchy", "arctan"}, optional
         Robust loss passed to ``scipy.optimize.least_squares``. The default
@@ -608,9 +610,7 @@ def fit_phoenix_sideband_symmetric(
         uncertainty for that segment. The default ``0.0`` preserves historical
         behavior.
     """
-    def report(message):
-        if progress_callback is not None:
-            progress_callback(str(message))
+    report = _make_progress_reporter(progress_callback)
 
     loss, loss_f_scale = _validate_optimizer_loss(loss, loss_f_scale)
 
@@ -667,7 +667,10 @@ def fit_phoenix_sideband_symmetric(
         for seg in segments
     ]
     if forward_model == "interp_observed":
-        report("Preparing observed-grid PHOENIX interpolator/cache.")
+        report(
+            "Preparing observed-grid PHOENIX interpolator/cache.",
+            phase="phoenix_cache",
+        )
         support_wave_all = ensure_phoenix_interpolator_for_segments(
             segments=segments,
             phoenix_lib=phoenix_lib,
@@ -675,10 +678,13 @@ def fit_phoenix_sideband_symmetric(
             feh_grid=feh_grid_req,
             logg_grid=logg_grid_req,
             cache_path=cache_path,
-            progress_callback=progress_callback,
+            progress_callback=lambda message: report(message, phase="phoenix_cache"),
         )
     else:
-        report("Building native PHOENIX interpolation wavelength grid.")
+        report(
+            "Building native PHOENIX interpolation wavelength grid.",
+            phase="wavelength_grid",
+        )
         model_wave_grid, model_wave_medium = build_native_interp_wave_grid_for_segments(
             segments=segments,
             phoenix_lib=phoenix_lib,
@@ -692,7 +698,7 @@ def fit_phoenix_sideband_symmetric(
             logg_grid_req,
             observed_wave_medium=model_wave_medium,
         ):
-            report("Preparing PHOENIX interpolator/cache.")
+            report("Preparing PHOENIX interpolator/cache.", phase="phoenix_cache")
             phoenix_lib.build_interpolator(
                 observed_wave=model_wave_grid,
                 teff_grid=teff_grid_req,
@@ -700,10 +706,13 @@ def fit_phoenix_sideband_symmetric(
                 logg_grid=logg_grid_req,
                 cache_path=cache_path,
                 observed_wave_medium=model_wave_medium,
-                progress_callback=progress_callback,
+                progress_callback=lambda message: report(message, phase="phoenix_cache"),
             )
         else:
-            report("Reusing existing in-memory PHOENIX interpolator.")
+            report(
+                "Reusing existing in-memory PHOENIX interpolator.",
+                phase="phoenix_cache",
+            )
 
     if bounds is None:
         tg, zg, gg = phoenix_lib._grid
@@ -843,10 +852,17 @@ def fit_phoenix_sideband_symmetric(
         rv0_use = float(rv_grid[np.argmin(chi2s)])
         if verbose:
             print("RV init grid best:", rv0_use)
-        report("Sideband coarse RV grid scan selected rv_kms={0:.6g}.".format(rv0_use))
+        report(
+            "Sideband coarse RV grid scan selected rv_kms={0:.6g}.".format(rv0_use),
+            phase="rv_scan",
+            payload={"rv_kms": float(rv0_use)},
+        )
         p0_use = (teff0, feh0, logg0, rv0_use)
     elif rv_init is None:
-        report("Skipping sideband coarse RV grid scan; using supplied initial rv_kms.")
+        report(
+            "Skipping sideband coarse RV grid scan; using supplied initial rv_kms.",
+            phase="rv_scan",
+        )
         p0_use = (teff0, feh0, logg0, rv0)
     else:
         raise ValueError("rv_init must be 'grid' or None.")
@@ -857,7 +873,9 @@ def fit_phoenix_sideband_symmetric(
             float(p0_use[1]),
             float(p0_use[2]),
             float(p0_use[3]),
-        )
+        ),
+        phase="local_optimize",
+        payload={"start": [float(value) for value in p0_use]},
     )
     res = least_squares(
         residuals,
@@ -874,7 +892,13 @@ def fit_phoenix_sideband_symmetric(
         "Finished sideband local optimizer: chi2={0:.6g}, success={1}.".format(
             float(np.sum(res.fun * res.fun)),
             bool(res.success),
-        )
+        ),
+        phase="local_optimize",
+        fraction=1.0,
+        payload={
+            "chi2": float(np.sum(res.fun * res.fun)),
+            "success": bool(res.success),
+        },
     )
 
     r = res.fun
@@ -883,6 +907,8 @@ def fit_phoenix_sideband_symmetric(
     k = _sideband_fit_parameter_count(len(segments), sideband_poly_order)
     dof = max(1, n - k)
     chi2_red = chi2 / dof
+    error_floor_applied = bool(any(float(value) > 0.0 for value in error_floor_by_segment))
+    error_model = "floor_inflated" if error_floor_applied else "nominal"
 
     return {
         "success": bool(res.success),
@@ -896,11 +922,19 @@ def fit_phoenix_sideband_symmetric(
         "chi2": chi2,
         "dof": dof,
         "chi2_red": chi2_red,
+        "effective_chi2": chi2,
+        "effective_chi2_red": chi2_red,
+        "raw_chi2": None if error_floor_applied else chi2,
+        "raw_chi2_red": None if error_floor_applied else chi2_red,
+        "error_model": error_model,
+        "error_floor_applied": error_floor_applied,
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),
         "optimizer_loss": str(loss),
         "optimizer_loss_f_scale": float(loss_f_scale),
+        "optimizer_cost": float(res.cost),
+        "optimizer_cost_twice": float(2.0 * res.cost),
         "segment_error_floor_fraction": [
             float(value) for value in error_floor_by_segment
         ],

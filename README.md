@@ -126,7 +126,6 @@ result = fit_phoenix_spectrum(
     spectrum,
     phoenix_dir="/path/to/PHOENIXv2",
     p0=(5750.0, 0.0, 4.5, 0.0),
-    forward_model="native_interp",
 )
 print(result["teff"], result["rv_kms"])
 print(result.quality_report_text())
@@ -142,12 +141,29 @@ inspect the full nested diagnostics block. `describe_quality_flags()` provides
 short explanations for individual warning strings, and `quality_report`
 includes descriptions for the flags present in that result. Existing low-level
 fitting functions keep returning dictionaries for backward compatibility.
+The scientific default forward model is `native_interp`, which keeps the model
+on a dense PHOENIX wavelength grid until after RV shifting and LSF convolution.
+The older `interp_observed` path remains available only as an explicit
+legacy/fast compatibility option.
+Long-running fits accept a `progress_callback`; callbacks now receive a
+`FitProgressEvent` with fields such as `phase`, `message`, `fraction`, and
+`elapsed_s`, while `str(event)` remains the printable status message.
 For exploratory fits with outliers that are not yet fully masked, the PHOENIX
 fitters expose SciPy's robust least-squares losses through `loss` and
 `loss_f_scale`; the default `loss="linear"` preserves ordinary least squares.
+Because residuals are already normalized by their 1-sigma uncertainties,
+`loss_f_scale=1.0` is the natural starting point. Prefer `loss="soft_l1"` or
+`loss="huber"` for exploratory outlier-robust fits; `cauchy` and `arctan` are
+more aggressive and can make optimization less well behaved.
 For spectra whose formal uncertainties are unrealistically small, an optional
 `error_floor_fraction` adds a per-segment fractional uncertainty floor in
-quadrature and records the applied floor in the fit diagnostics.
+quadrature and records the applied floor in the fit diagnostics. This floor is
+a median-flux proxy for the local continuum level; use it cautiously for
+heavily line-blanketed spectra where the median may sit below the continuum.
+When robust loss or an error floor is active, results explicitly record the
+optimizer cost, raw nominal-error chi-square, effective-error chi-square, and
+quality flags so these diagnostic modes are not mistaken for ordinary Gaussian
+least-squares fits.
 
 ## Local line diagnostics
 

@@ -35,7 +35,7 @@ def exclusion_mask(name, fn):
 
     Examples
     --------
-    ``exclude_mask=[exclusion_mask("telluric", telluric_fn)]``
+    ``exclude_masks=[exclusion_mask("telluric", telluric_fn)]``
 
     The callable should return boolean-like or numeric values on the supplied
     wavelength grid. Boolean True means reject; numeric values reject where
@@ -307,6 +307,11 @@ def _mask_callable_function(mask_spec):
 
 def _normalize_mask_specs(exclude_mask=None, exclude_masks=None):
     """Normalize one or more mask callable specs to ``(name, callable)`` pairs."""
+    if exclude_mask is not None and exclude_masks is not None:
+        raise ValueError(
+            "Pass exclusion masks through either exclude_mask or exclude_masks, "
+            "not both. Use exclude_masks for the preferred named/multiple-mask API."
+        )
     specs = []
     if exclude_mask is not None:
         if (
@@ -475,9 +480,7 @@ def compose_fit_mask(
         "exclude_mask": callable_names[0] if len(callable_names) == 1 else None,
         "exclude_masks": list(callable_names),
         "exclude_masks_api": (
-            "combined"
-            if exclude_mask is not None and exclude_masks is not None
-            else ("exclude_masks" if exclude_masks is not None else "exclude_mask")
+            "exclude_masks" if exclude_masks is not None else "exclude_mask"
         ),
         "exclude_mask_summary_kind": "union",
         "explicit_exclusion_union_mask_name": "exclude_mask",

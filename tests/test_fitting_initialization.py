@@ -1,7 +1,10 @@
+import inspect
+
 import numpy as np
 import pytest
 
 from Spyctres.fitting import (
+    FitProgressEvent,
     _build_data_vectors,
     _build_local_multistarts,
     _build_phoenix_fit_diagnostics,
@@ -18,6 +21,22 @@ from Spyctres.fitting import (
     reconstruct_phoenix_legendre_models_for_segments,
 )
 from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegment
+from Spyctres.recipes import fit_phoenix_sideband_symmetric
+
+
+def test_phoenix_fitters_default_to_native_interp():
+    assert (
+        inspect.signature(fit_phoenix_full_spectrum)
+        .parameters["forward_model"]
+        .default
+        == "native_interp"
+    )
+    assert (
+        inspect.signature(fit_phoenix_sideband_symmetric)
+        .parameters["forward_model"]
+        .default
+        == "native_interp"
+    )
 
 
 def test_default_coarse_grid_maps_targets_to_unique_nodes():
@@ -237,16 +256,83 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert result["quality_report"]["segments"][0]["explicit_exclusion_fraction"] == 0.0
     assert result["optimizer_loss"] == "soft_l1"
     assert result["optimizer_loss_f_scale"] == 2.0
+    assert result["optimizer_cost"] is not None
+    assert result["optimizer_cost_twice"] == pytest.approx(2.0 * result["optimizer_cost"])
+    assert result["effective_chi2"] == pytest.approx(result["chi2"])
+    assert result["effective_chi2_red"] == pytest.approx(result["chi2_red"])
+    assert result["raw_chi2"] == pytest.approx(result["chi2"])
+    assert result["raw_chi2_red"] == pytest.approx(result["chi2_red"])
+    assert result["error_model"] == "nominal"
+    assert result["error_floor_applied"] is False
+    assert "robust_loss_active" in result["quality_flags"]
+    assert result["quality_report"]["optimizer_loss"] == "soft_l1"
+    assert result["quality_report"]["error_model"] == "nominal"
     assert result["segment_error_floor_fraction"] == [0.0, 0.0]
     assert result["segment_error_floor_abs"] == [0.0, 0.0]
-    assert library.build_progress_callback_received is callback
+    assert callable(library.build_progress_callback_received)
+    assert library.build_progress_callback_received is not callback
+    library.build_progress_callback_received("Synthetic cache callback message.")
+    assert all(isinstance(message, FitProgressEvent) for message in messages)
+    assert all(message.elapsed_s is not None for message in messages)
     assert any("Prepared fit data" in message for message in messages)
-    assert any("Preparing PHOENIX interpolator/cache" in message for message in messages)
+    assert any(str(message).startswith("Preparing PHOENIX") for message in messages)
     assert any("Running coarse RV grid scan" in message for message in messages)
     assert any("Coarse RV grid scan selected" in message for message in messages)
     assert any("Starting local optimizer" in message for message in messages)
     assert any("Finished local optimizer" in message for message in messages)
     assert any("Selected best fit" in message for message in messages)
+    phases = [message.phase for message in messages]
+    assert "prepare_data" in phases
+    assert "phoenix_cache" in phases
+    assert "rv_scan" in phases
+    assert "local_optimize" in phases
+    assert "complete" in phases
+
+
+def test_full_spectrum_fit_reports_error_floor_error_model():
+    class ConstantLibrary:
+        DEFAULT_TEFF_GRID = np.array([4999.0, 5000.0, 5001.0])
+        DEFAULT_FEH_GRID = np.array([-0.1, 0.0, 0.1])
+        DEFAULT_LOGG_GRID = np.array([3.9, 4.0, 4.1])
+
+        def __init__(self):
+            self._n_wave = None
+
+        def interpolator_matches(self, observed_wave, *args, **kwargs):
+            return self._n_wave == len(observed_wave)
+
+        def build_interpolator(self, observed_wave, *args, **kwargs):
+            self._n_wave = len(observed_wave)
+
+        def evaluate(self, teff, feh, logg):
+            return np.ones(self._n_wave, dtype=float)
+
+    segment = SpectrumSegment(
+        wave=np.arange(5000.0, 5005.0),
+        flux=[0.9, 1.1, 1.0, 1.0, 1.0],
+        err=np.full(5, 0.01),
+        name="floor-test",
+    )
+    result = fit_phoenix_full_spectrum(
+        segment,
+        phoenix_lib=ConstantLibrary(),
+        p0=(5000.0, 0.0, 4.0, 0.0),
+        bounds=((4999.0, -0.1, 3.9, -1.0), (5001.0, 0.1, 4.1, 1.0)),
+        mdeg=0,
+        rv_init=None,
+        max_nfev=1,
+        forward_model="interp_observed",
+        error_floor_fraction=0.1,
+    )
+
+    assert result["error_floor_applied"] is True
+    assert result["error_model"] == "floor_inflated"
+    assert result["raw_chi2"] > result["effective_chi2"]
+    assert result["raw_chi2_red"] > result["effective_chi2_red"]
+    assert result["quality_report"]["error_floor_applied"] is True
+    assert result["quality_report"]["raw_chi2"] == pytest.approx(result["raw_chi2"])
+    assert result["quality_report"]["effective_chi2"] == pytest.approx(result["chi2"])
+    assert "error_floor_applied" in result["quality_flags"]
 
 
 def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
@@ -400,6 +486,13 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
     assert diagnostics["n_input_segments"] == 2
     assert diagnostics["n_retained_segments"] == 1
     assert diagnostics["n_dropped_segments"] == 1
+    assert diagnostics["effective_chi2"] == pytest.approx(27.0)
+    assert diagnostics["effective_chi2_red"] == pytest.approx(9.0)
+    assert diagnostics["raw_chi2"] == pytest.approx(27.0)
+    assert diagnostics["raw_chi2_red"] == pytest.approx(9.0)
+    assert diagnostics["error_model"] == "nominal"
+    assert diagnostics["error_floor_applied"] is False
+    assert diagnostics["optimizer_loss"] == "linear"
     assert diagnostics["grid_edge_flags"]["teff"] is True
     assert diagnostics["grid_edge_flags"]["teff_low"] is True
     assert diagnostics["grid_edge_flags"]["teff_high"] is False
@@ -469,6 +562,26 @@ def test_quality_flags_include_mask_derived_warnings():
     assert "segment_mask_fraction_high" in flags
     assert "explicit_exclusion_dominates" in flags
     assert "nonfinite_mask_output" in flags
+
+
+def test_quality_flags_include_robust_loss_and_error_floor_warnings():
+    diagnostics = {
+        "reduced_chi2": 1.0,
+        "n_parameters": 4,
+        "n_dropped_segments": 0,
+        "mask_fraction": 0.0,
+        "grid_edge_flags": {},
+        "wavelength_metadata_summary": {},
+        "resolution_metadata_summary": {"missing_count": 0},
+        "segment_diagnostics": [{"n_fit": 100, "mask_fraction": 0.0}],
+        "optimizer_loss": "soft_l1",
+        "error_floor_applied": True,
+    }
+
+    flags = _phoenix_quality_flags(diagnostics, success=True)
+
+    assert "robust_loss_active" in flags
+    assert "error_floor_applied" in flags
 
 
 def test_grid_edge_flags_report_low_and_high_boundaries():
