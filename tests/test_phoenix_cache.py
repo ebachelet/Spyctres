@@ -123,3 +123,57 @@ def test_interpolator_uses_scaled_axes_but_preserves_physical_grid(tmp_path):
             for ig, logg in enumerate(logg_grid):
                 node_eval = library.evaluate(teff, feh, logg)
                 assert np.array_equal(node_eval, flux_grid[it, iz, ig])
+
+
+def test_build_interpolator_emits_structured_flux_cube_and_cache_progress(
+    tmp_path, monkeypatch
+):
+    library = make_library(tmp_path)
+    template_path = tmp_path / "template.fits"
+    template_path.touch()
+
+    monkeypatch.setattr(
+        library,
+        "template_path",
+        lambda teff, logg, feh: str(template_path),
+    )
+    monkeypatch.setattr(
+        library,
+        "_resample_template_fast",
+        lambda path, wave_clip, mask, observed_wave: np.ones_like(
+            np.asarray(observed_wave, dtype=float)
+        ),
+    )
+
+    events = []
+    cache_path = tmp_path / "cache.npz"
+    library.build_interpolator(
+        observed_wave=np.linspace(5000.0, 5010.0, 5),
+        teff_grid=[5000.0],
+        feh_grid=[0.0],
+        logg_grid=[4.0],
+        observed_wave_medium="vacuum",
+        cache_path=cache_path,
+        progress_callback=events.append,
+    )
+
+    assert all(isinstance(event, dict) for event in events)
+    stages = [event["stage"] for event in events]
+    assert "build_support_grid" in stages
+    assert "build_flux_cube" in stages
+    assert "save_cache" in stages
+    assert stages[-1] == "done"
+
+    flux_events = [event for event in events if event["stage"] == "build_flux_cube"]
+    assert any(event.get("current") == 0 for event in flux_events)
+    assert any(
+        event.get("current") == event.get("total") == 1 for event in flux_events
+    )
+    assert all(event.get("unit") == "templates" for event in flux_events)
+    assert any("flux_grid_nbytes" in event for event in flux_events)
+
+    save_events = [event for event in events if event["stage"] == "save_cache"]
+    assert any("This can take a while" in event["message"] for event in save_events)
+    assert any("Finished saving" in event["message"] for event in save_events)
+    assert all(event.get("cache_path") == str(cache_path) for event in save_events)
+    assert cache_path.exists()

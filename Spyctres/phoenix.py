@@ -6,6 +6,7 @@ https://doi.org/10.1051/0004-6361/201219058
 
 import os
 import hashlib
+import time
 import numpy as np
 from astropy.io import fits
 
@@ -471,17 +472,43 @@ class PhoenixLibrary(object):
             If True, missing templates are skipped and left as NaN in the flux cube.
             If False, missing templates raise immediately.
         progress_callback : callable, optional
-            Called with short status strings before cache load/rebuild and
-            template-grid construction steps.
+            Called with lightweight progress dictionaries during cache
+            load/rebuild, template-grid construction, and cache save steps.
+            Plain-string callbacks remain supported by callers through
+            ``event["message"]``.
 
         Returns
         -------
         scipy.interpolate.RegularGridInterpolator
             Interpolator returning flux on `observed_wave`.
         """
-        def report(message):
+        build_start = time.monotonic()
+
+        def report(
+            message,
+            stage="prepare_interpolator",
+            current=None,
+            total=None,
+            unit=None,
+            detail=None,
+            **payload,
+        ):
             if progress_callback is not None:
-                progress_callback(str(message))
+                event = {
+                    "stage": str(stage),
+                    "message": str(message),
+                    "elapsed_s": float(time.monotonic() - build_start),
+                }
+                if current is not None:
+                    event["current"] = int(current)
+                if total is not None:
+                    event["total"] = int(total)
+                if unit is not None:
+                    event["unit"] = str(unit)
+                if detail is not None:
+                    event["detail"] = detail
+                event.update(payload)
+                progress_callback(event)
 
         observed_wave = _as_float_array(observed_wave)
         observed_wave_medium = (
@@ -501,8 +528,13 @@ class PhoenixLibrary(object):
         if cache_path is not None:
             cache_path = os.path.abspath(os.path.expanduser(cache_path))
             if os.path.exists(cache_path):
-                report("Loading PHOENIX interpolator cache: {0}".format(cache_path))
+                report(
+                    "Loading PHOENIX interpolator cache: {0}".format(cache_path),
+                    stage="load_cache",
+                    cache_path=cache_path,
+                )
                 try:
+                    load_start = time.monotonic()
                     self.load_cache(
                         cache_path,
                         expected_wave=observed_wave,
@@ -511,22 +543,43 @@ class PhoenixLibrary(object):
                         expected_logg_grid=logg_grid,
                         expected_observed_wave_medium=observed_wave_medium,
                     )
-                    report("Loaded PHOENIX interpolator cache.")
+                    report(
+                        "Loaded PHOENIX interpolator cache in {0:.2f} s.".format(
+                            time.monotonic() - load_start
+                        ),
+                        stage="load_cache",
+                        cache_path=cache_path,
+                    )
                     return self._interp
                 except ValueError as e:
-                    report("PHOENIX cache mismatch; rebuilding: {0}".format(str(e)))
+                    report(
+                        "PHOENIX cache mismatch; rebuilding: {0}".format(str(e)),
+                        stage="cache_mismatch",
+                        detail=str(e),
+                        cache_path=cache_path,
+                    )
                     if self.verbose:
                         print("Cache mismatch, rebuilding:", cache_path)
                         print(str(e))
             else:
-                report("No PHOENIX interpolator cache found; building a new one.")
+                report(
+                    "No PHOENIX interpolator cache found; building a new one.",
+                    stage="load_cache",
+                    cache_path=cache_path,
+                )
         else:
-            report("Building PHOENIX interpolator without an on-disk cache.")
+            report(
+                "Building PHOENIX interpolator without an on-disk cache.",
+                stage="prepare_interpolator",
+            )
 
         # Precompute the PHOENIX support grid in the requested wavelength medium
         # and its overlap with the observed wavelength grid once, outside the
         # template loop.                                
-        report("Preparing PHOENIX wavelength support grid.")
+        report(
+            "Preparing PHOENIX wavelength support grid.",
+            stage="build_support_grid",
+        )
         wave_clip, mask = self._prepare_resampling_grid(
             observed_wave=observed_wave,
             observed_wave_medium=observed_wave_medium,
@@ -540,12 +593,22 @@ class PhoenixLibrary(object):
 
         # Fast observed-grid build: read only the template flux array for each
         # grid point, then resample using the precomputed wavelength support.
+        n_total = int(len(teff_grid) * len(feh_grid) * len(logg_grid))
+        n_done = 0
+        loop_start = time.monotonic()
+        last_emit = loop_start
         report(
             "Building PHOENIX flux cube ({0} Teff x {1} [Fe/H] x {2} logg).".format(
                 len(teff_grid),
                 len(feh_grid),
                 len(logg_grid),
-            )
+            ),
+            stage="build_flux_cube",
+            current=0,
+            total=n_total,
+            unit="templates",
+            flux_grid_shape=tuple(int(x) for x in flux_grid.shape),
+            flux_grid_nbytes=int(flux_grid.nbytes),
         )
         for it, teff in enumerate(teff_grid):
             for iz, feh in enumerate(feh_grid):
@@ -571,6 +634,37 @@ class PhoenixLibrary(object):
                                     teff, feh, logg, str(e)
                                 )
                             )
+                    n_done += 1
+                    now = time.monotonic()
+                    if n_done == n_total or now - last_emit >= 0.5:
+                        report(
+                            "Building PHOENIX flux cube: {0}/{1} templates.".format(
+                                n_done,
+                                n_total,
+                            ),
+                            stage="build_flux_cube",
+                            current=n_done,
+                            total=n_total,
+                            unit="templates",
+                            detail={
+                                "teff": float(teff),
+                                "feh": float(feh),
+                                "logg": float(logg),
+                            },
+                        )
+                        last_emit = now
+
+        report(
+            "Finished PHOENIX flux cube in {0:.2f} s.".format(
+                time.monotonic() - loop_start
+            ),
+            stage="build_flux_cube",
+            current=n_total,
+            total=n_total,
+            unit="templates",
+            flux_grid_shape=tuple(int(x) for x in flux_grid.shape),
+            flux_grid_nbytes=int(flux_grid.nbytes),
+        )
         
         self._flux_grid = flux_grid
         
@@ -586,10 +680,28 @@ class PhoenixLibrary(object):
         )
 
         if cache_path is not None:
-            report("Saving PHOENIX interpolator cache: {0}".format(cache_path))
+            save_start = time.monotonic()
+            report(
+                "Saving PHOENIX interpolator cache to {0}. This can take a while.".format(
+                    cache_path
+                ),
+                stage="save_cache",
+                cache_path=cache_path,
+                cache_array_shape=tuple(int(x) for x in flux_grid.shape),
+                cache_nbytes=int(flux_grid.nbytes),
+            )
             self.save_cache(cache_path, observed_wave_medium=observed_wave_medium)
+            report(
+                "Finished saving PHOENIX interpolator cache in {0:.2f} s.".format(
+                    time.monotonic() - save_start
+                ),
+                stage="save_cache",
+                cache_path=cache_path,
+                cache_array_shape=tuple(int(x) for x in flux_grid.shape),
+                cache_nbytes=int(flux_grid.nbytes),
+            )
 
-        report("PHOENIX interpolator is ready.")
+        report("PHOENIX interpolator is ready.", stage="done")
         return self._interp
 
     def evaluate(self, teff, feh, logg):

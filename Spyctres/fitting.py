@@ -102,6 +102,31 @@ def _make_progress_reporter(progress_callback):
     return report
 
 
+def _report_phoenix_progress_event(report, event):
+    """Forward PHOENIX backend progress while preserving structured fields."""
+    if isinstance(event, dict):
+        payload = dict(event)
+        message = payload.pop("message", "")
+        phase = payload.pop("stage", "phoenix_cache")
+        current = payload.pop("current", None)
+        total = payload.pop("total", None)
+        elapsed_s = payload.pop("elapsed_s", None)
+        fraction = None
+        if current is not None and total not in (None, 0):
+            fraction = float(current) / float(total)
+        if elapsed_s is not None:
+            payload["phoenix_elapsed_s"] = float(elapsed_s)
+        return report(
+            message,
+            phase=phase,
+            current=current,
+            total=total,
+            fraction=fraction,
+            payload=payload,
+        )
+    return report(event, phase="phoenix_cache")
+
+
 def _coerce_segments_input(segments):
     """
     Normalize supported segment inputs to a list of SpectrumSegment objects
@@ -2733,7 +2758,10 @@ def fit_phoenix_full_spectrum(
             cache_path=cache_path,
             allow_missing=allow_missing,
             observed_wave_medium=model_wave_medium,
-            progress_callback=lambda message: report(message, phase="phoenix_cache"),
+            progress_callback=lambda event: _report_phoenix_progress_event(
+                report,
+                event,
+            ),
         )
     else:
         report(

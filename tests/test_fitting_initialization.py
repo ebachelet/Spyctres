@@ -272,6 +272,16 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert callable(library.build_progress_callback_received)
     assert library.build_progress_callback_received is not callback
     library.build_progress_callback_received("Synthetic cache callback message.")
+    library.build_progress_callback_received(
+        {
+            "stage": "build_flux_cube",
+            "message": "Building PHOENIX flux cube: 2/3 templates.",
+            "current": 2,
+            "total": 3,
+            "unit": "templates",
+            "elapsed_s": 1.25,
+        }
+    )
     assert all(isinstance(message, FitProgressEvent) for message in messages)
     assert all(message.elapsed_s is not None for message in messages)
     assert any("Prepared fit data" in message for message in messages)
@@ -284,9 +294,19 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     phases = [message.phase for message in messages]
     assert "prepare_data" in phases
     assert "phoenix_cache" in phases
+    assert "build_flux_cube" in phases
     assert "rv_scan" in phases
     assert "local_optimize" in phases
     assert "complete" in phases
+    structured = [
+        message for message in messages
+        if message.phase == "build_flux_cube"
+    ][-1]
+    assert structured.current == 2
+    assert structured.total == 3
+    assert structured.fraction == pytest.approx(2.0 / 3.0)
+    assert structured.payload["unit"] == "templates"
+    assert structured.payload["phoenix_elapsed_s"] == pytest.approx(1.25)
 
 
 def test_full_spectrum_fit_reports_error_floor_error_model():
