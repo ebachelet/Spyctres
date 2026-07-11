@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from Spyctres import suggest_phoenix_fit_defaults
+from Spyctres.defaults import prepare_phoenix_fit_kwargs
 from Spyctres.io import SpectrumCollection, SpectrumSegment
 
 
@@ -78,3 +79,54 @@ def test_suggest_phoenix_fit_defaults_uses_shorter_rv_scan_for_stellar_rest_coll
     assert suggestion.fit_kwargs["multistart"] == 2
     assert suggestion.fit_kwargs["rv_grid_n"] == 21
     assert suggestion.provenance["coverage"]["stellar_rest_status"] == ["corrected"]
+
+
+def test_prepare_phoenix_fit_kwargs_applies_expert_overrides_and_clips_grids():
+    segment = SpectrumSegment(
+        wave=np.linspace(3600.0, 5600.0, 100),
+        flux=np.ones(100),
+        err=np.full(100, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "XSHOOTER", "arm": "UVB"},
+        resolution=5000.0,
+    )
+
+    fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+        segment,
+        p0_overrides=(6200.0, None, None, 12.0),
+        lower_bound_overrides=(6000.0, -0.5, None, None),
+        upper_bound_overrides=(7000.0, 0.0, None, None),
+        window=(4000.0, 5000.0),
+        resolution_R=7000.0,
+    )
+
+    assert suggestion is not None
+    assert fit_kwargs["p0"] == pytest.approx((6200.0, 0.0, 4.0, 12.0))
+    assert fit_kwargs["bounds"][0][:2] == pytest.approx((6000.0, -0.5))
+    assert fit_kwargs["bounds"][1][:2] == pytest.approx((7000.0, 0.0))
+    assert fit_kwargs["regions"] == [(4000.0, 5000.0)]
+    assert fit_kwargs["R"] == pytest.approx(7000.0)
+    assert fit_kwargs["coarse_teff_grid"] == [6000.0]
+    assert fit_kwargs["coarse_feh_grid"] == [0.0]
+
+
+def test_prepare_phoenix_fit_kwargs_can_run_without_auto_defaults():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5100.0, 10),
+        flux=np.ones(10),
+        err=np.full(10, 0.1),
+    )
+
+    fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+        segment,
+        auto_defaults=False,
+        p0_overrides=(5000.0, -0.2, 4.0, 0.0),
+        window=(None, 5090.0),
+    )
+
+    assert suggestion is None
+    assert fit_kwargs["p0"] == pytest.approx((5000.0, -0.2, 4.0, 0.0))
+    assert fit_kwargs["regions"] == [(5000.0, 5090.0)]
+    assert fit_kwargs["rv_grid_n"] == 41

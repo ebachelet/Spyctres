@@ -29,10 +29,8 @@ import argparse
 import json
 
 import matplotlib.pyplot as plt
-import numpy as np
-
-from Spyctres import fit_phoenix_spectrum, suggest_phoenix_fit_defaults
-from Spyctres.io import SpectrumCollection, read_spectrum
+from Spyctres import fit_phoenix_spectrum, prepare_phoenix_fit_kwargs
+from Spyctres.io import read_spectrum
 from Spyctres.plotting import plot_fit_referee
 
 
@@ -105,105 +103,31 @@ def build_parser():
     return parser
 
 
-def _clip_grid(values, lo, hi):
-    values = [float(value) for value in values if float(lo) <= float(value) <= float(hi)]
-    if values:
-        return values
-    return [0.5 * (float(lo) + float(hi))]
-
-
-def _spectrum_wave_range(spectrum):
-    segments = list(spectrum.segments) if isinstance(spectrum, SpectrumCollection) else [spectrum]
-    waves = []
-    for segment in segments:
-        wave = np.asarray(segment.wave, dtype=float)
-        mask = np.asarray(segment.mask, dtype=bool)
-        good = wave[mask & np.isfinite(wave)]
-        if good.size:
-            waves.append(good)
-    if not waves:
-        raise ValueError("No finite valid wavelengths are available for window selection.")
-    merged = np.concatenate(waves)
-    return float(np.min(merged)), float(np.max(merged))
-
-
 def _fit_kwargs_from_args(args, spectrum):
-    suggestion = None
-    if args.auto_defaults:
-        suggestion = suggest_phoenix_fit_defaults(
-            spectrum,
-            mode=args.defaults_mode,
-            science_case="classification",
-        )
-        fit_kwargs = dict(suggestion.fit_kwargs)
-    else:
-        fit_kwargs = {
-            "p0": (
-                5750.0 if args.teff is None else args.teff,
-                0.0 if args.feh is None else args.feh,
-                4.5 if args.logg is None else args.logg,
-                0.0 if args.rv is None else args.rv,
-            ),
-            "forward_model": "native_interp",
-            "rv_init": "grid",
-            "rv_grid_n": 41,
-            "mdeg": 2,
-        }
-
-    p0 = list(fit_kwargs.get("p0", (5750.0, 0.0, 4.5, 0.0)))
-    for index, value in enumerate((args.teff, args.feh, args.logg, args.rv)):
-        if value is not None:
-            p0[index] = float(value)
-    fit_kwargs["p0"] = tuple(p0)
-
-    bounds = fit_kwargs.get(
-        "bounds",
-        ((4500.0, -1.5, 2.5, -300.0), (10000.0, 0.5, 5.5, 300.0)),
+    return prepare_phoenix_fit_kwargs(
+        spectrum,
+        auto_defaults=args.auto_defaults,
+        defaults_mode=args.defaults_mode,
+        science_case="classification",
+        p0_overrides=(args.teff, args.feh, args.logg, args.rv),
+        lower_bound_overrides=(
+            args.teff_min,
+            args.feh_min,
+            args.logg_min,
+            args.rv_min,
+        ),
+        upper_bound_overrides=(
+            args.teff_max,
+            args.feh_max,
+            args.logg_max,
+            args.rv_max,
+        ),
+        window=(
+            args.wmin,
+            args.wmax,
+        ) if args.wmin is not None or args.wmax is not None else None,
+        resolution_R=args.resolution_R,
     )
-    lower = list(bounds[0])
-    upper = list(bounds[1])
-    lower_overrides = (args.teff_min, args.feh_min, args.logg_min, args.rv_min)
-    upper_overrides = (args.teff_max, args.feh_max, args.logg_max, args.rv_max)
-    for index, value in enumerate(lower_overrides):
-        if value is not None:
-            lower[index] = float(value)
-    for index, value in enumerate(upper_overrides):
-        if value is not None:
-            upper[index] = float(value)
-    if any(hi <= lo for lo, hi in zip(lower, upper)):
-        raise ValueError("Fit bounds must have min < max for every parameter.")
-    fit_kwargs["bounds"] = (tuple(lower), tuple(upper))
-
-    if args.wmin is not None or args.wmax is not None:
-        data_lo, data_hi = _spectrum_wave_range(spectrum)
-        existing = fit_kwargs.get("regions", [(None, None)])
-        base_lo, base_hi = existing[0]
-        if base_lo is None:
-            base_lo = data_lo
-        if base_hi is None:
-            base_hi = data_hi
-        wmin = float(args.wmin) if args.wmin is not None else float(base_lo)
-        wmax = float(args.wmax) if args.wmax is not None else float(base_hi)
-        if wmax <= wmin:
-            raise ValueError("--wmax must be greater than --wmin.")
-        fit_kwargs["regions"] = [(wmin, wmax)]
-
-    if "coarse_teff_grid" in fit_kwargs:
-        fit_kwargs["coarse_teff_grid"] = _clip_grid(
-            fit_kwargs["coarse_teff_grid"], lower[0], upper[0]
-        )
-    if "coarse_feh_grid" in fit_kwargs:
-        fit_kwargs["coarse_feh_grid"] = _clip_grid(
-            fit_kwargs["coarse_feh_grid"], lower[1], upper[1]
-        )
-    if "coarse_logg_grid" in fit_kwargs:
-        fit_kwargs["coarse_logg_grid"] = _clip_grid(
-            fit_kwargs["coarse_logg_grid"], lower[2], upper[2]
-        )
-
-    if args.resolution_R is not None:
-        fit_kwargs["R"] = float(args.resolution_R)
-    return fit_kwargs, suggestion
 
 
 def main(argv=None):

@@ -34,6 +34,140 @@ class PhoenixFitDefaults:
         }
 
 
+def spectrum_wavelength_range(spectrum):
+    """Return the finite, mask-valid wavelength range of a spectrum.
+
+    The mask convention follows the Spyctres container contract:
+    ``True`` means a pixel is valid/usable. This helper is intentionally small
+    because it is used by command-line examples to fill in a missing window edge
+    when the user supplies only ``--wmin`` or ``--wmax``.
+    """
+    segments = _as_segments(spectrum)
+    waves = []
+    for segment in segments:
+        wave = _segment_valid_wave(segment)
+        if wave.size:
+            waves.append(wave)
+    if not waves:
+        raise ValueError("No finite valid wavelengths are available.")
+    merged = np.concatenate(waves)
+    return float(np.min(merged)), float(np.max(merged))
+
+
+def clip_grid_to_bounds(values, lower, upper):
+    """Clip a sparse initial-search grid to scalar lower/upper bounds."""
+    lower = float(lower)
+    upper = float(upper)
+    if upper <= lower:
+        raise ValueError("Grid upper bound must be greater than lower bound.")
+    clipped = [float(value) for value in values if lower <= float(value) <= upper]
+    if clipped:
+        return clipped
+    return [0.5 * (lower + upper)]
+
+
+def prepare_phoenix_fit_kwargs(
+    spectrum,
+    *,
+    auto_defaults=True,
+    defaults_mode="quicklook",
+    science_case="classification",
+    fallback_p0=(5750.0, 0.0, 4.5, 0.0),
+    fallback_bounds=((4500.0, -1.5, 2.5, -300.0), (10000.0, 0.5, 5.5, 300.0)),
+    p0_overrides=None,
+    lower_bound_overrides=None,
+    upper_bound_overrides=None,
+    window=None,
+    resolution_R=None,
+    extra_kwargs=None,
+):
+    """Build PHOENIX fit keyword arguments from defaults plus overrides.
+
+    This is the small reusable layer used by examples and smoke tests. It keeps
+    automatic first-pass choices auditable while preserving expert control:
+    every value supplied in an override wins over the suggestion.
+
+    Returns
+    -------
+    fit_kwargs : dict
+        Keyword arguments suitable for ``fit_phoenix_spectrum()`` and, after
+        optional caller-specific additions such as explicit PHOENIX subgrids,
+        ``fit_phoenix_full_spectrum()``.
+    suggestion : PhoenixFitDefaults or None
+        The underlying suggestion object when ``auto_defaults=True``.
+    """
+    suggestion = None
+    if auto_defaults:
+        suggestion = suggest_phoenix_fit_defaults(
+            spectrum,
+            mode=defaults_mode,
+            science_case=science_case,
+        )
+        fit_kwargs = dict(suggestion.fit_kwargs)
+    else:
+        fit_kwargs = {
+            "p0": tuple(float(value) for value in fallback_p0),
+            "bounds": (
+                tuple(float(value) for value in fallback_bounds[0]),
+                tuple(float(value) for value in fallback_bounds[1]),
+            ),
+            "forward_model": "native_interp",
+            "rv_init": "grid",
+            "rv_grid_n": 41,
+            "mdeg": 2,
+        }
+
+    if extra_kwargs:
+        fit_kwargs.update(dict(extra_kwargs))
+
+    p0 = list(fit_kwargs.get("p0", fallback_p0))
+    for index, value in enumerate(p0_overrides or (None, None, None, None)):
+        if value is not None:
+            p0[index] = float(value)
+    fit_kwargs["p0"] = tuple(p0)
+
+    bounds = fit_kwargs.get("bounds", fallback_bounds)
+    lower = list(bounds[0])
+    upper = list(bounds[1])
+    for index, value in enumerate(lower_bound_overrides or (None, None, None, None)):
+        if value is not None:
+            lower[index] = float(value)
+    for index, value in enumerate(upper_bound_overrides or (None, None, None, None)):
+        if value is not None:
+            upper[index] = float(value)
+    if any(hi <= lo for lo, hi in zip(lower, upper)):
+        raise ValueError("Fit bounds must have min < max for every parameter.")
+    fit_kwargs["bounds"] = (tuple(lower), tuple(upper))
+
+    if window is not None:
+        requested_lo, requested_hi = window
+        data_lo, data_hi = spectrum_wavelength_range(spectrum)
+        existing = fit_kwargs.get("regions", [(data_lo, data_hi)])
+        base_lo, base_hi = existing[0]
+        wmin = float(requested_lo) if requested_lo is not None else float(base_lo)
+        wmax = float(requested_hi) if requested_hi is not None else float(base_hi)
+        if wmax <= wmin:
+            raise ValueError("Fit-window maximum must be greater than minimum.")
+        fit_kwargs["regions"] = [(wmin, wmax)]
+
+    if "coarse_teff_grid" in fit_kwargs:
+        fit_kwargs["coarse_teff_grid"] = clip_grid_to_bounds(
+            fit_kwargs["coarse_teff_grid"], lower[0], upper[0]
+        )
+    if "coarse_feh_grid" in fit_kwargs:
+        fit_kwargs["coarse_feh_grid"] = clip_grid_to_bounds(
+            fit_kwargs["coarse_feh_grid"], lower[1], upper[1]
+        )
+    if "coarse_logg_grid" in fit_kwargs:
+        fit_kwargs["coarse_logg_grid"] = clip_grid_to_bounds(
+            fit_kwargs["coarse_logg_grid"], lower[2], upper[2]
+        )
+
+    if resolution_R is not None:
+        fit_kwargs["R"] = float(resolution_R)
+    return fit_kwargs, suggestion
+
+
 def _jsonable(value):
     if isinstance(value, np.ndarray):
         return value.tolist()

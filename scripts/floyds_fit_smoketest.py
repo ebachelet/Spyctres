@@ -15,6 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from Spyctres.config import load_user_config, get_config_value, resolve_setting
+from Spyctres.defaults import prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.results import format_fit_quality_report
@@ -107,24 +108,39 @@ def main():
         default=200.0,
         help="Margin in Angstrom for native_interp model preparation.",
     )
-    parser.add_argument("--wmin", type=float, default=3800.0, help="Minimum wavelength in Angstrom")
-    parser.add_argument("--wmax", type=float, default=5600.0, help="Maximum wavelength in Angstrom")
+    parser.add_argument(
+        "--auto-defaults",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use spectrum metadata/coverage to choose first-pass fit defaults. "
+            "Expert CLI values still override the suggestions."
+        ),
+    )
+    parser.add_argument(
+        "--defaults-mode",
+        choices=("quicklook", "standard", "diagnostic"),
+        default="quicklook",
+        help="Search-budget mode used by --auto-defaults.",
+    )
+    parser.add_argument("--wmin", type=float, default=None, help="Minimum wavelength in Angstrom")
+    parser.add_argument("--wmax", type=float, default=None, help="Maximum wavelength in Angstrom")
     parser.add_argument("--clip-left", type=int, default=0, help="Clip this many pixels from the left edge")
     parser.add_argument("--clip-right", type=int, default=0, help="Clip this many pixels from the right edge")
     parser.add_argument("--R-override", type=float, default=None, help="Override metadata resolving power R")
-    parser.add_argument("--teff-min", type=float, default=7000.0, help="Minimum Teff for explicit PHOENIX grid")
-    parser.add_argument("--teff-max", type=float, default=12000.0, help="Maximum Teff for explicit PHOENIX grid")
-    parser.add_argument("--feh-min", type=float, default=-1.0, help="Minimum [Fe/H] for explicit PHOENIX grid")
-    parser.add_argument("--feh-max", type=float, default=0.5, help="Maximum [Fe/H] for explicit PHOENIX grid")
-    parser.add_argument("--logg-min", type=float, default=2.5, help="Minimum logg for explicit PHOENIX grid")
-    parser.add_argument("--logg-max", type=float, default=5.5, help="Maximum logg for explicit PHOENIX grid")
-    parser.add_argument("--mdeg", type=int, default=3, help="Legendre continuum degree")
-    parser.add_argument("--teff0", type=float, default=9500.0, help="Initial Teff")
-    parser.add_argument("--feh0", type=float, default=-0.5, help="Initial [Fe/H]")
-    parser.add_argument("--logg0", type=float, default=4.0, help="Initial logg")
-    parser.add_argument("--rv0", type=float, default=0.0, help="Initial stellar RV in km/s")
+    parser.add_argument("--teff-min", type=float, default=None, help="Minimum Teff for explicit PHOENIX grid")
+    parser.add_argument("--teff-max", type=float, default=None, help="Maximum Teff for explicit PHOENIX grid")
+    parser.add_argument("--feh-min", type=float, default=None, help="Minimum [Fe/H] for explicit PHOENIX grid")
+    parser.add_argument("--feh-max", type=float, default=None, help="Maximum [Fe/H] for explicit PHOENIX grid")
+    parser.add_argument("--logg-min", type=float, default=None, help="Minimum logg for explicit PHOENIX grid")
+    parser.add_argument("--logg-max", type=float, default=None, help="Maximum logg for explicit PHOENIX grid")
+    parser.add_argument("--mdeg", type=int, default=None, help="Legendre continuum degree")
+    parser.add_argument("--teff0", type=float, default=None, help="Initial Teff")
+    parser.add_argument("--feh0", type=float, default=None, help="Initial [Fe/H]")
+    parser.add_argument("--logg0", type=float, default=None, help="Initial logg")
+    parser.add_argument("--rv0", type=float, default=None, help="Initial stellar RV in km/s")
     parser.add_argument("--rv-init", choices=["grid", "none"], default="grid", help="RV initialization strategy")
-    parser.add_argument("--rv-grid-n", type=int, default=161, help="Number of trial RV points in coarse RV scan")
+    parser.add_argument("--rv-grid-n", type=int, default=None, help="Number of trial RV points in coarse RV scan")
     parser.add_argument("--cache-path", default="/tmp/spyctres_floyds_fit_cache.npz")
     parser.add_argument("--verbose", type=int, default=1)
     args = parser.parse_args()
@@ -151,9 +167,6 @@ def main():
     if not os.path.isdir(args.phoenix_dir):
         parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
 
-    if args.wmax <= args.wmin:
-        parser.error("--wmax must be greater than --wmin.")
-
     if args.forward_model == "interp_observed" and args.wave_medium == "unknown":
         parser.error(
             "--forward-model interp_observed requires a known --wave-medium. "
@@ -168,10 +181,61 @@ def main():
         meta["wave_medium"] = args.wave_medium
         seg0 = seg0.copy(meta=meta, wave_medium=args.wave_medium)
 
+    try:
+        fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+            seg0,
+            auto_defaults=args.auto_defaults,
+            defaults_mode=args.defaults_mode,
+            science_case="classification",
+            fallback_p0=(9500.0, -0.5, 4.0, 0.0),
+            fallback_bounds=(
+                (7000.0, -1.0, 2.5, -300.0),
+                (12000.0, 0.5, 5.5, 300.0),
+            ),
+            p0_overrides=(args.teff0, args.feh0, args.logg0, args.rv0),
+            lower_bound_overrides=(
+                args.teff_min,
+                args.feh_min,
+                args.logg_min,
+                None,
+            ),
+            upper_bound_overrides=(
+                args.teff_max,
+                args.feh_max,
+                args.logg_max,
+                None,
+            ),
+            window=(
+                args.wmin,
+                args.wmax,
+            ) if args.wmin is not None or args.wmax is not None else None,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.mdeg is not None:
+        fit_kwargs["mdeg"] = int(args.mdeg)
+    if args.rv_grid_n is not None:
+        fit_kwargs["rv_grid_n"] = int(args.rv_grid_n)
+    fit_kwargs["forward_model"] = args.forward_model
+    if args.rv_init == "none":
+        fit_kwargs["rv_init"] = None
+
+    if suggestion is not None:
+        print("Suggested first-pass fit defaults:", flush=True)
+        for reason in suggestion.reasons:
+            print("  - {0}".format(reason), flush=True)
+        for warning in suggestion.warnings:
+            print("  WARNING: {0}".format(warning), flush=True)
+
+    fit_regions = fit_kwargs.get("regions", [(None, None)])
+    if len(fit_regions) != 1:
+        parser.error("FLOYDS smoke test expects a single fit window.")
+    fit_wmin, fit_wmax = fit_regions[0]
+
     print("Preparing fit window...", flush=True)
     seg = seg0.window(
-        wmin=args.wmin,
-        wmax=args.wmax,
+        wmin=fit_wmin,
+        wmax=fit_wmax,
         clip_left=args.clip_left,
         clip_right=args.clip_right,
         name_suffix="fitwin",
@@ -185,9 +249,10 @@ def main():
 
     print("Selecting PHOENIX grid...", flush=True)
     teff_avail, feh_avail, logg_avail = phoenix_lib.available_axes()
-    teff_grid_req = pick_grid_range(teff_avail, args.teff_min, args.teff_max)
-    feh_grid_req = pick_grid_range(feh_avail, args.feh_min, args.feh_max)
-    logg_grid_req = pick_grid_range(logg_avail, args.logg_min, args.logg_max)
+    bounds = fit_kwargs["bounds"]
+    teff_grid_req = pick_grid_range(teff_avail, bounds[0][0], bounds[1][0])
+    feh_grid_req = pick_grid_range(feh_avail, bounds[0][1], bounds[1][1])
+    logg_grid_req = pick_grid_range(logg_avail, bounds[0][2], bounds[1][2])
 
     teff_grid_fit, feh_grid_fit, logg_grid_fit = phoenix_lib.complete_subgrid(
         teff_grid_req, feh_grid_req, logg_grid_req
@@ -199,19 +264,26 @@ def main():
     out = fit_phoenix_full_spectrum(
         [seg],
         phoenix_lib=phoenix_lib,
-        p0=(args.teff0, args.feh0, args.logg0, args.rv0),
+        p0=fit_kwargs["p0"],
+        bounds=fit_kwargs["bounds"],
         exclude_mask=None,
-        mdeg=args.mdeg,
+        mdeg=fit_kwargs["mdeg"],
         rv_bary_kms=0.0,
         R=R,
-        forward_model=args.forward_model,
+        forward_model=fit_kwargs["forward_model"],
         model_margin_A=args.model_margin,
         teff_grid=teff_grid_fit,
         feh_grid=feh_grid_fit,
         logg_grid=logg_grid_fit,
         cache_path=args.cache_path,
-        rv_init=None if args.rv_init == "none" else "grid",
-        rv_grid_n=args.rv_grid_n,
+        physical_init=fit_kwargs.get("physical_init"),
+        coarse_teff_grid=fit_kwargs.get("coarse_teff_grid"),
+        coarse_feh_grid=fit_kwargs.get("coarse_feh_grid"),
+        coarse_logg_grid=fit_kwargs.get("coarse_logg_grid"),
+        coarse_decimate=fit_kwargs.get("coarse_decimate", 12),
+        multistart=fit_kwargs.get("multistart", 1),
+        rv_init=fit_kwargs.get("rv_init"),
+        rv_grid_n=fit_kwargs["rv_grid_n"],
         verbose=args.verbose,
         max_nfev=300,
         progress_callback=lambda message: print(message, flush=True),
@@ -223,11 +295,11 @@ def main():
         phoenix_lib=phoenix_lib,
         fit_result=out,
         exclude_mask=None,
-        mdeg=args.mdeg,
+        mdeg=fit_kwargs["mdeg"],
         rv_bary_kms=0.0,
         R=R,
         fwhm_kms=None,
-        forward_model=args.forward_model,
+        forward_model=fit_kwargs["forward_model"],
         model_margin_A=args.model_margin,
     )
 
@@ -239,7 +311,7 @@ def main():
     print("Wave medium:", seg.wave_medium)
     print("Wave frame:", seg.wave_frame)
     print("Pixels used:", int(np.sum(used_masks[0])), "/", len(seg.wave))
-    print("Window [A]:", (args.wmin, args.wmax))
+    print("Window [A]:", (fit_wmin, fit_wmax))
     print("R used:", R)
     print("Teff grid used:", teff_grid_fit)
     print("FeH  grid used:", feh_grid_fit)
@@ -261,8 +333,8 @@ def main():
         "{0}  {1:.0f}-{2:.0f} A  Teff={3:.0f}  [Fe/H]={4:.2f}  "
         "logg={5:.2f}  RV={6:.1f}  chi2_red={7:.2f}".format(
             os.path.basename(args.file),
-            args.wmin,
-            args.wmax,
+            fit_wmin,
+            fit_wmax,
             out["teff"],
             out["feh"],
             out["logg"],
