@@ -50,7 +50,7 @@ The PHOENIX templates may be downloaded from the Goettingen Spectral Library:
 
 The wavelength file must be placed in the root directory of the PHOENIX v2 models.
 
-## PHOENIX template path
+## PHOENIX template path and config file
 
 The local PHOENIX path is resolved in this order:
 
@@ -58,11 +58,29 @@ The local PHOENIX path is resolved in this order:
 2. environment variable `SPYCTRES_PHOENIX_DIR`
 3. config file `~/.config/spyctres/config.toml`
 
-Example config:
+The config file is the most convenient place for stable local paths that should
+apply to notebooks, examples, and scripts. Create it like this:
+
+```bash
+mkdir -p ~/.config/spyctres
+$EDITOR ~/.config/spyctres/config.toml
+```
+
+Minimal config:
 
 ```toml
 [paths]
 phoenix_dir = "/path/to/PHOENIXv2"
+```
+
+If you use a nonstandard XDG config root, Spyctres follows
+`$XDG_CONFIG_HOME/spyctres/config.toml` instead. Use command-line
+`--phoenix-dir` for one-off experiments, `SPYCTRES_PHOENIX_DIR` for temporary
+shell sessions, and the config file for everyday use. Check what Spyctres sees
+with:
+
+```bash
+python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
 ```
 
 ## Quick start
@@ -84,14 +102,16 @@ short command-line example:
 ```bash
 python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
-  --teff 6000 --feh 0.0 --logg 4.0 --rv 0.0
+  --instrument xshooter
 ```
 
-This example reads the spectrum, runs the native-grid PHOENIX fit, prints a
-compact result and quality report, and opens a wide observed/model/residual
-diagnostic plot. It is a first-contact classification example, not a precision
-line-width or abundance analysis.
+This example reads the spectrum, suggests conservative first-pass fit defaults
+from the loaded wavelength coverage and metadata, runs the native-grid PHOENIX
+fit, prints a compact result and quality report, and opens a wide
+observed/model/residual diagnostic plot. It is a first-contact classification
+example, not a precision line-width or abundance analysis. Expert users can
+override the suggested values with flags such as `--wmin`, `--wmax`, `--teff`,
+`--teff-min`, or `--no-auto-defaults`.
 
 Other useful entry points include:
 
@@ -147,12 +167,13 @@ The high-level API accepts a `SpectrumSegment`, `SpectrumCollection`, or any
 input supported by the canonical ingestion layer:
 
 ```python
-from Spyctres import fit_phoenix_spectrum
+from Spyctres import fit_phoenix_spectrum, suggest_phoenix_fit_defaults
 
+defaults = suggest_phoenix_fit_defaults(spectrum, mode="quicklook")
 result = fit_phoenix_spectrum(
     spectrum,
     phoenix_dir="/path/to/PHOENIXv2",
-    p0=(5750.0, 0.0, 4.5, 0.0),
+    **defaults.fit_kwargs,
 )
 print(result["teff"], result["rv_kms"])
 print(result.quality_report_text())
@@ -172,6 +193,11 @@ The scientific default forward model is `native_interp`, which keeps the model
 on a dense PHOENIX wavelength grid until after RV shifting and LSF convolution.
 The older `interp_observed` path remains available only as an explicit
 legacy/fast compatibility option.
+`suggest_phoenix_fit_defaults()` chooses a conservative first-pass wavelength
+window, parameter bounds, coarse grid, and RV scan budget from spectrum coverage
+and metadata. It returns provenance, reasons, and warnings; it does not hide
+air/vacuum, frame, or stellar-type assumptions, and every suggested keyword can
+be overridden by expert users.
 Long-running fits accept a `progress_callback`; callbacks now receive a
 `FitProgressEvent` with fields such as `phase`, `message`, `fraction`, and
 `elapsed_s`, while `str(event)` remains the printable status message.
