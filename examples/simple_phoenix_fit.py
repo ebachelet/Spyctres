@@ -17,6 +17,11 @@ is the only instrumental broadening supplied. Individual observed lines can
 therefore be wider or narrower than the demonstration model even when the broad
 atmospheric classification is useful.
 
+By default, the diagnostic plot focuses on the fitted wavelength range and draws
+the PHOENIX/model residuals only on pixels that were actually used by the fit.
+Use ``--plot-xlim all`` if you want to inspect the full loaded segment and mask
+boundaries.
+
 Example
 -------
 python examples/simple_phoenix_fit.py \
@@ -99,6 +104,17 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--plot-xlim",
+        choices=("fit", "all"),
+        default="fit",
+        help=(
+            "Diagnostic plot x-axis. 'fit' focuses on fitted wavelengths and "
+            "draws model/residuals only where pixels were used. 'all' shows the "
+            "full loaded segment while still hiding model/residuals on unused "
+            "pixels."
+        ),
+    )
+    parser.add_argument(
         "--no-show",
         action="store_true",
         help="Do not open the interactive fit figure (useful for batch runs).",
@@ -167,7 +183,9 @@ def main(argv=None):
         "\nInterpretation: this example demonstrates ingestion, a native-grid "
         "full-spectrum PHOENIX fit, structured results, and plotting. It is not "
         "a precision line-width fit; line-profile mismatches can reflect stellar "
-        "rotation/macroturbulence, abundance differences, or an approximate LSF."
+        "rotation/macroturbulence, abundance differences, or an approximate LSF. "
+        "The diagnostic plot focuses on fitted wavelengths by default; gray "
+        "points and shaded regions mark pixels excluded from the fit."
     )
 
     if not result.models:
@@ -184,6 +202,7 @@ def main(argv=None):
             (16.0, 6.4) if args.plot_layout == "stacked" else (12.0, 3.4)
         ),
         max_points_per_segment=20000,
+        xlim_mode=args.plot_xlim,
     )
     if args.output_json:
         result.save_json(

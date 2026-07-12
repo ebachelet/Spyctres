@@ -791,6 +791,7 @@ def plot_fit_referee(
     figsize_per_segment=(11.0, 3.2),
     residual_ylim=(-6.0, 6.0),
     layout="side_by_side",
+    xlim_mode="fit",
 ):
     """
     Plot a deterministic referee view of a PHOENIX fit.
@@ -818,6 +819,13 @@ def plot_fit_referee(
         residual panels in two columns. ``"stacked"`` uses one wide flux panel
         above one wide residual panel per segment, which is usually clearer in
         an interactive notebook or pop-up window.
+    xlim_mode : {"fit", "all"}, optional
+        ``"fit"`` focuses the x-axis on wavelengths actually used by the fit,
+        with a small margin. The observed spectrum is still shown for context
+        inside that range, but PHOENIX/model and residual curves are drawn only
+        on fitted pixels. ``"all"`` keeps the full finite segment wavelength
+        range while still hiding model/residual values on unused pixels. This
+        avoids implying that rejected or out-of-window data were fitted.
 
     Returns
     -------
@@ -849,6 +857,9 @@ def plot_fit_referee(
     layout = str(layout).strip().lower()
     if layout not in {"side_by_side", "stacked"}:
         raise ValueError("layout must be 'side_by_side' or 'stacked'.")
+    xlim_mode = str(xlim_mode).strip().lower()
+    if xlim_mode not in {"fit", "all"}:
+        raise ValueError("xlim_mode must be 'fit' or 'all'.")
     if layout == "side_by_side":
         fig, axes = plt.subplots(
             n_segments,
@@ -899,9 +910,23 @@ def plot_fit_referee(
         coeff = coeffs[index] if index < len(coeffs) else None
         continuum, model_raw = _continuum_and_raw_model(wave, used, model_corr, coeff)
 
-        valid = np.flatnonzero(
+        finite_valid = (
             np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model_corr)
         )
+        if xlim_mode == "fit" and np.any(used & finite_valid):
+            fit_wave = wave[used & finite_valid]
+            fit_min = float(np.nanmin(fit_wave))
+            fit_max = float(np.nanmax(fit_wave))
+            pad = 0.015 * max(fit_max - fit_min, 1.0)
+            xlim = (fit_min - pad, fit_max + pad)
+            display_mask = (
+                finite_valid & (wave >= xlim[0]) & (wave <= xlim[1])
+            )
+        else:
+            xlim = None
+            display_mask = finite_valid
+
+        valid = np.flatnonzero(display_mask)
         if valid.size > max_points_per_segment:
             positions = np.unique(
                 np.rint(
@@ -912,22 +937,31 @@ def plot_fit_referee(
         else:
             sel = valid
 
+        model_corr_plot = np.full_like(model_corr, np.nan, dtype=float)
+        model_corr_plot[used & finite_valid] = model_corr[used & finite_valid]
+        model_raw_plot = None
+        if model_raw is not None:
+            model_raw_plot = np.full_like(model_raw, np.nan, dtype=float)
+            model_raw_plot[used & np.isfinite(model_raw)] = model_raw[
+                used & np.isfinite(model_raw)
+            ]
+
         ax_flux.plot(wave[sel], flux[sel], color="0.25", lw=0.7, label="observed")
         if model_raw is not None:
             ax_flux.plot(
                 wave[sel],
-                model_raw[sel],
+                model_raw_plot[sel],
                 color="tab:orange",
                 lw=0.7,
                 alpha=0.8,
-                label="PHOENIX+LSF",
+                label="PHOENIX+LSF (fitted pixels)",
             )
         ax_flux.plot(
             wave[sel],
-            model_corr[sel],
+            model_corr_plot[sel],
             color="tab:red",
             lw=0.9,
-            label="continuum-adjusted model",
+            label="continuum-adjusted model (fitted pixels)",
         )
         if continuum is not None:
             finite_cont = np.isfinite(continuum)
@@ -960,6 +994,9 @@ def plot_fit_referee(
 
         ylo, yhi = _compute_robust_ylim(flux[used] if np.any(used) else flux)
         ax_flux.set_ylim(ylo, yhi)
+        if xlim is not None:
+            ax_flux.set_xlim(*xlim)
+            ax_resid.set_xlim(*xlim)
         ax_flux.set_ylabel("Flux")
         ax_flux.set_title(_segment_plot_label(seg, index), loc="left", fontsize=9)
         if layout == "stacked":
@@ -968,7 +1005,10 @@ def plot_fit_referee(
         if index == 0 and labels:
             ax_flux.legend(frameon=False, loc="best", fontsize=8)
 
-        residual = flux - model_corr
+        residual = np.full_like(flux, np.nan, dtype=float)
+        residual[used & finite_valid] = flux[used & finite_valid] - model_corr[
+            used & finite_valid
+        ]
         if err is not None:
             if err.shape != wave.shape:
                 raise ValueError("Segment err array must match wave shape.")

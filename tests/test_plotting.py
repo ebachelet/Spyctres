@@ -113,6 +113,64 @@ def test_plot_fit_referee_stacked_layout_uses_full_width_rows():
     fig.clf()
 
 
+def test_plot_fit_referee_defaults_to_fitted_wavelength_span():
+    wave = np.linspace(3000.0, 5600.0, 80)
+    flux = np.ones(wave.size)
+    used = (wave >= 3800.0) & (wave <= 5200.0)
+    segment = SpectrumSegment(
+        wave,
+        flux,
+        err=np.full(wave.size, 0.05),
+        mask=used,
+        name="wide_segment",
+    )
+    result = _fit_result_for_segments([segment])
+
+    fig, axes = plot_fit_referee(result, segment=segment, layout="stacked")
+
+    xlo, xhi = axes[0, 0].get_xlim()
+    assert xlo > wave.min()
+    assert xhi < wave.max()
+    assert xlo < wave[used].min()
+    assert xhi > wave[used].max()
+    fig.clf()
+
+
+def test_plot_fit_referee_does_not_draw_model_on_unused_pixels():
+    wave = np.linspace(5000.0, 5010.0, 11)
+    flux = np.ones(wave.size)
+    used = np.ones(wave.size, dtype=bool)
+    used[:2] = False
+    used[-2:] = False
+    segment = SpectrumSegment(
+        wave,
+        flux,
+        err=np.full(wave.size, 0.05),
+        mask=used,
+        name="partly_used",
+    )
+    result = _fit_result_for_segments([segment])
+
+    fig, axes = plot_fit_referee(result, segment=segment, xlim_mode="all")
+
+    model_lines = [
+        line for line in axes[0, 0].lines
+        if line.get_label().startswith("continuum-adjusted model")
+    ]
+    assert len(model_lines) == 1
+    y_model = model_lines[0].get_ydata()
+    assert np.isnan(y_model[:2]).all()
+    assert np.isnan(y_model[-2:]).all()
+    assert np.isfinite(y_model[2:-2]).all()
+
+    residual_lines = axes[0, 1].lines
+    y_resid = residual_lines[0].get_ydata()
+    assert np.isnan(y_resid[:2]).all()
+    assert np.isnan(y_resid[-2:]).all()
+    assert np.isfinite(y_resid[2:-2]).all()
+    fig.clf()
+
+
 def test_xsl_validation_payload_defaults_to_global_display_scaling():
     payload = {
         "display_defaults": {"scale_mode": "global"},
