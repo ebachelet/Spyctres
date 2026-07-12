@@ -22,6 +22,10 @@ the PHOENIX/model residuals only on pixels that were actually used by the fit.
 Use ``--plot-xlim all`` if you want to inspect the full loaded segment and mask
 boundaries.
 
+The example also opens a default-on zoomed line-diagnostic figure for
+Balmer/Ca/He lines that overlap fitted pixels. These panels are visual
+diagnostics, not separate local line fits.
+
 Example
 -------
 python examples/simple_phoenix_fit.py \
@@ -33,13 +37,15 @@ python examples/simple_phoenix_fit.py \
 
 import argparse
 import json
+from pathlib import Path
 
+import numpy as np
 from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum
-from Spyctres.plotting import plot_fit_referee
+from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
 
 
 def build_parser():
@@ -115,6 +121,38 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--line-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Open/save a companion zoomed-line diagnostic figure for identified "
+            "Balmer/Ca/He lines that overlap fitted pixels. Use "
+            "--no-line-diagnostics to disable it."
+        ),
+    )
+    parser.add_argument(
+        "--line-groups",
+        default="balmer,caii,hei",
+        help=(
+            "Comma-separated line groups used for the zoomed diagnostics. "
+            "Known groups include balmer, caii, nai, and hei."
+        ),
+    )
+    parser.add_argument(
+        "--line-window-half-width",
+        type=float,
+        default=30.0,
+        help="Half-width in Angstrom for each zoomed diagnostic line panel.",
+    )
+    parser.add_argument(
+        "--output-line-plot",
+        default=None,
+        help=(
+            "Optional path for the zoomed-line diagnostic figure. If omitted "
+            "and --output-plot is supplied, a *_lines companion path is used."
+        ),
+    )
+    parser.add_argument(
         "--no-show",
         action="store_true",
         help="Do not open the interactive fit figure (useful for batch runs).",
@@ -147,6 +185,171 @@ def _fit_kwargs_from_args(args, spectrum):
         ) if args.wmin is not None or args.wmax is not None else None,
         resolution_R=args.resolution_R,
     )
+
+
+def _coerce_segments(spectrum):
+    if hasattr(spectrum, "segments"):
+        return list(spectrum.segments)
+    if isinstance(spectrum, (list, tuple)):
+        return list(spectrum)
+    return [spectrum]
+
+
+def _parse_line_groups(value):
+    groups = []
+    for raw in str(value).split(","):
+        group = raw.strip().lower()
+        if not group:
+            continue
+        if group not in COMMON_LINES:
+            known = ", ".join(sorted(COMMON_LINES))
+            raise ValueError(
+                "Unknown line group '{0}'. Known groups: {1}.".format(group, known)
+            )
+        groups.append(group)
+    if not groups:
+        raise ValueError("At least one line group is required for line diagnostics.")
+    return groups
+
+
+def _line_windows_for_used_pixels(segment, used_mask, groups, half_width_A):
+    if half_width_A <= 0:
+        raise ValueError("--line-window-half-width must be positive.")
+    wave = np.asarray(segment.wave, dtype=float)
+    used = np.asarray(used_mask, dtype=bool)
+    finite_used = used & np.isfinite(wave)
+    if not np.any(finite_used):
+        return []
+    wmin = float(np.nanmin(wave[finite_used]))
+    wmax = float(np.nanmax(wave[finite_used]))
+    windows = []
+    seen = set()
+    for group in groups:
+        for label, center in COMMON_LINES[group]:
+            center = float(center)
+            if center < wmin or center > wmax:
+                continue
+            key = (round(center, 4), label)
+            if key in seen:
+                continue
+            seen.add(key)
+            line_label = "{0} {1:.1f} Å".format(label, center)
+            windows.append((line_label, center - half_width_A, center + half_width_A))
+    return sorted(windows, key=lambda item: item[1])
+
+
+def _line_panel_columns(n_windows):
+    n_windows = int(n_windows)
+    if n_windows <= 1:
+        return 1
+    if n_windows <= 4:
+        return 2
+    return 3
+
+
+def _derive_line_plot_path(output_line_plot, output_plot, segment_index=None):
+    path = output_line_plot or output_plot
+    if path is None:
+        return None
+    path = Path(path)
+    suffix = path.suffix or ".png"
+    if output_line_plot:
+        new_path = path
+    else:
+        new_path = path.with_name("{0}_lines{1}".format(path.stem, suffix))
+    if segment_index is not None:
+        new_path = new_path.with_name(
+            "{0}_segment{1}{2}".format(
+                new_path.stem,
+                int(segment_index) + 1,
+                new_path.suffix or suffix,
+            )
+        )
+    return str(new_path)
+
+
+def _build_line_diagnostic_plots(args, spectrum, result):
+    groups = _parse_line_groups(args.line_groups)
+    segments = _coerce_segments(spectrum)
+    models = tuple(getattr(result, "models", ()))
+    used_masks = tuple(getattr(result, "used_masks", ()))
+    excluded_masks = tuple(getattr(result, "excluded_masks", ()))
+    if len(models) != len(segments):
+        raise ValueError("Line diagnostics require one reconstructed model per segment.")
+
+    figures = []
+    plot_paths = {}
+    multiple_segments = len(segments) > 1
+    for index, (segment, model) in enumerate(zip(segments, models)):
+        wave = np.asarray(segment.wave, dtype=float)
+        flux = np.asarray(segment.flux, dtype=float)
+        err = None if getattr(segment, "err", None) is None else np.asarray(segment.err)
+        model = np.asarray(model, dtype=float)
+        if index < len(used_masks):
+            used = np.asarray(used_masks[index], dtype=bool)
+        else:
+            used = np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model)
+        if index < len(excluded_masks):
+            excluded = np.asarray(excluded_masks[index], dtype=bool)
+        else:
+            excluded = np.zeros(wave.size, dtype=bool)
+
+        windows = _line_windows_for_used_pixels(
+            segment,
+            used,
+            groups,
+            args.line_window_half_width,
+        )
+        if not windows:
+            continue
+
+        model_plot = np.full_like(model, np.nan, dtype=float)
+        finite_model = np.isfinite(model)
+        model_plot[used & finite_model] = model[used & finite_model]
+        ncols = _line_panel_columns(len(windows))
+        savepath = _derive_line_plot_path(
+            args.output_line_plot,
+            args.output_plot,
+            segment_index=index if multiple_segments else None,
+        )
+        print(
+            "Building zoomed line diagnostics for {0}: {1} panel(s).".format(
+                getattr(segment, "name", "segment {0}".format(index + 1)),
+                len(windows),
+            ),
+            flush=True,
+        )
+        fig, _axes = plot_fit_windows(
+            wave,
+            flux,
+            err,
+            model_plot,
+            windows,
+            ncols=ncols,
+            title="Zoomed line diagnostics: {0}".format(
+                getattr(segment, "name", "segment {0}".format(index + 1))
+            ),
+            line_groups=groups,
+            excluded_mask=excluded | ~used,
+            figsize_per_panel=(5.2, 3.0),
+            data_label="observed",
+            model_label="model on fitted pixels",
+        )
+        if savepath is not None:
+            fig.savefig(savepath, bbox_inches="tight")
+            key = "line_diagnostics"
+            if multiple_segments:
+                key = "line_diagnostics_segment_{0}".format(index + 1)
+            plot_paths[key] = savepath
+        figures.append(fig)
+
+    if not figures:
+        print(
+            "No requested diagnostic lines overlap fitted pixels; skipping "
+            "zoomed line diagnostics.",
+            flush=True,
+        )
+    return figures, plot_paths
 
 
 def main(argv=None):
@@ -185,13 +388,16 @@ def main(argv=None):
         "a precision line-width fit; line-profile mismatches can reflect stellar "
         "rotation/macroturbulence, abundance differences, or an approximate LSF. "
         "The diagnostic plot focuses on fitted wavelengths by default; gray "
-        "points and shaded regions mark pixels excluded from the fit."
+        "points and shaded regions mark pixels excluded from the fit. The "
+        "optional zoomed line panels are visual diagnostics rather than "
+        "separate local line-profile fits."
     )
 
     if not result.models:
         if args.output_json:
             result.save_json(args.output_json)
         raise RuntimeError("Fit did not converge, so no model is available to plot.")
+    generated_plot_paths = {}
     print("Building diagnostic plot...", flush=True)
     fig, _axes = plot_fit_referee(
         result,
@@ -204,15 +410,22 @@ def main(argv=None):
         max_points_per_segment=20000,
         xlim_mode=args.plot_xlim,
     )
+    generated_plot_paths.update(getattr(fig, "spyctres_generated_files", {}) or {})
+    extra_figures = []
+    if args.line_diagnostics:
+        extra_figures, line_paths = _build_line_diagnostic_plots(args, spectrum, result)
+        generated_plot_paths.update(line_paths)
     if args.output_json:
         result.save_json(
             args.output_json,
-            plot_paths=getattr(fig, "spyctres_generated_files", None),
+            plot_paths=generated_plot_paths or None,
         )
     if not args.no_show:
         plt.show()
     else:
         plt.close(fig)
+        for extra_fig in extra_figures:
+            plt.close(extra_fig)
 
 
 if __name__ == "__main__":

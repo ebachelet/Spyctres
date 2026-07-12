@@ -72,6 +72,13 @@ The default plot focuses on the wavelength span actually used in the fit and
 draws PHOENIX/model residuals only on fitted pixels; this avoids making masked
 or out-of-window data look as if they influenced the solution. Use
 `--plot-xlim all` when you deliberately want a full-segment mask/debug view.
+By default, the script also opens a companion zoomed-line diagnostic figure for
+identified Balmer/Ca/He lines that overlap fitted pixels. The number of panels
+is determined from the lines found in the fitted wavelength range. Disable this
+with `--no-line-diagnostics`, or customize it with `--line-groups` and
+`--line-window-half-width`. If `--output-plot` is set, the line diagnostics are
+saved automatically as a `*_lines` companion image unless `--output-line-plot`
+is specified.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 
