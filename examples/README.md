@@ -68,6 +68,10 @@ so users can zoom, pan, and inspect residuals. Add `--no-show` for automated or
 headless runs; `--output-plot` can be used independently to save the figure. If
 `--output-json` and `--output-plot` are both provided, the JSON records the plot
 path relative to the JSON file and strips local cache/template paths by default.
+The default plot focuses on the wavelength span actually used in the fit and
+draws PHOENIX/model residuals only on fitted pixels; this avoids making masked
+or out-of-window data look as if they influenced the solution. Use
+`--plot-xlim all` when you deliberately want a full-segment mask/debug view.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 
