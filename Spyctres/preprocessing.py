@@ -23,9 +23,12 @@ class NonStellarFeature:
     description: str
     reference_ids: tuple = ()
     default_action: str = "warn"
+    frame_type: str = "ism_velocity"
     feature_frame: str = "interstellar_rest"
     mask_application_frame: str = "data"
     diagnostic_lines: tuple = ()
+    cross_references: tuple = ()
+    velocity_margin_kms: float | None = 100.0
     default_region_A: tuple | None = None
 
     def region(self, padding_A=0.0):
@@ -46,12 +49,20 @@ class NonStellarFeature:
             "half_width_A": float(self.half_width_A),
             "region_A": [float(wmin), float(wmax)],
             "kind": self.kind,
+            "feature_type": self.kind,
             "description": self.description,
             "reference_ids": list(self.reference_ids),
             "default_action": self.default_action,
+            "frame_type": self.frame_type,
             "feature_frame": self.feature_frame,
             "mask_application_frame": self.mask_application_frame,
             "diagnostic_lines": list(self.diagnostic_lines),
+            "cross_references": list(self.cross_references),
+            "velocity_margin_kms": (
+                None
+                if self.velocity_margin_kms is None
+                else float(self.velocity_margin_kms)
+            ),
         }
 
 
@@ -87,9 +98,121 @@ NONSTELLAR_FEATURES = {
         diagnostic_lines=("Hbeta",),
         default_region_A=(4870.0, 4915.0),
     ),
+    "dib_6284": NonStellarFeature(
+        name="DIB 6284",
+        center_A=6284.0,
+        half_width_A=12.0,
+        kind="diffuse_interstellar_band",
+        description=(
+            "Diffuse interstellar band in a wavelength region that can be "
+            "entangled with nearby telluric oxygen absorption."
+        ),
+        reference_ids=("hobbs2008_dib_catalog_hd204827",),
+        cross_references=("telluric_o2_alpha_6280",),
+    ),
+    "telluric_o2_alpha_6280": NonStellarFeature(
+        name="Telluric O2 alpha 6280",
+        center_A=6280.0,
+        half_width_A=20.0,
+        kind="telluric_band",
+        description=(
+            "Topocentric oxygen telluric absorption region near DIB 6284; "
+            "useful for warning about possible DIB/telluric confusion."
+        ),
+        reference_ids=(
+            "maier2011_h2ccc_dib_candidates",
+            "ulmer_moll2019_telluric_correction",
+        ),
+        frame_type="topocentric_fixed",
+        feature_frame="topocentric",
+        velocity_margin_kms=None,
+        cross_references=("dib_6284",),
+    ),
+    "telluric_o2_b_6867": NonStellarFeature(
+        name="Telluric O2 B band",
+        center_A=6867.0,
+        half_width_A=28.0,
+        kind="telluric_band",
+        description=(
+            "Topocentric oxygen B-band absorption region; residuals here "
+            "should not be interpreted as stellar or interstellar features "
+            "without telluric review."
+        ),
+        reference_ids=("ulmer_moll2019_telluric_correction",),
+        frame_type="topocentric_fixed",
+        feature_frame="topocentric",
+        velocity_margin_kms=None,
+    ),
+    "telluric_o2_a_7605": NonStellarFeature(
+        name="Telluric O2 A band",
+        center_A=7605.0,
+        half_width_A=55.0,
+        kind="telluric_band",
+        description=(
+            "Strong topocentric oxygen A-band absorption region that often "
+            "requires explicit telluric correction or masking."
+        ),
+        reference_ids=(
+            "kimeswenger2020_o2_aband_telluric",
+            "ulmer_moll2019_telluric_correction",
+        ),
+        frame_type="topocentric_fixed",
+        feature_frame="topocentric",
+        velocity_margin_kms=None,
+    ),
+    "telluric_h2o_7200": NonStellarFeature(
+        name="Telluric H2O 7200",
+        center_A=7200.0,
+        half_width_A=120.0,
+        kind="telluric_band",
+        description=(
+            "Broad topocentric water-vapour absorption complex; depth is "
+            "strongly observing-condition dependent."
+        ),
+        reference_ids=("ulmer_moll2019_telluric_correction",),
+        frame_type="topocentric_fixed",
+        feature_frame="topocentric",
+        velocity_margin_kms=None,
+    ),
+    "telluric_h2o_8200": NonStellarFeature(
+        name="Telluric H2O 8200",
+        center_A=8200.0,
+        half_width_A=170.0,
+        kind="telluric_band",
+        description=(
+            "Broad topocentric water-vapour absorption complex; depth is "
+            "strongly observing-condition dependent."
+        ),
+        reference_ids=("ulmer_moll2019_telluric_correction",),
+        frame_type="topocentric_fixed",
+        feature_frame="topocentric",
+        velocity_margin_kms=None,
+    ),
+    "telluric_h2o_9400": NonStellarFeature(
+        name="Telluric H2O 9400",
+        center_A=9400.0,
+        half_width_A=220.0,
+        kind="telluric_band",
+        description=(
+            "Broad topocentric water-vapour absorption complex; depth is "
+            "strongly observing-condition dependent."
+        ),
+        reference_ids=("ulmer_moll2019_telluric_correction",),
+        frame_type="topocentric_fixed",
+        feature_frame="topocentric",
+        velocity_margin_kms=None,
+    ),
 }
 
 OPTICAL_DIB_DIAGNOSTIC_FEATURES = ("dib_4428", "dib_4882")
+OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES = (
+    "telluric_o2_alpha_6280",
+    "telluric_o2_b_6867",
+    "telluric_o2_a_7605",
+    "telluric_h2o_7200",
+    "telluric_h2o_8200",
+    "telluric_h2o_9400",
+)
 
 
 def nonstellar_feature_regions(names=("dib_4428",), padding_A=0.0):
@@ -133,6 +256,7 @@ def nonstellar_feature_metadata(names=("dib_4428",), padding_A=0.0):
                 )
             )
         meta = NONSTELLAR_FEATURES[key].to_metadata()
+        meta["id"] = key
         if padding_A:
             wmin, wmax = NONSTELLAR_FEATURES[key].region(padding_A=padding_A)
             meta["padding_A"] = float(padding_A)

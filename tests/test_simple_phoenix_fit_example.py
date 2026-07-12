@@ -150,9 +150,45 @@ def test_known_residual_window_diagnostic_flags_hbeta_red_wing():
     assert payload["flagged_windows"][0]["name"] == "DIB 4882 / Hβ red wing"
     assert payload["flagged_windows"][0]["linked_feature"] == "dib_4882"
     assert payload["flagged_windows"][0]["absorption_like"] is True
+    assert payload["flagged_windows"][0]["origin_hypothesis"] == "ambiguous"
+    assert (
+        payload["flagged_windows"][0]["residual_detection"]["candidate_detected"]
+        is True
+    )
     assert payload["flagged_windows"][0]["median_sigma"] < -2.5
     assert "known_line_region_residual" in result.quality_flags
     assert "dib_overlap_balmer_wing" in result.quality_flags
+    assert "dib_candidate_detected" in result.quality_flags
+
+
+def test_positive_known_residual_points_to_intrinsic_or_composite_candidate():
+    module = _load_example_module()
+    wave = np.linspace(4800.0, 4930.0, 400)
+    model = np.ones_like(wave)
+    flux = np.ones_like(wave)
+    hbeta_red = (wave >= 4876.0) & (wave <= 4908.0)
+    flux[hbeta_red] += 3.0
+    segment = _Segment(wave, flux=flux, err=np.ones_like(wave), name="uvb")
+    result = SimpleNamespace(
+        summary={},
+        models=(model,),
+        used_masks=(np.ones_like(wave, dtype=bool),),
+        quality_flags=(),
+    )
+    args = SimpleNamespace(
+        known_residual_diagnostics=True,
+        known_residual_threshold=2.5,
+    )
+
+    payload = module._diagnose_known_residual_windows(args, segment, result)
+
+    flagged = payload["flagged_windows"][0]
+    assert flagged["emission_like"] is True
+    assert flagged["residual_sign"] == "emission_like"
+    assert flagged["origin_hypothesis"] == "intrinsic_or_composite_candidate"
+    assert "Masking is not recommended" in flagged["recommended_action"]
+    assert "known_line_region_residual" in result.quality_flags
+    assert "dib_candidate_detected" not in result.quality_flags
 
 
 def test_known_residual_window_diagnostic_can_be_disabled():
@@ -195,9 +231,31 @@ def test_nonstellar_feature_annotation_flags_dib_balmer_overlap():
     assert payload["mask_application_frame"] == "data"
     assert [item["name"] for item in payload["features"]] == ["DIB 4428", "DIB 4882"]
     assert payload["overlap_diagnostics"][0]["flag"] == "dib_overlap_balmer_wing"
+    assert payload["overlap_diagnostics"][0]["origin_hypothesis"] == "catalog_overlap_only"
+    assert payload["frame_warnings"][0]["warning"] == "nonstellar_feature_frame_ambiguous"
     assert "nonstellar_feature_overlap" in result.quality_flags
     assert "diagnostic_line_contaminated" in result.quality_flags
     assert "dib_overlap_balmer_wing" in result.quality_flags
+    assert "nonstellar_feature_frame_ambiguous" in result.quality_flags
+
+
+def test_nonstellar_feature_annotation_mask_policy_records_mask_flag():
+    module = _load_example_module()
+    wave = np.linspace(4870.0, 4915.0, 100)
+    segment = _Segment(wave)
+    result = SimpleNamespace(summary={}, quality_flags=())
+    args = SimpleNamespace(
+        show_dibs=True,
+        mask_dibs=True,
+        nonstellar_feature_policy="warn",
+        dib_padding=0.0,
+    )
+
+    payload = module._annotate_nonstellar_features(args, segment, result)
+
+    assert payload["policy"] == "mask_known"
+    assert payload["mask_dibs"] is True
+    assert "nonstellar_mask_applied" in result.quality_flags
 
 
 def test_nonstellar_feature_annotation_ignore_policy_records_without_flags():

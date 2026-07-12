@@ -186,6 +186,19 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "not model DIB absorption, so inspect or mask that interval explicitly "
         "before tuning stellar parameters to absorb the residual."
     ),
+    "dib_candidate_detected": (
+        "Residuals inside a known diffuse-interstellar-band window are coherent "
+        "enough to be reported as a candidate, not a confirmed ISM measurement."
+    ),
+    "nonstellar_feature_frame_ambiguous": (
+        "A known non-stellar feature with velocity-frame sensitivity overlaps "
+        "the fit, but the spectrum frame metadata are incomplete or unknown."
+    ),
+    "nonstellar_mask_applied": (
+        "At least one known non-stellar feature mask was explicitly applied. "
+        "Inspect the mask provenance before comparing this fit with unmasked "
+        "runs."
+    ),
 }
 
 
@@ -394,10 +407,13 @@ def format_fit_quality_report(result_or_report):
     if overlap_diagnostics:
         pieces = []
         for item in overlap_diagnostics:
+            hypothesis = item.get("origin_hypothesis")
+            suffix = "" if not hypothesis else " ({0})".format(hypothesis)
             pieces.append(
-                "{0} -> {1}".format(
+                "{0} -> {1}{2}".format(
                     item.get("feature", "feature"),
                     item.get("diagnostic_line", "diagnostic line"),
+                    suffix,
                 )
             )
         lines.append("  contaminated diagnostics: {0}".format("; ".join(pieces)))
@@ -409,14 +425,16 @@ def format_fit_quality_report(result_or_report):
             name = str(item.get("name", "window"))
             median_sigma = item.get("median_sigma")
             rms_sigma = item.get("rms_sigma")
+            origin = item.get("origin_hypothesis")
             if median_sigma is not None and rms_sigma is not None:
-                parts.append(
-                    "{0} median={1:.2g}σ rms={2:.2g}σ".format(
-                        name,
-                        float(median_sigma),
-                        float(rms_sigma),
-                    )
+                text = "{0} median={1:.2g}σ rms={2:.2g}σ".format(
+                    name,
+                    float(median_sigma),
+                    float(rms_sigma),
                 )
+                if origin:
+                    text = "{0} origin={1}".format(text, origin)
+                parts.append(text)
             else:
                 parts.append(name)
         lines.append("  known residual windows: {0}".format("; ".join(parts)))

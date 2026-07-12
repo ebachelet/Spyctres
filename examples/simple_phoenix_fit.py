@@ -66,11 +66,13 @@ KNOWN_RESIDUAL_WINDOWS = (
         "linked_feature": "dib_4882",
         "diagnostic_line": "Hbeta",
         "description": (
-            "Coherent negative residuals here are consistent with unmodelled "
-            "DIB 4882 absorption overlapping the red wing of H-beta."
+            "Coherent residuals here can be caused by unmodelled DIB 4882 "
+            "absorption, but intrinsic/composite Balmer structure is also "
+            "possible for non-ordinary targets."
         ),
         "likely_causes": (
             "DIB 4882 or another non-stellar broad absorption feature",
+            "intrinsic or composite Balmer-line structure",
             "Balmer-wing sensitivity to Teff/logg",
             "continuum placement across broad Hβ",
             "rotation/macroturbulence not fitted by this example",
@@ -78,8 +80,9 @@ KNOWN_RESIDUAL_WINDOWS = (
             "PHOENIX LTE/model-domain mismatch for hot or peculiar spectra",
         ),
         "recommended_action": (
-            "Compare the default fit with a rerun using --mask-dibs or "
-            "--nonstellar-feature-policy mask_known."
+            "Compare the default fit with a rerun using --mask-dibs, but do "
+            "not treat masking as a final explanation if similar asymmetries "
+            "appear in other Balmer lines."
         ),
     },
 )
@@ -140,8 +143,9 @@ def build_parser():
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Annotate known diffuse interstellar bands, currently DIB 4428, "
-            "on the overview diagnostic plot when they overlap the spectrum."
+            "Annotate known diffuse interstellar bands, currently DIB 4428 "
+            "and DIB 4882, on the overview diagnostic plot when they overlap "
+            "the spectrum."
         ),
     )
     parser.add_argument(
@@ -159,7 +163,9 @@ def build_parser():
         help=(
             "How to handle known non-stellar features such as DIB 4428 and "
             "DIB 4882. 'warn' annotates/flags only, 'mask_known' excludes the "
-            "named regions, and 'ignore' records overlap but raises no flags."
+            "named regions, and 'ignore' records overlap but raises no flags. "
+            "These correspond to flag/mask/off in the reviewer terminology; "
+            "residual diagnostics are controlled separately."
         ),
     )
     parser.add_argument(
@@ -443,6 +449,7 @@ def _annotate_nonstellar_features(args, spectrum, result):
         padding_A=args.dib_padding,
     )
     overlap_diagnostics = _nonstellar_overlap_diagnostics(overlaps)
+    frame_warnings = _nonstellar_frame_warnings(spectrum, overlaps)
     payload = {
         "show_dibs": bool(args.show_dibs),
         "mask_dibs": bool(policy == "mask_known"),
@@ -455,10 +462,15 @@ def _annotate_nonstellar_features(args, spectrum, result):
         ),
         "features": overlaps,
         "overlap_diagnostics": overlap_diagnostics,
+        "frame_warnings": frame_warnings,
     }
     result.summary["nonstellar_features"] = payload
     if overlaps and policy != "ignore":
         _add_quality_flag(result, "nonstellar_feature_overlap")
+        if policy == "mask_known":
+            _add_quality_flag(result, "nonstellar_mask_applied")
+        if frame_warnings:
+            _add_quality_flag(result, "nonstellar_feature_frame_ambiguous")
         if overlap_diagnostics:
             _add_quality_flag(result, "diagnostic_line_contaminated")
             for item in overlap_diagnostics:
@@ -484,7 +496,9 @@ def _annotate_nonstellar_features(args, spectrum, result):
             )
             print(
                 "Diagnostic contamination warning: {0}. Consider a controlled "
-                "rerun with --mask-dibs and compare the fitted parameters.".format(
+                "rerun with --mask-dibs and compare the fitted parameters, but "
+                "also inspect other Balmer lines before treating this as a "
+                "settled DIB detection.".format(
                     detail
                 ),
                 flush=True,
@@ -513,14 +527,62 @@ def _nonstellar_overlap_diagnostics(overlaps):
                     "feature_id": "dib_4882",
                     "diagnostic_line": "Hbeta",
                     "overlap_region_A": feature.get("region_A"),
+                    "origin_hypothesis": "catalog_overlap_only",
                     "recommended_action": (
                         "Rerun with --mask-dibs or "
                         "--nonstellar-feature-policy mask_known and compare "
-                        "Teff, logg, [Fe/H], RV, chi2_red, and residual flags."
+                        "Teff, logg, [Fe/H], RV, chi2_red, and residual flags; "
+                        "inspect other Balmer lines before interpreting this "
+                        "as a DIB detection."
                     ),
                 }
             )
     return diagnostics
+
+
+def _nonstellar_frame_warnings(spectrum, overlaps):
+    if not overlaps:
+        return []
+    segments = _coerce_segments(spectrum)
+    warnings = []
+    for feature in overlaps:
+        if feature.get("frame_type") != "ism_velocity":
+            continue
+        affected_segments = set(feature.get("segments") or [])
+        ambiguous_segments = []
+        for index, segment in enumerate(segments):
+            name = getattr(segment, "name", None) or "segment {0}".format(index + 1)
+            if affected_segments and name not in affected_segments:
+                continue
+            observer_frame = str(getattr(segment, "observer_frame", "unknown")).lower()
+            stellar_rest_status = str(
+                getattr(segment, "stellar_rest_status", "unknown")
+            ).lower()
+            wave_frame = str(getattr(segment, "wave_frame", "unknown")).lower()
+            if "unknown" in {observer_frame, stellar_rest_status, wave_frame}:
+                ambiguous_segments.append(
+                    {
+                        "segment": name,
+                        "observer_frame": observer_frame,
+                        "stellar_rest_status": stellar_rest_status,
+                        "wave_frame": wave_frame,
+                    }
+                )
+        if ambiguous_segments:
+            warnings.append(
+                {
+                    "feature": feature.get("name"),
+                    "feature_id": feature.get("id"),
+                    "frame_type": feature.get("frame_type"),
+                    "warning": "nonstellar_feature_frame_ambiguous",
+                    "affected_segments": ambiguous_segments,
+                    "recommended_action": (
+                        "Treat fixed DIB intervals as data-frame diagnostics "
+                        "until the spectrum and ISM velocity frames are known."
+                    ),
+                }
+            )
+    return warnings
 
 
 def _segment_error_array(segment, flux, model):
@@ -602,9 +664,39 @@ def _diagnose_known_residual_windows(args, spectrum, result):
                 if not np.any(np.isfinite(frac_values))
                 else float(np.nanmedian(frac_values))
             )
+            fraction_negative = float(np.mean(values < 0.0))
+            fraction_positive = float(np.mean(values > 0.0))
+            residual_sign = _coherent_residual_sign(
+                median_sigma,
+                fraction_negative=fraction_negative,
+                fraction_positive=fraction_positive,
+                threshold=threshold,
+            )
+            origin_hypothesis = _origin_hypothesis_for_window(
+                residual_sign,
+                linked_feature=window.get("linked_feature"),
+            )
+            recommended_action = _recommended_action_for_origin(
+                origin_hypothesis,
+                default_action=window.get("recommended_action"),
+            )
             flagged = bool(
                 abs(median_sigma) >= threshold or rms_sigma >= threshold
             )
+            residual_detection = {
+                "candidate_detected": flagged,
+                "origin_hypothesis": origin_hypothesis,
+                "residual_sign": residual_sign,
+                "fraction_negative_pixels": fraction_negative,
+                "fraction_positive_pixels": fraction_positive,
+                "phase": "phase_a_heuristic",
+                "cross_line_consistency_checked": False,
+                "note": (
+                    "This is a single-window heuristic. A future cross-line "
+                    "classifier should test whether the pattern repeats at a "
+                    "consistent velocity offset across Balmer/Ca/Na diagnostics."
+                ),
+            }
             item = {
                 "name": window["name"],
                 "linked_feature": window.get("linked_feature"),
@@ -615,13 +707,19 @@ def _diagnose_known_residual_windows(args, spectrum, result):
                 "kind": window["kind"],
                 "description": window["description"],
                 "likely_causes": list(window["likely_causes"]),
-                "recommended_action": window.get("recommended_action"),
+                "recommended_action": recommended_action,
                 "n_used": n_used,
                 "median_sigma": median_sigma,
                 "rms_sigma": rms_sigma,
                 "max_abs_sigma": max_abs_sigma,
                 "median_fractional_residual": median_fractional_residual,
+                "fraction_negative_pixels": fraction_negative,
+                "fraction_positive_pixels": fraction_positive,
+                "residual_sign": residual_sign,
+                "origin_hypothesis": origin_hypothesis,
                 "absorption_like": bool(median_sigma <= -threshold),
+                "emission_like": bool(median_sigma >= threshold),
+                "residual_detection": residual_detection,
                 "flagged": flagged,
             }
             payload["windows"].append(item)
@@ -629,19 +727,86 @@ def _diagnose_known_residual_windows(args, spectrum, result):
                 payload["flagged_windows"].append(item)
 
     if payload["flagged_windows"]:
+        _attach_residual_detections_to_nonstellar_features(result, payload)
         _add_quality_flag(result, "known_line_region_residual")
         if any(item.get("absorption_like") for item in payload["flagged_windows"]):
             _add_quality_flag(result, "diagnostic_line_contaminated")
             _add_quality_flag(result, "dib_overlap_balmer_wing")
+            _add_quality_flag(result, "dib_candidate_detected")
         names = ", ".join(item["name"] for item in payload["flagged_windows"])
         print(
             "\nNote: coherent residuals were detected in known diagnostic "
             "window(s): {0}. These are reported, not masked automatically; "
-            "inspect continuum placement, LSF/rotation assumptions, and "
-            "Balmer-profile/model mismatch.".format(names),
+            "inspect continuum placement, LSF/rotation assumptions, possible "
+            "DIB absorption, and intrinsic/composite Balmer structure.".format(
+                names
+            ),
             flush=True,
         )
     return payload
+
+
+def _coherent_residual_sign(
+    median_sigma,
+    *,
+    fraction_negative,
+    fraction_positive,
+    threshold,
+):
+    if median_sigma <= -threshold and fraction_negative >= 0.6:
+        return "absorption_like"
+    if median_sigma >= threshold and fraction_positive >= 0.6:
+        return "emission_like"
+    if abs(median_sigma) >= threshold:
+        return "coherent_mixed_sign"
+    return "not_coherent"
+
+
+def _origin_hypothesis_for_window(residual_sign, linked_feature=None):
+    if residual_sign == "emission_like":
+        return "intrinsic_or_composite_candidate"
+    if residual_sign == "absorption_like" and linked_feature:
+        return "ambiguous"
+    if residual_sign == "absorption_like":
+        return "external_contaminant"
+    return "ambiguous"
+
+
+def _recommended_action_for_origin(origin_hypothesis, default_action=None):
+    if origin_hypothesis == "intrinsic_or_composite_candidate":
+        return (
+            "This positive/emission-like pattern is evidence against a DIB-only "
+            "explanation. Masking is not recommended as the default response; "
+            "flag the target for manual review and inspect other lines."
+        )
+    if origin_hypothesis == "ambiguous":
+        return (
+            "Treat this as a candidate external-contaminant or intrinsic-line "
+            "signal. Compare a named-mask refit, but inspect other Balmer lines "
+            "before adopting masking as the explanation."
+        )
+    return default_action
+
+
+def _attach_residual_detections_to_nonstellar_features(result, residual_payload):
+    nonstellar = result.summary.get("nonstellar_features")
+    if not nonstellar:
+        return
+    detections = [
+        dict(item)
+        for item in residual_payload.get("flagged_windows", [])
+        if item.get("linked_feature")
+    ]
+    if not detections:
+        return
+    by_feature = {item["linked_feature"]: item for item in detections}
+    for feature in nonstellar.get("features", []):
+        feature_id = str(feature.get("id") or "").lower()
+        if feature_id in by_feature:
+            feature["residual_detection"] = by_feature[feature_id][
+                "residual_detection"
+            ]
+    nonstellar["residual_detections"] = detections
 
 
 def _print_interpretation_hints(args, result, fit_kwargs):

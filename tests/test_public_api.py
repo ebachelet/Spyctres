@@ -126,7 +126,11 @@ def test_quality_report_includes_known_feature_and_residual_windows():
                 "policy": "warn",
                 "features": [{"name": "DIB 4428"}, {"name": "DIB 4882"}],
                 "overlap_diagnostics": [
-                    {"feature": "DIB 4882", "diagnostic_line": "Hbeta"}
+                    {
+                        "feature": "DIB 4882",
+                        "diagnostic_line": "Hbeta",
+                        "origin_hypothesis": "catalog_overlap_only",
+                    }
                 ],
             },
             "known_residual_windows": {
@@ -135,6 +139,7 @@ def test_quality_report_includes_known_feature_and_residual_windows():
                         "name": "DIB 4882 / Hβ red wing",
                         "median_sigma": -3.1,
                         "rms_sigma": 4.2,
+                        "origin_hypothesis": "ambiguous",
                     }
                 ]
             },
@@ -143,8 +148,11 @@ def test_quality_report_includes_known_feature_and_residual_windows():
 
     assert "non-stellar features: DIB 4428, DIB 4882" in text
     assert "policy=warn" in text
-    assert "contaminated diagnostics: DIB 4882 -> Hbeta" in text
-    assert "DIB 4882 / Hβ red wing median=-3.1σ rms=4.2σ" in text
+    assert (
+        "contaminated diagnostics: DIB 4882 -> Hbeta (catalog_overlap_only)"
+        in text
+    )
+    assert "DIB 4882 / Hβ red wing median=-3.1σ rms=4.2σ origin=ambiguous" in text
 
 
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
@@ -190,6 +198,7 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
 
     assert "dib_4428" in Spyctres.NONSTELLAR_FEATURES
     assert "dib_4882" in Spyctres.NONSTELLAR_FEATURES
+    assert "telluric_o2_a_7605" in Spyctres.OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES
     assert "dib_4882" in Spyctres.OPTICAL_DIB_DIAGNOSTIC_FEATURES
     assert regions == [(4416.8, 4440.8)]
     assert dib_4882 == [(4870.0, 4915.0)]

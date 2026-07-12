@@ -21,6 +21,7 @@ from .plotting import plot_fit_referee, plot_line_fit, plot_xsl_validation_paylo
 from .preprocessing import (
     NONSTELLAR_FEATURES,
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
+    OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
     ExclusionMaskSpec,
     exclusion_mask,
     known_feature_masks,
@@ -48,6 +49,7 @@ __all__ = [
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
     "ExclusionMaskSpec", "exclusion_mask",
     "NONSTELLAR_FEATURES", "OPTICAL_DIB_DIAGNOSTIC_FEATURES",
+    "OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES",
     "known_feature_masks", "nonstellar_feature_mask", "nonstellar_feature_masks",
     "nonstellar_feature_metadata", "nonstellar_feature_regions",
     "overlapping_nonstellar_features",

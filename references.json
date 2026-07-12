@@ -263,6 +263,42 @@
       ]
     },
     {
+      "id": "kimeswenger2020_o2_aband_telluric",
+      "citation": "Kimeswenger, S. et al. (2020), Refined Telluric Absorption Correction for Low-Resolution Ground-Based Spectroscopy: Resolution and Radial Velocity Effects in the O2 A-Band for Exoplanets and K I Emission Lines, arXiv:2011.10845.",
+      "arxiv": "2011.10845",
+      "url": "https://arxiv.org/abs/2011.10845",
+      "validated_via": "arXiv abstract and metadata; paper summary inspected for O2 A-band telluric correction context",
+      "validated_on": "2026-07-12",
+      "description": "Discusses telluric correction for the molecular oxygen A-band and shows that low-resolution correction errors can depend on target radial velocity and line profiles. Spyctres uses this as a reference for treating O2 A-band absorption as a topocentric known-feature warning rather than a stellar or interstellar feature.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES"
+      ]
+    },
+    {
+      "id": "ulmer_moll2019_telluric_correction",
+      "citation": "Ulmer-Moll, S. et al. (2019), Telluric correction in the near-infrared: Standard star or synthetic transmission?, arXiv:1811.08915.",
+      "arxiv": "1811.08915",
+      "url": "https://arxiv.org/abs/1811.08915",
+      "validated_via": "arXiv abstract and metadata; paper summary inspected for O2 and H2O telluric correction context",
+      "validated_on": "2026-07-12",
+      "description": "Compares telluric correction methods and highlights oxygen and water-vapour residuals as important limits in ground-based spectra. Spyctres uses this as a general reference for topocentric O2/H2O known-feature catalog entries and future unified telluric/non-stellar provenance.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES"
+      ]
+    },
+    {
+      "id": "maier2011_h2ccc_dib_candidates",
+      "citation": "Maier, J. P. et al. (2011), Identification of H2CCC as a diffuse interstellar band carrier, arXiv:1011.0401.",
+      "arxiv": "1011.0401",
+      "url": "https://arxiv.org/abs/1011.0401",
+      "validated_via": "arXiv abstract and metadata; paper summary inspected for the 6150-6330 Angstrom region and telluric O2 alpha-band contamination note",
+      "validated_on": "2026-07-12",
+      "description": "Discusses DIB candidate structure in the 6150-6330 Angstrom region and notes telluric O2 alpha-band obscuration. Spyctres uses this as support for cross-referencing the DIB 6284 region with nearby topocentric telluric oxygen absorption rather than treating all apparent absorption there as interstellar.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES"
+      ]
+    },
+    {
       "id": "garcia_perez2016_aspcap",
       "citation": "Garcia Perez, A. E. et al. (2016), ASPCAP: The APOGEE Stellar Parameter and Chemical Abundances Pipeline, The Astronomical Journal, 151, 144.",
       "doi": "10.3847/0004-6256/151/6/144",

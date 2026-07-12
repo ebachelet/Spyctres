@@ -94,7 +94,11 @@ The script also checks curated residual windows, starting with the H-beta red
 wing. These checks are diagnostic only: they add quality-report context when a
 known line-profile region has coherent residuals, but they do not mask or refit
 those pixels automatically. Treat them as prompts to inspect continuum
-placement, LSF/rotation assumptions, and model-domain limitations.
+placement, LSF/rotation assumptions, DIB contamination, intrinsic/composite
+Balmer structure, and model-domain limitations. A DIB-window residual in this
+example is a candidate explanation to test, not a settled identification.
+The shared known-feature catalog also contains common topocentric telluric
+bands, but the simple UVB example only annotates the DIB subset.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 
