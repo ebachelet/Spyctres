@@ -171,6 +171,11 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "overlaps the fitted wavelength range; PHOENIX is not expected to "
         "reproduce this absorption."
     ),
+    "known_line_region_residual": (
+        "A curated diagnostic line/window shows coherent residuals. This is "
+        "not masked automatically; inspect stellar parameters, continuum "
+        "placement, LSF/rotation assumptions, and model-domain limitations."
+    ),
 }
 
 
@@ -302,6 +307,10 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
         "n_dropped_segments": diagnostics.get("n_dropped_segments"),
         "segments": segments,
     }
+    if summary.get("nonstellar_features") is not None:
+        report["nonstellar_features"] = summary.get("nonstellar_features")
+    if summary.get("known_residual_windows") is not None:
+        report["known_residual_windows"] = summary.get("known_residual_windows")
     return _jsonable(report)
 
 
@@ -362,6 +371,31 @@ def format_fit_quality_report(result_or_report):
         lines.append("  masked fraction: {0:.1%}".format(float(report["mask_fraction"])))
     if report.get("n_dropped_segments"):
         lines.append("  dropped segments: {0}".format(int(report["n_dropped_segments"])))
+    nonstellar = report.get("nonstellar_features") or {}
+    nonstellar_features = list(nonstellar.get("features") or [])
+    if nonstellar_features:
+        names = ", ".join(str(item.get("name", "feature")) for item in nonstellar_features)
+        action = "masked" if nonstellar.get("mask_dibs") else "shown/not masked"
+        lines.append("  non-stellar features: {0} ({1})".format(names, action))
+    residual_windows = report.get("known_residual_windows") or {}
+    flagged_windows = list(residual_windows.get("flagged_windows") or [])
+    if flagged_windows:
+        parts = []
+        for item in flagged_windows:
+            name = str(item.get("name", "window"))
+            median_sigma = item.get("median_sigma")
+            rms_sigma = item.get("rms_sigma")
+            if median_sigma is not None and rms_sigma is not None:
+                parts.append(
+                    "{0} median={1:.2g}σ rms={2:.2g}σ".format(
+                        name,
+                        float(median_sigma),
+                        float(rms_sigma),
+                    )
+                )
+            else:
+                parts.append(name)
+        lines.append("  known residual windows: {0}".format("; ".join(parts)))
     segment_lines = []
     for segment in report.get("segments", []):
         name = segment.get("name")

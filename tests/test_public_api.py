@@ -110,6 +110,36 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     assert "VIS; Nfit=42/80" in text_from_dict
 
 
+def test_quality_report_includes_known_feature_and_residual_windows():
+    text = format_fit_quality_report(
+        {
+            "success": True,
+            "quality_flags": [
+                "nonstellar_feature_overlap",
+                "known_line_region_residual",
+            ],
+            "chi2_red": 4.2,
+            "nonstellar_features": {
+                "show_dibs": True,
+                "mask_dibs": False,
+                "features": [{"name": "DIB 4428"}],
+            },
+            "known_residual_windows": {
+                "flagged_windows": [
+                    {
+                        "name": "Hβ red wing",
+                        "median_sigma": -3.1,
+                        "rms_sigma": 4.2,
+                    }
+                ]
+            },
+        }
+    )
+
+    assert "non-stellar features: DIB 4428 (shown/not masked)" in text
+    assert "known residual windows: Hβ red wing median=-3.1σ rms=4.2σ" in text
+
+
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
     descriptions = describe_quality_flags(
         ["metadata_incomplete", "grid_edge_teff_high", "surprise_flag"]

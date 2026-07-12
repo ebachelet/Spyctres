@@ -88,6 +88,11 @@ overlap the fitted wavelength range. At present this includes the broad DIB
 Such regions are shown and flagged by default but not excluded from the fit; use
 `--mask-dibs` to explicitly mask them, or `--no-show-dibs` to hide the visual
 annotation.
+The script also checks curated residual windows, starting with the H-beta red
+wing. These checks are diagnostic only: they add quality-report context when a
+known line-profile region has coherent residuals, but they do not mask or refit
+those pixels automatically. Treat them as prompts to inspect continuum
+placement, LSF/rotation assumptions, and model-domain limitations.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 

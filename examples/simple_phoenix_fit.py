@@ -53,6 +53,26 @@ from Spyctres.preprocessing import (
 )
 
 
+KNOWN_RESIDUAL_WINDOWS = (
+    {
+        "name": "Hβ red wing",
+        "region_A": (4876.0, 4908.0),
+        "kind": "balmer_line_wing",
+        "description": (
+            "Coherent residuals here are often a line-profile/continuum/LSF "
+            "diagnostic rather than a separate stellar line identification."
+        ),
+        "likely_causes": (
+            "Balmer-wing sensitivity to Teff/logg",
+            "continuum placement across broad Hβ",
+            "rotation/macroturbulence not fitted by this example",
+            "approximate or missing wavelength-dependent LSF",
+            "PHOENIX LTE/model-domain mismatch for hot or peculiar spectra",
+        ),
+    },
+)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -125,6 +145,24 @@ def build_parser():
         type=float,
         default=0.0,
         help="Extra Angstrom half-width padding for DIB annotations/masks.",
+    )
+    parser.add_argument(
+        "--known-residual-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Inspect curated diagnostic windows, such as the H-beta red wing, "
+            "and flag coherent residuals without automatically masking them."
+        ),
+    )
+    parser.add_argument(
+        "--known-residual-threshold",
+        type=float,
+        default=2.5,
+        help=(
+            "Flag a known diagnostic window when either |median residual| or "
+            "RMS residual exceeds this sigma threshold."
+        ),
     )
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output-plot", default=None)
@@ -401,6 +439,120 @@ def _annotate_nonstellar_features(args, spectrum, result):
     return payload
 
 
+def _segment_error_array(segment, flux, model):
+    err = getattr(segment, "err", None)
+    if err is not None:
+        err = np.asarray(err, dtype=float)
+        if err.shape == flux.shape:
+            good = np.isfinite(err) & (err > 0.0)
+            if np.any(good):
+                out = np.full(flux.shape, np.nan, dtype=float)
+                out[good] = err[good]
+                return out
+
+    residual = np.asarray(flux, dtype=float) - np.asarray(model, dtype=float)
+    finite = residual[np.isfinite(residual)]
+    if finite.size >= 5:
+        median = float(np.nanmedian(finite))
+        mad = float(np.nanmedian(np.abs(finite - median)))
+        robust_sigma = 1.4826 * mad if mad > 0.0 else float(np.nanstd(finite))
+    else:
+        robust_sigma = float(np.nanstd(finite)) if finite.size else np.nan
+    if not np.isfinite(robust_sigma) or robust_sigma <= 0.0:
+        robust_sigma = 1.0
+    return np.full(flux.shape, robust_sigma, dtype=float)
+
+
+def _diagnose_known_residual_windows(args, spectrum, result):
+    payload = {
+        "enabled": bool(args.known_residual_diagnostics),
+        "threshold_sigma": float(args.known_residual_threshold),
+        "windows": [],
+        "flagged_windows": [],
+    }
+    result.summary["known_residual_windows"] = payload
+    if not args.known_residual_diagnostics:
+        return payload
+    threshold = float(args.known_residual_threshold)
+    if not np.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("--known-residual-threshold must be finite and positive.")
+
+    segments = _coerce_segments(spectrum)
+    models = tuple(getattr(result, "models", ()))
+    used_masks = tuple(getattr(result, "used_masks", ()))
+    if len(models) != len(segments):
+        return payload
+
+    for segment_index, (segment, model) in enumerate(zip(segments, models)):
+        wave = np.asarray(segment.wave, dtype=float)
+        flux = np.asarray(segment.flux, dtype=float)
+        model = np.asarray(model, dtype=float)
+        if model.shape != wave.shape or flux.shape != wave.shape:
+            continue
+        if segment_index < len(used_masks):
+            used = np.asarray(used_masks[segment_index], dtype=bool)
+        else:
+            used = np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model)
+        err = _segment_error_array(segment, flux, model)
+        sigma_resid = (flux - model) / err
+        frac_resid = (flux - model) / np.where(np.abs(model) > 0.0, model, np.nan)
+        for window in KNOWN_RESIDUAL_WINDOWS:
+            wmin, wmax = window["region_A"]
+            in_window = (
+                used
+                & np.isfinite(wave)
+                & np.isfinite(sigma_resid)
+                & (wave >= float(wmin))
+                & (wave <= float(wmax))
+            )
+            n_used = int(np.count_nonzero(in_window))
+            if n_used < 5:
+                continue
+            values = sigma_resid[in_window]
+            frac_values = frac_resid[in_window]
+            median_sigma = float(np.nanmedian(values))
+            rms_sigma = float(np.sqrt(np.nanmean(values * values)))
+            max_abs_sigma = float(np.nanmax(np.abs(values)))
+            median_fractional_residual = (
+                None
+                if not np.any(np.isfinite(frac_values))
+                else float(np.nanmedian(frac_values))
+            )
+            flagged = bool(
+                abs(median_sigma) >= threshold or rms_sigma >= threshold
+            )
+            item = {
+                "name": window["name"],
+                "segment": getattr(segment, "name", None),
+                "segment_index": int(segment_index),
+                "region_A": [float(wmin), float(wmax)],
+                "kind": window["kind"],
+                "description": window["description"],
+                "likely_causes": list(window["likely_causes"]),
+                "n_used": n_used,
+                "median_sigma": median_sigma,
+                "rms_sigma": rms_sigma,
+                "max_abs_sigma": max_abs_sigma,
+                "median_fractional_residual": median_fractional_residual,
+                "flagged": flagged,
+            }
+            payload["windows"].append(item)
+            if flagged:
+                payload["flagged_windows"].append(item)
+
+    if payload["flagged_windows"]:
+        _add_quality_flag(result, "known_line_region_residual")
+        names = ", ".join(item["name"] for item in payload["flagged_windows"])
+        print(
+            "\nNote: coherent residuals were detected in known diagnostic "
+            "window(s): {0}. These are reported, not masked automatically; "
+            "inspect continuum placement, LSF/rotation assumptions, and "
+            "Balmer-profile/model mismatch.".format(names),
+            flush=True,
+        )
+    return payload
+
+
 def _print_interpretation_hints(args, result, fit_kwargs):
     flags = set(getattr(result, "quality_flags", ()))
     bounds = fit_kwargs.get("bounds", None)
@@ -562,6 +714,7 @@ def main(argv=None):
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
     nonstellar_payload = _annotate_nonstellar_features(args, spectrum, result)
+    _diagnose_known_residual_windows(args, spectrum, result)
     summary = {
         key: result[key]
         for key in ("success", "teff", "feh", "logg", "rv_kms", "chi2_red")

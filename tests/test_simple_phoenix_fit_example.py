@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import matplotlib
 matplotlib.use("Agg")
@@ -15,8 +16,19 @@ def _load_example_module():
 
 
 class _Segment:
-    def __init__(self, wave):
+    def __init__(self, wave, flux=None, err=None, name="segment"):
         self.wave = np.asarray(wave, dtype=float)
+        self.flux = (
+            np.ones_like(self.wave, dtype=float)
+            if flux is None
+            else np.asarray(flux, dtype=float)
+        )
+        self.err = (
+            np.ones_like(self.wave, dtype=float)
+            if err is None
+            else np.asarray(err, dtype=float)
+        )
+        self.name = name
 
 
 def test_line_windows_are_selected_from_fitted_pixels_only():
@@ -111,3 +123,52 @@ def test_append_exclusion_mask_preserves_existing_masks():
         for item in fit_kwargs["exclude_masks"]
     ]
     assert names == ["existing", "nonstellar:dib_4428"]
+
+
+def test_known_residual_window_diagnostic_flags_hbeta_red_wing():
+    module = _load_example_module()
+    wave = np.linspace(4800.0, 4930.0, 400)
+    model = np.ones_like(wave)
+    flux = np.ones_like(wave)
+    hbeta_red = (wave >= 4876.0) & (wave <= 4908.0)
+    flux[hbeta_red] -= 3.0
+    segment = _Segment(wave, flux=flux, err=np.ones_like(wave), name="uvb")
+    result = SimpleNamespace(
+        summary={},
+        models=(model,),
+        used_masks=(np.ones_like(wave, dtype=bool),),
+        quality_flags=(),
+    )
+    args = SimpleNamespace(
+        known_residual_diagnostics=True,
+        known_residual_threshold=2.5,
+    )
+
+    payload = module._diagnose_known_residual_windows(args, segment, result)
+
+    assert result.summary["known_residual_windows"] is payload
+    assert payload["flagged_windows"][0]["name"] == "Hβ red wing"
+    assert payload["flagged_windows"][0]["median_sigma"] < -2.5
+    assert "known_line_region_residual" in result.quality_flags
+
+
+def test_known_residual_window_diagnostic_can_be_disabled():
+    module = _load_example_module()
+    wave = np.linspace(4800.0, 4930.0, 400)
+    segment = _Segment(wave)
+    result = SimpleNamespace(
+        summary={},
+        models=(np.ones_like(wave),),
+        used_masks=(np.ones_like(wave, dtype=bool),),
+        quality_flags=(),
+    )
+    args = SimpleNamespace(
+        known_residual_diagnostics=False,
+        known_residual_threshold=2.5,
+    )
+
+    payload = module._diagnose_known_residual_windows(args, segment, result)
+
+    assert payload["enabled"] is False
+    assert payload["flagged_windows"] == []
+    assert result.quality_flags == ()
