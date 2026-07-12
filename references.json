@@ -222,6 +222,34 @@
       ]
     },
     {
+      "id": "hobbs2008_dib_catalog_hd204827",
+      "citation": "Hobbs, L. M. et al. (2008), A Catalog of Diffuse Interstellar Bands in the Spectrum of HD 204827, The Astrophysical Journal, 680, 1256-1270.",
+      "arxiv": "0804.2094",
+      "url": "https://arxiv.org/abs/0804.2094",
+      "validated_via": "arXiv abstract and metadata; optical diffuse-interstellar-band catalogue scope inspected",
+      "validated_on": "2026-07-12",
+      "description": "Presents a high-resolution optical catalogue of diffuse interstellar bands between 3900 and 8100 Angstrom. Spyctres uses this as a general literature basis for treating DIBs as non-photospheric absorption that should be annotated or optionally masked rather than interpreted as missing PHOENIX stellar-atmosphere opacity.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "examples/simple_phoenix_fit.py"
+      ]
+    },
+    {
+      "id": "garcia_hernandez2013_fullerene_pn_dibs",
+      "citation": "García-Hernández, D. A. & Díaz-Luis, J. J. (2013), Diffuse interstellar bands in fullerene planetary nebulae: the fullerenes - diffuse interstellar bands connection, Astronomy & Astrophysics, 550, L6.",
+      "doi": "10.1051/0004-6361/201220617",
+      "arxiv": "1301.0242",
+      "url": "https://arxiv.org/abs/1301.0242",
+      "validated_via": "arXiv abstract, DOI metadata, and paper summary mentioning the very broad 4428 Angstrom DIB",
+      "validated_on": "2026-07-12",
+      "description": "Discusses the very broad 4428 Angstrom diffuse interstellar band and its unusually intense appearance in fullerene-bearing planetary nebulae. Spyctres uses this reference for the explicit DIB 4428 non-stellar feature annotation and optional masking guardrail.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/plotting.py:plot_fit_referee",
+        "examples/simple_phoenix_fit.py"
+      ]
+    },
+    {
       "id": "garcia_perez2016_aspcap",
       "citation": "Garcia Perez, A. E. et al. (2016), ASPCAP: The APOGEE Stellar Parameter and Chemical Abundances Pipeline, The Astronomical Journal, 151, 144.",
       "doi": "10.3847/0004-6256/151/6/144",

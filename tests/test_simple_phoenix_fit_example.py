@@ -97,3 +97,17 @@ def test_line_plot_path_defaults_to_companion_file():
         module._derive_line_plot_path(None, "/tmp/fit.png", segment_index=1)
         == "/tmp/fit_lines_segment2.png"
     )
+
+
+def test_append_exclusion_mask_preserves_existing_masks():
+    module = _load_example_module()
+    fit_kwargs = {"exclude_masks": [("existing", lambda wave: wave == wave)]}
+    mask = module.nonstellar_feature_mask("dib_4428")
+
+    module._append_exclusion_mask(fit_kwargs, mask)
+
+    names = [
+        item[0] if isinstance(item, tuple) else item.name
+        for item in fit_kwargs["exclude_masks"]
+    ]
+    assert names == ["existing", "nonstellar:dib_4428"]

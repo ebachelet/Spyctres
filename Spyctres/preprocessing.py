@@ -6,6 +6,111 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class NonStellarFeature:
+    """Known non-photospheric spectral feature.
+
+    These features are useful for diagnostics and optional masking because a
+    stellar-atmosphere model such as PHOENIX is not expected to reproduce them.
+    Wavelengths are stored in Angstrom on the observed wavelength scale normally
+    used for optical spectra; callers remain responsible for applying any
+    explicit frame/medium conversion needed for unusual data products.
+    """
+
+    name: str
+    center_A: float
+    half_width_A: float
+    kind: str
+    description: str
+    reference_ids: tuple = ()
+
+    def region(self, padding_A=0.0):
+        padding_A = float(padding_A)
+        if not np.isfinite(padding_A) or padding_A < 0.0:
+            raise ValueError("padding_A must be finite and >= 0.")
+        half_width = float(self.half_width_A) + padding_A
+        return (float(self.center_A) - half_width, float(self.center_A) + half_width)
+
+    def to_metadata(self):
+        wmin, wmax = self.region()
+        return {
+            "name": self.name,
+            "center_A": float(self.center_A),
+            "half_width_A": float(self.half_width_A),
+            "region_A": [float(wmin), float(wmax)],
+            "kind": self.kind,
+            "description": self.description,
+            "reference_ids": list(self.reference_ids),
+        }
+
+
+NONSTELLAR_FEATURES = {
+    "dib_4428": NonStellarFeature(
+        name="DIB 4428",
+        center_A=4428.8,
+        half_width_A=12.0,
+        kind="diffuse_interstellar_band",
+        description=(
+            "Broad diffuse interstellar/circumstellar absorption feature; "
+            "not expected to be reproduced by stellar PHOENIX atmospheres."
+        ),
+        reference_ids=(
+            "hobbs2008_dib_catalog_hd204827",
+            "garcia_hernandez2013_fullerene_pn_dibs",
+        ),
+    ),
+}
+
+
+def nonstellar_feature_regions(names=("dib_4428",), padding_A=0.0):
+    """Return wavelength regions for known non-stellar features.
+
+    Parameters
+    ----------
+    names : sequence or str
+        Feature identifiers from ``NONSTELLAR_FEATURES``.
+    padding_A : float, optional
+        Extra half-width padding in Angstrom added to every region.
+    """
+    if isinstance(names, str):
+        names = (names,)
+    regions = []
+    for name in names:
+        key = str(name).strip().lower()
+        if key not in NONSTELLAR_FEATURES:
+            raise KeyError(
+                "Unknown non-stellar feature {0!r}. Known features: {1}.".format(
+                    name,
+                    ", ".join(sorted(NONSTELLAR_FEATURES)),
+                )
+            )
+        regions.append(NONSTELLAR_FEATURES[key].region(padding_A=padding_A))
+    return regions
+
+
+def nonstellar_feature_metadata(names=("dib_4428",), padding_A=0.0):
+    """Return JSON-safe metadata for selected non-stellar features."""
+    if isinstance(names, str):
+        names = (names,)
+    out = []
+    for name in names:
+        key = str(name).strip().lower()
+        if key not in NONSTELLAR_FEATURES:
+            raise KeyError(
+                "Unknown non-stellar feature {0!r}. Known features: {1}.".format(
+                    name,
+                    ", ".join(sorted(NONSTELLAR_FEATURES)),
+                )
+            )
+        meta = NONSTELLAR_FEATURES[key].to_metadata()
+        if padding_A:
+            wmin, wmax = NONSTELLAR_FEATURES[key].region(padding_A=padding_A)
+            meta["padding_A"] = float(padding_A)
+            meta["region_A"] = [float(wmin), float(wmax)]
+        out.append(meta)
+    return out
+
+
+@dataclass(frozen=True)
 class ExclusionMaskSpec:
     """Named exclusion-mask callable.
 
@@ -43,6 +148,54 @@ def exclusion_mask(name, fn):
     recorded in mask provenance.
     """
     return ExclusionMaskSpec(name=name, callable=fn)
+
+
+def nonstellar_feature_mask(names=("dib_4428",), padding_A=0.0):
+    """Return a named exclusion mask for non-stellar features.
+
+    The returned mask follows the explicit-exclusion convention:
+    ``True`` means reject this pixel from the stellar fit.
+    """
+    feature_names = tuple(names) if not isinstance(names, str) else (names,)
+    regions = nonstellar_feature_regions(feature_names, padding_A=padding_A)
+    label = "nonstellar:" + "+".join(str(name).strip().lower() for name in feature_names)
+    return exclusion_mask(label, lambda wave: _inside_regions(np.asarray(wave, dtype=float), regions))
+
+
+def overlapping_nonstellar_features(spectrum_or_segments, names=("dib_4428",), padding_A=0.0):
+    """Return selected non-stellar features overlapping valid spectrum coverage."""
+    if isinstance(names, str):
+        names = (names,)
+    if hasattr(spectrum_or_segments, "segments"):
+        segments = list(spectrum_or_segments.segments)
+    elif isinstance(spectrum_or_segments, (list, tuple)):
+        segments = list(spectrum_or_segments)
+    else:
+        segments = [spectrum_or_segments]
+
+    overlaps = []
+    for meta in nonstellar_feature_metadata(names, padding_A=padding_A):
+        wmin, wmax = meta["region_A"]
+        total_overlap = 0.0
+        segment_names = []
+        for segment in segments:
+            wave = np.asarray(segment.wave, dtype=float)
+            mask = np.asarray(getattr(segment, "mask", np.ones(wave.shape, dtype=bool)), dtype=bool)
+            good = mask & np.isfinite(wave)
+            if not np.any(good):
+                continue
+            lo = float(np.nanmin(wave[good]))
+            hi = float(np.nanmax(wave[good]))
+            overlap = max(0.0, min(wmax, hi) - max(wmin, lo))
+            if overlap > 0.0:
+                total_overlap += overlap
+                segment_names.append(getattr(segment, "name", None))
+        if total_overlap > 0.0:
+            item = dict(meta)
+            item["overlap_A"] = float(total_overlap)
+            item["segments"] = [name for name in segment_names if name]
+            overlaps.append(item)
+    return overlaps
 
 
 @dataclass(frozen=True)

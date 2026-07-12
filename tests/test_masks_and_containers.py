@@ -14,11 +14,15 @@ from Spyctres.io import (
     make_padded_window_segments,
 )
 from Spyctres.preprocessing import (
+    NONSTELLAR_FEATURES,
     ExclusionMaskSpec,
     apply_fit_mask,
     compose_fit_mask,
     convert_mask_polarity,
     exclusion_mask,
+    nonstellar_feature_mask,
+    nonstellar_feature_regions,
+    overlapping_nonstellar_features,
 )
 
 
@@ -218,6 +222,40 @@ def test_exclusion_mask_spec_helper_and_duplicate_name_validation():
                 exclusion_mask("central", lambda wave: wave == 4.0),
             ],
         )
+
+
+def test_nonstellar_feature_mask_rejects_dib_region_and_records_name():
+    segment = SpectrumSegment(
+        wave=[4410.0, 4428.8, 4440.0, 4460.0],
+        flux=[1.0, 1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1, 0.1],
+    )
+
+    mask = nonstellar_feature_mask("dib_4428")
+    result = compose_fit_mask(segment, exclude_masks=[mask])
+
+    assert "dib_4428" in NONSTELLAR_FEATURES
+    assert nonstellar_feature_regions("dib_4428") == [(4416.8, 4440.8)]
+    assert np.array_equal(result.effective_mask, [True, False, False, True])
+    assert result.settings["exclude_masks"] == ["nonstellar:dib_4428"]
+    assert result.counts["exclude_mask:nonstellar:dib_4428"] == 2
+
+
+def test_overlapping_nonstellar_features_reports_valid_coverage_overlap():
+    segment = SpectrumSegment(
+        wave=np.linspace(4300.0, 4500.0, 50),
+        flux=np.ones(50),
+        err=np.ones(50),
+        name="demo",
+    )
+
+    overlaps = overlapping_nonstellar_features(segment)
+
+    assert len(overlaps) == 1
+    assert overlaps[0]["name"] == "DIB 4428"
+    assert overlaps[0]["center_A"] == pytest.approx(4428.8)
+    assert overlaps[0]["overlap_A"] > 0.0
+    assert overlaps[0]["segments"] == ["demo"]
 
 
 def test_overlap_aware_counts_do_not_double_count_total_rejections():

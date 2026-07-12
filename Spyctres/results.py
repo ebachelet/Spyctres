@@ -166,6 +166,11 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "A fractional uncertainty floor was added in quadrature for at least "
         "one segment; inspect raw and effective chi-square diagnostics."
     ),
+    "nonstellar_feature_overlap": (
+        "A known non-stellar feature, such as a diffuse interstellar band, "
+        "overlaps the fitted wavelength range; PHOENIX is not expected to "
+        "reproduce this absorption."
+    ),
 }
 
 

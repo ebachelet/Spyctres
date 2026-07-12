@@ -18,7 +18,15 @@ from .results import (
 )
 from .linefitting import LineSpec, LineFitConfig, LineFitResult, fit_line, fit_lines
 from .plotting import plot_fit_referee, plot_line_fit, plot_xsl_validation_payload
-from .preprocessing import ExclusionMaskSpec, exclusion_mask
+from .preprocessing import (
+    NONSTELLAR_FEATURES,
+    ExclusionMaskSpec,
+    exclusion_mask,
+    nonstellar_feature_mask,
+    nonstellar_feature_metadata,
+    nonstellar_feature_regions,
+    overlapping_nonstellar_features,
+)
 from .waveutils import convert_segment_wavelength_medium, convert_wavelength_medium
 from .fitting import FitProgressEvent
 from .io import SpectrumCollection, SpectrumSegment, read_spectrum
@@ -36,6 +44,9 @@ __all__ = [
     "LineSpec", "LineFitConfig", "LineFitResult", "fit_line", "fit_lines",
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
     "ExclusionMaskSpec", "exclusion_mask",
+    "NONSTELLAR_FEATURES", "nonstellar_feature_mask",
+    "nonstellar_feature_metadata", "nonstellar_feature_regions",
+    "overlapping_nonstellar_features",
     "convert_wavelength_medium", "convert_segment_wavelength_medium",
     "FitProgressEvent",
 ]

@@ -46,6 +46,11 @@ import matplotlib.pyplot as plt
 from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum
 from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
+from Spyctres.preprocessing import (
+    nonstellar_feature_mask,
+    nonstellar_feature_metadata,
+    overlapping_nonstellar_features,
+)
 
 
 def build_parser():
@@ -98,6 +103,29 @@ def build_parser():
     parser.add_argument("--wmin", type=float, default=None, help="Override fit-window minimum wavelength in Angstrom.")
     parser.add_argument("--wmax", type=float, default=None, help="Override fit-window maximum wavelength in Angstrom.")
     parser.add_argument("--R", type=float, default=None, dest="resolution_R")
+    parser.add_argument(
+        "--show-dibs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Annotate known diffuse interstellar bands, currently DIB 4428, "
+            "on the overview diagnostic plot when they overlap the spectrum."
+        ),
+    )
+    parser.add_argument(
+        "--mask-dibs",
+        action="store_true",
+        help=(
+            "Exclude known DIB regions from the stellar fit. By default they "
+            "are shown/flagged but not masked."
+        ),
+    )
+    parser.add_argument(
+        "--dib-padding",
+        type=float,
+        default=0.0,
+        help="Extra Angstrom half-width padding for DIB annotations/masks.",
+    )
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output-plot", default=None)
     parser.add_argument(
@@ -170,7 +198,7 @@ def build_parser():
 
 
 def _fit_kwargs_from_args(args, spectrum):
-    return prepare_phoenix_fit_kwargs(
+    fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
         spectrum,
         auto_defaults=args.auto_defaults,
         defaults_mode=args.defaults_mode,
@@ -194,6 +222,20 @@ def _fit_kwargs_from_args(args, spectrum):
         ) if args.wmin is not None or args.wmax is not None else None,
         resolution_R=args.resolution_R,
     )
+    if args.mask_dibs:
+        _append_exclusion_mask(
+            fit_kwargs,
+            nonstellar_feature_mask(("dib_4428",), padding_A=args.dib_padding),
+        )
+    return fit_kwargs, suggestion
+
+
+def _append_exclusion_mask(fit_kwargs, mask_spec):
+    masks = list(fit_kwargs.get("exclude_masks", []) or [])
+    if fit_kwargs.get("exclude_mask") is not None:
+        masks.append(fit_kwargs.pop("exclude_mask"))
+    masks.append(mask_spec)
+    fit_kwargs["exclude_masks"] = masks
 
 
 def _coerce_segments(spectrum):
@@ -322,6 +364,41 @@ def _derive_line_plot_path(output_line_plot, output_plot, segment_index=None):
             )
         )
     return str(new_path)
+
+
+def _add_quality_flag(result, flag):
+    flags = list(getattr(result, "quality_flags", ()))
+    if flag not in flags:
+        flags.append(flag)
+    result.summary["quality_flags"] = list(flags)
+    object.__setattr__(result, "quality_flags", tuple(flags))
+
+
+def _annotate_nonstellar_features(args, spectrum, result):
+    overlaps = overlapping_nonstellar_features(
+        spectrum,
+        names=("dib_4428",),
+        padding_A=args.dib_padding,
+    )
+    payload = {
+        "show_dibs": bool(args.show_dibs),
+        "mask_dibs": bool(args.mask_dibs),
+        "features": overlaps,
+    }
+    result.summary["nonstellar_features"] = payload
+    if overlaps:
+        _add_quality_flag(result, "nonstellar_feature_overlap")
+        names = ", ".join(item["name"] for item in overlaps)
+        action = "masked" if args.mask_dibs else "shown but not masked"
+        print(
+            "\nNote: non-stellar feature(s) overlap this fit: {0}. "
+            "They are {1}; PHOENIX is not expected to model DIB absorption.".format(
+                names,
+                action,
+            ),
+            flush=True,
+        )
+    return payload
 
 
 def _print_interpretation_hints(args, result, fit_kwargs):
@@ -484,6 +561,7 @@ def main(argv=None):
     )
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
+    nonstellar_payload = _annotate_nonstellar_features(args, spectrum, result)
     summary = {
         key: result[key]
         for key in ("success", "teff", "feh", "logg", "rv_kms", "chi2_red")
@@ -519,6 +597,11 @@ def main(argv=None):
         ),
         max_points_per_segment=20000,
         xlim_mode=args.plot_xlim,
+        feature_regions=(
+            nonstellar_feature_metadata(("dib_4428",), padding_A=args.dib_padding)
+            if args.show_dibs and nonstellar_payload["features"]
+            else None
+        ),
     )
     generated_plot_paths.update(getattr(fig, "spyctres_generated_files", {}) or {})
     extra_figures = []

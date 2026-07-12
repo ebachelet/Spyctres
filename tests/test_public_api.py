@@ -144,6 +144,17 @@ def test_exclusion_mask_helper_is_top_level_public_api():
     assert spec.name == "demo"
 
 
+def test_nonstellar_feature_helpers_are_top_level_public_api():
+    import Spyctres
+
+    regions = Spyctres.nonstellar_feature_regions("dib_4428")
+    mask = Spyctres.nonstellar_feature_mask("dib_4428")
+
+    assert "dib_4428" in Spyctres.NONSTELLAR_FEATURES
+    assert regions == [(4416.8, 4440.8)]
+    assert mask.name == "nonstellar:dib_4428"
+
+
 def test_structured_result_can_save_compact_json(tmp_path):
     result = PhoenixFitResult(
         summary={"teff": np.float64(5772.0)},

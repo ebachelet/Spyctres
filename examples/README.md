@@ -82,6 +82,12 @@ range; overlapping hot-line windows are merged into one panel. Disable this with
 `--line-window-half-width`. If `--output-plot` is set, the line diagnostics are
 saved automatically as a `*_lines` companion image unless `--output-line-plot`
 is specified.
+The overview plot also annotates known non-stellar absorption features when they
+overlap the fitted wavelength range. At present this includes the broad DIB
+4428 diffuse interstellar band, which PHOENIX is not expected to reproduce.
+Such regions are shown and flagged by default but not excluded from the fit; use
+`--mask-dibs` to explicitly mask them, or `--no-show-dibs` to hide the visual
+annotation.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 

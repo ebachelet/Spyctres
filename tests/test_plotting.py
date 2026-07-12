@@ -171,6 +171,26 @@ def test_plot_fit_referee_does_not_draw_model_on_unused_pixels():
     fig.clf()
 
 
+def test_plot_fit_referee_can_annotate_feature_regions():
+    wave = np.linspace(4400.0, 4460.0, 40)
+    segment = SpectrumSegment(
+        wave,
+        np.ones(wave.size),
+        err=np.full(wave.size, 0.05),
+        name="dib_demo",
+    )
+    result = _fit_result_for_segments([segment])
+
+    fig, axes = plot_fit_referee(
+        result,
+        segment=segment,
+        feature_regions=[{"name": "DIB 4428", "region_A": [4416.8, 4440.8]}],
+    )
+
+    assert any(text.get_text() == "DIB 4428" for text in axes[0, 0].texts)
+    fig.clf()
+
+
 def test_xsl_validation_payload_defaults_to_global_display_scaling():
     payload = {
         "display_defaults": {"scale_mode": "global"},

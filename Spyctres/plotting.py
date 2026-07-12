@@ -600,6 +600,35 @@ def _quality_text(result):
     return " | ".join(summary) + "\nflags: " + ", ".join(flags)
 
 
+def _normalize_feature_regions(feature_regions):
+    """Normalize optional plot annotations to ``(label, wmin, wmax)`` tuples."""
+    if feature_regions is None:
+        return []
+    out = []
+    for item in feature_regions:
+        if isinstance(item, dict):
+            label = str(item.get("name", item.get("label", "feature")))
+            region = item.get("region_A", item.get("region"))
+            if region is None or len(region) != 2:
+                raise ValueError("Feature-region mappings require region_A=(wmin, wmax).")
+            wmin, wmax = region
+        elif len(item) == 3:
+            label, wmin, wmax = item
+        elif len(item) == 2:
+            wmin, wmax = item
+            label = "feature"
+        else:
+            raise ValueError(
+                "Feature regions must be mappings, (label, wmin, wmax), or (wmin, wmax)."
+            )
+        wmin = float(wmin)
+        wmax = float(wmax)
+        if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax < wmin:
+            raise ValueError("Feature regions require finite wmin <= wmax.")
+        out.append((str(label), wmin, wmax))
+    return out
+
+
 def _safe_median_scale(values):
     """Return a finite non-zero median scale, falling back to unity."""
     values = _as_float_array(values)
@@ -795,6 +824,7 @@ def plot_fit_referee(
     residual_ylim=(-6.0, 6.0),
     layout="side_by_side",
     xlim_mode="fit",
+    feature_regions=None,
 ):
     """
     Plot a deterministic referee view of a PHOENIX fit.
@@ -829,6 +859,10 @@ def plot_fit_referee(
         on fitted pixels. ``"all"`` keeps the full finite segment wavelength
         range while still hiding model/residual values on unused pixels. This
         avoids implying that rejected or out-of-window data were fitted.
+    feature_regions : sequence, optional
+        Optional non-stellar/diagnostic regions to shade and label. Each item
+        may be ``(label, wmin, wmax)``, ``(wmin, wmax)``, or a metadata mapping
+        with ``name``/``region_A``. These annotations do not affect the fit.
 
     Returns
     -------
@@ -892,6 +926,7 @@ def plot_fit_referee(
                 textwrap.fill(parts[1], width=135),
             )
     fig.suptitle(title_text, fontsize=9 if layout == "stacked" else 10)
+    feature_regions = _normalize_feature_regions(feature_regions)
 
     for index, (seg, model_corr) in enumerate(zip(segments, models)):
         ax_flux, ax_resid = axes[index]
@@ -982,6 +1017,22 @@ def plot_fit_referee(
         for wmin, wmax in _mask_to_spans(wave, excluded):
             ax_flux.axvspan(wmin, wmax, color="tab:purple", alpha=0.08)
             ax_resid.axvspan(wmin, wmax, color="tab:purple", alpha=0.08)
+        for label, wmin, wmax in feature_regions:
+            if not np.any((wave >= wmin) & (wave <= wmax)):
+                continue
+            ax_flux.axvspan(wmin, wmax, color="tab:cyan", alpha=0.08)
+            ax_resid.axvspan(wmin, wmax, color="tab:cyan", alpha=0.08)
+            ax_flux.text(
+                0.5 * (wmin + wmax),
+                0.96,
+                label,
+                ha="center",
+                va="top",
+                rotation=90,
+                fontsize=7,
+                alpha=0.65,
+                transform=ax_flux.get_xaxis_transform(),
+            )
         if (~used).any():
             unused = np.intersect1d(sel, np.flatnonzero(~used), assume_unique=False)
             if unused.size:
