@@ -117,17 +117,22 @@ def test_quality_report_includes_known_feature_and_residual_windows():
             "quality_flags": [
                 "nonstellar_feature_overlap",
                 "known_line_region_residual",
+                "dib_overlap_balmer_wing",
             ],
             "chi2_red": 4.2,
             "nonstellar_features": {
                 "show_dibs": True,
                 "mask_dibs": False,
-                "features": [{"name": "DIB 4428"}],
+                "policy": "warn",
+                "features": [{"name": "DIB 4428"}, {"name": "DIB 4882"}],
+                "overlap_diagnostics": [
+                    {"feature": "DIB 4882", "diagnostic_line": "Hbeta"}
+                ],
             },
             "known_residual_windows": {
                 "flagged_windows": [
                     {
-                        "name": "Hβ red wing",
+                        "name": "DIB 4882 / Hβ red wing",
                         "median_sigma": -3.1,
                         "rms_sigma": 4.2,
                     }
@@ -136,8 +141,10 @@ def test_quality_report_includes_known_feature_and_residual_windows():
         }
     )
 
-    assert "non-stellar features: DIB 4428 (shown/not masked)" in text
-    assert "known residual windows: Hβ red wing median=-3.1σ rms=4.2σ" in text
+    assert "non-stellar features: DIB 4428, DIB 4882" in text
+    assert "policy=warn" in text
+    assert "contaminated diagnostics: DIB 4882 -> Hbeta" in text
+    assert "DIB 4882 / Hβ red wing median=-3.1σ rms=4.2σ" in text
 
 
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
@@ -178,11 +185,18 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
     import Spyctres
 
     regions = Spyctres.nonstellar_feature_regions("dib_4428")
-    mask = Spyctres.nonstellar_feature_mask("dib_4428")
+    dib_4882 = Spyctres.nonstellar_feature_regions("dib_4882")
+    masks = Spyctres.known_feature_masks(["dib_4428", "dib_4882"])
 
     assert "dib_4428" in Spyctres.NONSTELLAR_FEATURES
+    assert "dib_4882" in Spyctres.NONSTELLAR_FEATURES
+    assert "dib_4882" in Spyctres.OPTICAL_DIB_DIAGNOSTIC_FEATURES
     assert regions == [(4416.8, 4440.8)]
-    assert mask.name == "nonstellar:dib_4428"
+    assert dib_4882 == [(4870.0, 4915.0)]
+    assert [mask.name for mask in masks] == [
+        "nonstellar:dib_4428",
+        "nonstellar:dib_4882",
+    ]
 
 
 def test_structured_result_can_save_compact_json(tmp_path):

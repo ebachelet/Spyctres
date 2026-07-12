@@ -147,9 +147,12 @@ def test_known_residual_window_diagnostic_flags_hbeta_red_wing():
     payload = module._diagnose_known_residual_windows(args, segment, result)
 
     assert result.summary["known_residual_windows"] is payload
-    assert payload["flagged_windows"][0]["name"] == "Hβ red wing"
+    assert payload["flagged_windows"][0]["name"] == "DIB 4882 / Hβ red wing"
+    assert payload["flagged_windows"][0]["linked_feature"] == "dib_4882"
+    assert payload["flagged_windows"][0]["absorption_like"] is True
     assert payload["flagged_windows"][0]["median_sigma"] < -2.5
     assert "known_line_region_residual" in result.quality_flags
+    assert "dib_overlap_balmer_wing" in result.quality_flags
 
 
 def test_known_residual_window_diagnostic_can_be_disabled():
@@ -171,4 +174,45 @@ def test_known_residual_window_diagnostic_can_be_disabled():
 
     assert payload["enabled"] is False
     assert payload["flagged_windows"] == []
+    assert result.quality_flags == ()
+
+
+def test_nonstellar_feature_annotation_flags_dib_balmer_overlap():
+    module = _load_example_module()
+    wave = np.linspace(4400.0, 4920.0, 400)
+    segment = _Segment(wave)
+    result = SimpleNamespace(summary={}, quality_flags=())
+    args = SimpleNamespace(
+        show_dibs=True,
+        mask_dibs=False,
+        nonstellar_feature_policy="warn",
+        dib_padding=0.0,
+    )
+
+    payload = module._annotate_nonstellar_features(args, segment, result)
+
+    assert payload["policy"] == "warn"
+    assert payload["mask_application_frame"] == "data"
+    assert [item["name"] for item in payload["features"]] == ["DIB 4428", "DIB 4882"]
+    assert payload["overlap_diagnostics"][0]["flag"] == "dib_overlap_balmer_wing"
+    assert "nonstellar_feature_overlap" in result.quality_flags
+    assert "diagnostic_line_contaminated" in result.quality_flags
+    assert "dib_overlap_balmer_wing" in result.quality_flags
+
+
+def test_nonstellar_feature_annotation_ignore_policy_records_without_flags():
+    module = _load_example_module()
+    segment = _Segment(np.linspace(4870.0, 4915.0, 100))
+    result = SimpleNamespace(summary={}, quality_flags=())
+    args = SimpleNamespace(
+        show_dibs=True,
+        mask_dibs=False,
+        nonstellar_feature_policy="ignore",
+        dib_padding=0.0,
+    )
+
+    payload = module._annotate_nonstellar_features(args, segment, result)
+
+    assert payload["policy"] == "ignore"
+    assert payload["features"][0]["name"] == "DIB 4882"
     assert result.quality_flags == ()

@@ -47,27 +47,39 @@ from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.io import read_spectrum
 from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
 from Spyctres.preprocessing import (
+    OPTICAL_DIB_DIAGNOSTIC_FEATURES,
     nonstellar_feature_mask,
+    nonstellar_feature_masks,
     nonstellar_feature_metadata,
     overlapping_nonstellar_features,
 )
 
 
+DIB_FEATURE_NAMES = OPTICAL_DIB_DIAGNOSTIC_FEATURES
+
+
 KNOWN_RESIDUAL_WINDOWS = (
     {
-        "name": "Hβ red wing",
+        "name": "DIB 4882 / Hβ red wing",
         "region_A": (4876.0, 4908.0),
-        "kind": "balmer_line_wing",
+        "kind": "diffuse_interstellar_band_overlap",
+        "linked_feature": "dib_4882",
+        "diagnostic_line": "Hbeta",
         "description": (
-            "Coherent residuals here are often a line-profile/continuum/LSF "
-            "diagnostic rather than a separate stellar line identification."
+            "Coherent negative residuals here are consistent with unmodelled "
+            "DIB 4882 absorption overlapping the red wing of H-beta."
         ),
         "likely_causes": (
+            "DIB 4882 or another non-stellar broad absorption feature",
             "Balmer-wing sensitivity to Teff/logg",
             "continuum placement across broad Hβ",
             "rotation/macroturbulence not fitted by this example",
             "approximate or missing wavelength-dependent LSF",
             "PHOENIX LTE/model-domain mismatch for hot or peculiar spectra",
+        ),
+        "recommended_action": (
+            "Compare the default fit with a rerun using --mask-dibs or "
+            "--nonstellar-feature-policy mask_known."
         ),
     },
 )
@@ -136,8 +148,18 @@ def build_parser():
         "--mask-dibs",
         action="store_true",
         help=(
-            "Exclude known DIB regions from the stellar fit. By default they "
-            "are shown/flagged but not masked."
+            "Exclude known DIB regions from the stellar fit. This is equivalent "
+            "to --nonstellar-feature-policy mask_known."
+        ),
+    )
+    parser.add_argument(
+        "--nonstellar-feature-policy",
+        choices=("warn", "mask_known", "ignore"),
+        default="warn",
+        help=(
+            "How to handle known non-stellar features such as DIB 4428 and "
+            "DIB 4882. 'warn' annotates/flags only, 'mask_known' excludes the "
+            "named regions, and 'ignore' records overlap but raises no flags."
         ),
     )
     parser.add_argument(
@@ -260,11 +282,12 @@ def _fit_kwargs_from_args(args, spectrum):
         ) if args.wmin is not None or args.wmax is not None else None,
         resolution_R=args.resolution_R,
     )
-    if args.mask_dibs:
-        _append_exclusion_mask(
-            fit_kwargs,
-            nonstellar_feature_mask(("dib_4428",), padding_A=args.dib_padding),
-        )
+    if args.mask_dibs or args.nonstellar_feature_policy == "mask_known":
+        for mask_spec in nonstellar_feature_masks(
+            DIB_FEATURE_NAMES,
+            padding_A=args.dib_padding,
+        ):
+            _append_exclusion_mask(fit_kwargs, mask_spec)
     return fit_kwargs, suggestion
 
 
@@ -413,21 +436,36 @@ def _add_quality_flag(result, flag):
 
 
 def _annotate_nonstellar_features(args, spectrum, result):
+    policy = "mask_known" if args.mask_dibs else args.nonstellar_feature_policy
     overlaps = overlapping_nonstellar_features(
         spectrum,
-        names=("dib_4428",),
+        names=DIB_FEATURE_NAMES,
         padding_A=args.dib_padding,
     )
+    overlap_diagnostics = _nonstellar_overlap_diagnostics(overlaps)
     payload = {
         "show_dibs": bool(args.show_dibs),
-        "mask_dibs": bool(args.mask_dibs),
+        "mask_dibs": bool(policy == "mask_known"),
+        "policy": policy,
+        "mask_application_frame": "data",
+        "frame_note": (
+            "Known non-stellar feature regions are interpreted on the current "
+            "data wavelength grid; no observer/barycentric/stellar-rest frame "
+            "transformation is applied implicitly."
+        ),
         "features": overlaps,
+        "overlap_diagnostics": overlap_diagnostics,
     }
     result.summary["nonstellar_features"] = payload
-    if overlaps:
+    if overlaps and policy != "ignore":
         _add_quality_flag(result, "nonstellar_feature_overlap")
+        if overlap_diagnostics:
+            _add_quality_flag(result, "diagnostic_line_contaminated")
+            for item in overlap_diagnostics:
+                if item.get("flag") == "dib_overlap_balmer_wing":
+                    _add_quality_flag(result, "dib_overlap_balmer_wing")
         names = ", ".join(item["name"] for item in overlaps)
-        action = "masked" if args.mask_dibs else "shown but not masked"
+        action = "masked" if policy == "mask_known" else "shown but not masked"
         print(
             "\nNote: non-stellar feature(s) overlap this fit: {0}. "
             "They are {1}; PHOENIX is not expected to model DIB absorption.".format(
@@ -436,7 +474,53 @@ def _annotate_nonstellar_features(args, spectrum, result):
             ),
             flush=True,
         )
+        if overlap_diagnostics:
+            detail = "; ".join(
+                "{0} overlaps {1}".format(
+                    item.get("feature", "feature"),
+                    item.get("diagnostic_line", "diagnostic line"),
+                )
+                for item in overlap_diagnostics
+            )
+            print(
+                "Diagnostic contamination warning: {0}. Consider a controlled "
+                "rerun with --mask-dibs and compare the fitted parameters.".format(
+                    detail
+                ),
+                flush=True,
+            )
+    elif overlaps:
+        names = ", ".join(item["name"] for item in overlaps)
+        print(
+            "\nNote: non-stellar feature overlap was detected but ignored by "
+            "policy: {0}. Provenance is still recorded in the result JSON.".format(
+                names
+            ),
+            flush=True,
+        )
     return payload
+
+
+def _nonstellar_overlap_diagnostics(overlaps):
+    diagnostics = []
+    for feature in overlaps:
+        diagnostic_lines = set(feature.get("diagnostic_lines") or [])
+        if feature.get("kind") == "diffuse_interstellar_band" and "Hbeta" in diagnostic_lines:
+            diagnostics.append(
+                {
+                    "flag": "dib_overlap_balmer_wing",
+                    "feature": feature.get("name"),
+                    "feature_id": "dib_4882",
+                    "diagnostic_line": "Hbeta",
+                    "overlap_region_A": feature.get("region_A"),
+                    "recommended_action": (
+                        "Rerun with --mask-dibs or "
+                        "--nonstellar-feature-policy mask_known and compare "
+                        "Teff, logg, [Fe/H], RV, chi2_red, and residual flags."
+                    ),
+                }
+            )
+    return diagnostics
 
 
 def _segment_error_array(segment, flux, model):
@@ -523,17 +607,21 @@ def _diagnose_known_residual_windows(args, spectrum, result):
             )
             item = {
                 "name": window["name"],
+                "linked_feature": window.get("linked_feature"),
+                "diagnostic_line": window.get("diagnostic_line"),
                 "segment": getattr(segment, "name", None),
                 "segment_index": int(segment_index),
                 "region_A": [float(wmin), float(wmax)],
                 "kind": window["kind"],
                 "description": window["description"],
                 "likely_causes": list(window["likely_causes"]),
+                "recommended_action": window.get("recommended_action"),
                 "n_used": n_used,
                 "median_sigma": median_sigma,
                 "rms_sigma": rms_sigma,
                 "max_abs_sigma": max_abs_sigma,
                 "median_fractional_residual": median_fractional_residual,
+                "absorption_like": bool(median_sigma <= -threshold),
                 "flagged": flagged,
             }
             payload["windows"].append(item)
@@ -542,6 +630,9 @@ def _diagnose_known_residual_windows(args, spectrum, result):
 
     if payload["flagged_windows"]:
         _add_quality_flag(result, "known_line_region_residual")
+        if any(item.get("absorption_like") for item in payload["flagged_windows"]):
+            _add_quality_flag(result, "diagnostic_line_contaminated")
+            _add_quality_flag(result, "dib_overlap_balmer_wing")
         names = ", ".join(item["name"] for item in payload["flagged_windows"])
         print(
             "\nNote: coherent residuals were detected in known diagnostic "
@@ -751,8 +842,12 @@ def main(argv=None):
         max_points_per_segment=20000,
         xlim_mode=args.plot_xlim,
         feature_regions=(
-            nonstellar_feature_metadata(("dib_4428",), padding_A=args.dib_padding)
-            if args.show_dibs and nonstellar_payload["features"]
+            nonstellar_feature_metadata(DIB_FEATURE_NAMES, padding_A=args.dib_padding)
+            if (
+                args.show_dibs
+                and nonstellar_payload["features"]
+                and nonstellar_payload.get("policy") != "ignore"
+            )
             else None
         ),
     )

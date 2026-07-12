@@ -176,6 +176,16 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "not masked automatically; inspect stellar parameters, continuum "
         "placement, LSF/rotation assumptions, and model-domain limitations."
     ),
+    "diagnostic_line_contaminated": (
+        "A known non-stellar feature overlaps a stellar diagnostic line/window; "
+        "compare a run with an explicit named exclusion mask before interpreting "
+        "the affected stellar parameter constraints."
+    ),
+    "dib_overlap_balmer_wing": (
+        "A diffuse interstellar band overlaps a Balmer-line wing. PHOENIX does "
+        "not model DIB absorption, so inspect or mask that interval explicitly "
+        "before tuning stellar parameters to absorb the residual."
+    ),
 }
 
 
@@ -375,8 +385,22 @@ def format_fit_quality_report(result_or_report):
     nonstellar_features = list(nonstellar.get("features") or [])
     if nonstellar_features:
         names = ", ".join(str(item.get("name", "feature")) for item in nonstellar_features)
+        policy = nonstellar.get("policy")
         action = "masked" if nonstellar.get("mask_dibs") else "shown/not masked"
+        if policy:
+            action = "{0}; policy={1}".format(action, policy)
         lines.append("  non-stellar features: {0} ({1})".format(names, action))
+    overlap_diagnostics = list(nonstellar.get("overlap_diagnostics") or [])
+    if overlap_diagnostics:
+        pieces = []
+        for item in overlap_diagnostics:
+            pieces.append(
+                "{0} -> {1}".format(
+                    item.get("feature", "feature"),
+                    item.get("diagnostic_line", "diagnostic line"),
+                )
+            )
+        lines.append("  contaminated diagnostics: {0}".format("; ".join(pieces)))
     residual_windows = report.get("known_residual_windows") or {}
     flagged_windows = list(residual_windows.get("flagged_windows") or [])
     if flagged_windows:

@@ -250,6 +250,19 @@
       ]
     },
     {
+      "id": "galazutdinov2020_very_broad_dibs",
+      "citation": "Galazutdinov, G. et al. (2020), Survey of very broad Diffuse Interstellar Bands, Monthly Notices of the Royal Astronomical Society, 494, 3091-3097.",
+      "arxiv": "2003.02328",
+      "url": "https://arxiv.org/abs/2003.02328",
+      "validated_via": "arXiv abstract and metadata; paper summary explicitly identifies the very broad 4882 Angstrom DIB",
+      "validated_on": "2026-07-12",
+      "description": "Studies very broad diffuse interstellar bands, including features at approximately 4430 and 4882 Angstrom. Spyctres uses this reference for the DIB 4882 catalog entry and for warning that absorption near the H-beta red wing may be non-stellar contamination rather than missing PHOENIX stellar opacity.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "examples/simple_phoenix_fit.py"
+      ]
+    },
+    {
       "id": "garcia_perez2016_aspcap",
       "citation": "Garcia Perez, A. E. et al. (2016), ASPCAP: The APOGEE Stellar Parameter and Chemical Abundances Pipeline, The Astronomical Journal, 151, 144.",
       "doi": "10.3847/0004-6256/151/6/144",

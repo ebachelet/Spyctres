@@ -22,11 +22,19 @@ class NonStellarFeature:
     kind: str
     description: str
     reference_ids: tuple = ()
+    default_action: str = "warn"
+    feature_frame: str = "interstellar_rest"
+    mask_application_frame: str = "data"
+    diagnostic_lines: tuple = ()
+    default_region_A: tuple | None = None
 
     def region(self, padding_A=0.0):
         padding_A = float(padding_A)
         if not np.isfinite(padding_A) or padding_A < 0.0:
             raise ValueError("padding_A must be finite and >= 0.")
+        if self.default_region_A is not None:
+            wmin, wmax = self.default_region_A
+            return (float(wmin) - padding_A, float(wmax) + padding_A)
         half_width = float(self.half_width_A) + padding_A
         return (float(self.center_A) - half_width, float(self.center_A) + half_width)
 
@@ -40,6 +48,10 @@ class NonStellarFeature:
             "kind": self.kind,
             "description": self.description,
             "reference_ids": list(self.reference_ids),
+            "default_action": self.default_action,
+            "feature_frame": self.feature_frame,
+            "mask_application_frame": self.mask_application_frame,
+            "diagnostic_lines": list(self.diagnostic_lines),
         }
 
 
@@ -57,8 +69,27 @@ NONSTELLAR_FEATURES = {
             "hobbs2008_dib_catalog_hd204827",
             "garcia_hernandez2013_fullerene_pn_dibs",
         ),
+        diagnostic_lines=(),
+    ),
+    "dib_4882": NonStellarFeature(
+        name="DIB 4882",
+        center_A=4882.0,
+        half_width_A=22.5,
+        kind="diffuse_interstellar_band",
+        description=(
+            "Broad diffuse interstellar absorption feature that can overlap "
+            "the red wing of H-beta in hot-star fits."
+        ),
+        reference_ids=(
+            "galazutdinov2020_very_broad_dibs",
+            "hobbs2008_dib_catalog_hd204827",
+        ),
+        diagnostic_lines=("Hbeta",),
+        default_region_A=(4870.0, 4915.0),
     ),
 }
+
+OPTICAL_DIB_DIAGNOSTIC_FEATURES = ("dib_4428", "dib_4882")
 
 
 def nonstellar_feature_regions(names=("dib_4428",), padding_A=0.0):
@@ -160,6 +191,26 @@ def nonstellar_feature_mask(names=("dib_4428",), padding_A=0.0):
     regions = nonstellar_feature_regions(feature_names, padding_A=padding_A)
     label = "nonstellar:" + "+".join(str(name).strip().lower() for name in feature_names)
     return exclusion_mask(label, lambda wave: _inside_regions(np.asarray(wave, dtype=float), regions))
+
+
+def nonstellar_feature_masks(names=("dib_4428",), padding_A=0.0):
+    """Return one named exclusion mask per selected non-stellar feature.
+
+    This keeps mask provenance separate for each feature, which is preferable
+    for audit trails and pixel-count summaries. The masks are still applied in
+    the current data wavelength grid; no frame transformation is implicit.
+    """
+    if isinstance(names, str):
+        names = (names,)
+    return [
+        nonstellar_feature_mask((str(name).strip().lower(),), padding_A=padding_A)
+        for name in names
+    ]
+
+
+def known_feature_masks(names=("dib_4428",), padding_A=0.0):
+    """Alias for non-stellar feature masks using reviewer-facing terminology."""
+    return nonstellar_feature_masks(names=names, padding_A=padding_A)
 
 
 def overlapping_nonstellar_features(spectrum_or_segments, names=("dib_4428",), padding_A=0.0):

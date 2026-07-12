@@ -84,10 +84,12 @@ saved automatically as a `*_lines` companion image unless `--output-line-plot`
 is specified.
 The overview plot also annotates known non-stellar absorption features when they
 overlap the fitted wavelength range. At present this includes the broad DIB
-4428 diffuse interstellar band, which PHOENIX is not expected to reproduce.
-Such regions are shown and flagged by default but not excluded from the fit; use
-`--mask-dibs` to explicitly mask them, or `--no-show-dibs` to hide the visual
-annotation.
+4428 diffuse interstellar band and the DIB 4882 region that can contaminate the
+red wing of H-beta in hot-star fits. PHOENIX is not expected to reproduce DIB
+absorption. Such regions are shown and flagged by default but not excluded from
+the fit; use `--mask-dibs` or `--nonstellar-feature-policy mask_known` to
+explicitly mask them, `--nonstellar-feature-policy ignore` to record but not
+flag them, or `--no-show-dibs` to hide the visual annotation.
 The script also checks curated residual windows, starting with the H-beta red
 wing. These checks are diagnostic only: they add quality-report context when a
 known line-profile region has coherent residuals, but they do not mask or refit

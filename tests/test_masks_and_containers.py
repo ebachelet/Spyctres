@@ -21,6 +21,7 @@ from Spyctres.preprocessing import (
     convert_mask_polarity,
     exclusion_mask,
     nonstellar_feature_mask,
+    nonstellar_feature_masks,
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
 )
@@ -241,21 +242,38 @@ def test_nonstellar_feature_mask_rejects_dib_region_and_records_name():
     assert result.counts["exclude_mask:nonstellar:dib_4428"] == 2
 
 
+def test_dib_4882_feature_uses_balmer_overlap_region():
+    regions = nonstellar_feature_regions("dib_4882")
+    masks = nonstellar_feature_masks(["dib_4428", "dib_4882"])
+
+    assert regions == [(4870.0, 4915.0)]
+    assert [mask.name for mask in masks] == [
+        "nonstellar:dib_4428",
+        "nonstellar:dib_4882",
+    ]
+    assert "Hbeta" in NONSTELLAR_FEATURES["dib_4882"].diagnostic_lines
+
+
 def test_overlapping_nonstellar_features_reports_valid_coverage_overlap():
     segment = SpectrumSegment(
-        wave=np.linspace(4300.0, 4500.0, 50),
-        flux=np.ones(50),
-        err=np.ones(50),
+        wave=np.linspace(4300.0, 4920.0, 80),
+        flux=np.ones(80),
+        err=np.ones(80),
         name="demo",
     )
 
-    overlaps = overlapping_nonstellar_features(segment)
+    overlaps = overlapping_nonstellar_features(
+        segment,
+        names=["dib_4428", "dib_4882"],
+    )
 
-    assert len(overlaps) == 1
-    assert overlaps[0]["name"] == "DIB 4428"
-    assert overlaps[0]["center_A"] == pytest.approx(4428.8)
-    assert overlaps[0]["overlap_A"] > 0.0
-    assert overlaps[0]["segments"] == ["demo"]
+    by_name = {item["name"]: item for item in overlaps}
+    assert set(by_name) == {"DIB 4428", "DIB 4882"}
+    assert by_name["DIB 4428"]["center_A"] == pytest.approx(4428.8)
+    assert by_name["DIB 4428"]["overlap_A"] > 0.0
+    assert by_name["DIB 4882"]["overlap_A"] == pytest.approx(45.0)
+    assert by_name["DIB 4882"]["diagnostic_lines"] == ["Hbeta"]
+    assert by_name["DIB 4882"]["segments"] == ["demo"]
 
 
 def test_overlap_aware_counts_do_not_double_count_total_rejections():
