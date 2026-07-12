@@ -23,8 +23,8 @@ Use ``--plot-xlim all`` if you want to inspect the full loaded segment and mask
 boundaries.
 
 The example also opens a default-on zoomed line-diagnostic figure for
-Balmer/Ca/He lines that overlap fitted pixels. These panels are visual
-diagnostics, not separate local line fits.
+Balmer/Ca/Mg lines that overlap fitted pixels, adding He I only for hot fitted
+solutions. These panels are visual diagnostics, not separate local line fits.
 
 Example
 -------
@@ -126,16 +126,25 @@ def build_parser():
         default=True,
         help=(
             "Open/save a companion zoomed-line diagnostic figure for identified "
-            "Balmer/Ca/He lines that overlap fitted pixels. Use "
+            "Balmer/Ca/Mg lines, with He I added only for hot fitted solutions. Use "
             "--no-line-diagnostics to disable it."
         ),
     )
     parser.add_argument(
         "--line-groups",
-        default="balmer,caii,hei",
+        default="auto",
         help=(
-            "Comma-separated line groups used for the zoomed diagnostics. "
-            "Known groups include balmer, caii, nai, and hei."
+            "Comma-separated line groups used for the zoomed diagnostics, or "
+            "'auto'. Known groups include balmer, caii, nai, mgii, and hei."
+        ),
+    )
+    parser.add_argument(
+        "--hot-line-teff-threshold",
+        type=float,
+        default=10500.0,
+        help=(
+            "Fitted Teff threshold in K above which auto line diagnostics include "
+            "hot-star He I panels."
         ),
     )
     parser.add_argument(
@@ -195,9 +204,22 @@ def _coerce_segments(spectrum):
     return [spectrum]
 
 
-def _parse_line_groups(value):
+def _parse_line_groups(value, result=None, hot_teff_threshold=10500.0):
+    value = str(value).strip().lower()
+    if value == "auto":
+        groups = ["balmer", "caii", "mgii"]
+        teff = None
+        if result is not None:
+            try:
+                teff = float(result["teff"])
+            except (KeyError, TypeError, ValueError):
+                teff = None
+        if teff is not None and np.isfinite(teff) and teff >= hot_teff_threshold:
+            groups.append("hei")
+        return groups
+
     groups = []
-    for raw in str(value).split(","):
+    for raw in value.split(","):
         group = raw.strip().lower()
         if not group:
             continue
@@ -222,7 +244,7 @@ def _line_windows_for_used_pixels(segment, used_mask, groups, half_width_A):
         return []
     wmin = float(np.nanmin(wave[finite_used]))
     wmax = float(np.nanmax(wave[finite_used]))
-    windows = []
+    raw_windows = []
     seen = set()
     for group in groups:
         for label, center in COMMON_LINES[group]:
@@ -234,8 +256,42 @@ def _line_windows_for_used_pixels(segment, used_mask, groups, half_width_A):
                 continue
             seen.add(key)
             line_label = "{0} {1:.1f} Å".format(label, center)
-            windows.append((line_label, center - half_width_A, center + half_width_A))
-    return sorted(windows, key=lambda item: item[1])
+            raw_windows.append((line_label, center - half_width_A, center + half_width_A))
+    return _merge_overlapping_line_windows(sorted(raw_windows, key=lambda item: item[1]))
+
+
+def _merge_overlapping_line_windows(windows):
+    if not windows:
+        return []
+    merged = []
+    current_labels = [windows[0][0]]
+    current_min = float(windows[0][1])
+    current_max = float(windows[0][2])
+    current_center = 0.5 * (current_min + current_max)
+    current_half_width = 0.5 * (current_max - current_min)
+    for label, wmin, wmax in windows[1:]:
+        wmin = float(wmin)
+        wmax = float(wmax)
+        center = 0.5 * (wmin + wmax)
+        half_width = 0.5 * (wmax - wmin)
+        very_close = abs(center - current_center) <= 0.75 * min(
+            current_half_width,
+            half_width,
+        )
+        if wmin <= current_max and very_close:
+            current_labels.append(label)
+            current_max = max(current_max, wmax)
+            current_center = 0.5 * (current_min + current_max)
+            current_half_width = 0.5 * (current_max - current_min)
+        else:
+            merged.append((" + ".join(current_labels), current_min, current_max))
+            current_labels = [label]
+            current_min = wmin
+            current_max = wmax
+            current_center = center
+            current_half_width = half_width
+    merged.append((" + ".join(current_labels), current_min, current_max))
+    return merged
 
 
 def _line_panel_columns(n_windows):
@@ -268,8 +324,61 @@ def _derive_line_plot_path(output_line_plot, output_plot, segment_index=None):
     return str(new_path)
 
 
+def _print_interpretation_hints(args, result, fit_kwargs):
+    flags = set(getattr(result, "quality_flags", ()))
+    bounds = fit_kwargs.get("bounds", None)
+    teff = None
+    teff_upper = None
+    try:
+        teff = float(result["teff"])
+    except (KeyError, TypeError, ValueError):
+        teff = None
+    if bounds is not None:
+        try:
+            teff_upper = float(bounds[1][0])
+        except (IndexError, TypeError, ValueError):
+            teff_upper = None
+
+    if (
+        args.defaults_mode == "quicklook"
+        and {"high_chi2", "structured_residuals"} & flags
+    ):
+        print(
+            "\nHint: this quicklook fit is flagged for structured/high residuals. "
+            "Try rerunning with --defaults-mode diagnostic to widen the Teff "
+            "search before interpreting individual line mismatches.",
+            flush=True,
+        )
+    if (
+        args.defaults_mode == "quicklook"
+        and teff is not None
+        and teff_upper is not None
+        and np.isfinite(teff)
+        and np.isfinite(teff_upper)
+        and teff >= teff_upper - 250.0
+    ):
+        print(
+            "Hint: the fitted Teff is close to the quicklook upper bound "
+            "({0:.0f} K). A hotter diagnostic run may be more appropriate.".format(
+                teff_upper
+            ),
+            flush=True,
+        )
+
+
 def _build_line_diagnostic_plots(args, spectrum, result):
-    groups = _parse_line_groups(args.line_groups)
+    groups = _parse_line_groups(
+        args.line_groups,
+        result=result,
+        hot_teff_threshold=args.hot_line_teff_threshold,
+    )
+    if str(args.line_groups).strip().lower() == "auto":
+        print(
+            "Auto line diagnostics selected groups: {0}.".format(
+                ", ".join(groups)
+            ),
+            flush=True,
+        )
     segments = _coerce_segments(spectrum)
     models = tuple(getattr(result, "models", ()))
     used_masks = tuple(getattr(result, "used_masks", ()))
@@ -382,6 +491,7 @@ def main(argv=None):
     print(json.dumps(summary, indent=2))
     print()
     print(result.quality_report_text())
+    _print_interpretation_hints(args, result, fit_kwargs)
     print(
         "\nInterpretation: this example demonstrates ingestion, a native-grid "
         "full-spectrum PHOENIX fit, structured results, and plotting. It is not "

@@ -72,10 +72,13 @@ The default plot focuses on the wavelength span actually used in the fit and
 draws PHOENIX/model residuals only on fitted pixels; this avoids making masked
 or out-of-window data look as if they influenced the solution. Use
 `--plot-xlim all` when you deliberately want a full-segment mask/debug view.
-By default, the script also opens a companion zoomed-line diagnostic figure for
-identified Balmer/Ca/He lines that overlap fitted pixels. The number of panels
-is determined from the lines found in the fitted wavelength range. Disable this
-with `--no-line-diagnostics`, or customize it with `--line-groups` and
+By default, the script also opens a companion zoomed-line diagnostic figure.
+`--line-groups auto` selects Balmer, Ca II, and Mg II 4481 lines that overlap
+fitted pixels, and adds He I only when the fitted temperature is hot enough for
+that diagnostic to be meaningful. Ca II H is labelled as the Ca II H + Hε blend.
+The number of panels is determined from the lines found in the fitted wavelength
+range; overlapping hot-line windows are merged into one panel. Disable this with
+`--no-line-diagnostics`, or customize it with `--line-groups` and
 `--line-window-half-width`. If `--output-plot` is set, the line diagnostics are
 saved automatically as a `*_lines` companion image unless `--output-line-plot`
 is specified.

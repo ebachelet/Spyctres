@@ -27,19 +27,51 @@ def test_line_windows_are_selected_from_fitted_pixels_only():
     windows = module._line_windows_for_used_pixels(
         segment,
         used,
-        groups=["balmer", "caii", "hei"],
+        groups=["balmer", "caii", "mgii"],
         half_width_A=20.0,
     )
 
     labels = [window[0] for window in windows]
     assert labels == [
         "Ca II K 3933.7 Å",
-        "Ca II H 3968.5 Å",
+        "Ca II H + Hε 3968.5 Å",
         "Hδ 4101.7 Å",
         "Hγ 4340.5 Å",
-        "He I 4471.5 Å",
+        "Mg II 4481.1 Å",
         "Hβ 4861.3 Å",
     ]
+
+
+def test_auto_line_groups_add_hot_lines_only_for_hot_fits():
+    module = _load_example_module()
+
+    assert module._parse_line_groups("auto", result={"teff": 9800.0}) == [
+        "balmer",
+        "caii",
+        "mgii",
+    ]
+    assert module._parse_line_groups("auto", result={"teff": 11000.0}) == [
+        "balmer",
+        "caii",
+        "mgii",
+        "hei",
+    ]
+
+
+def test_overlapping_hot_line_windows_are_merged():
+    module = _load_example_module()
+    segment = _Segment(np.linspace(4400.0, 4520.0, 500))
+    used = np.ones(segment.wave.size, dtype=bool)
+
+    windows = module._line_windows_for_used_pixels(
+        segment,
+        used,
+        groups=["mgii", "hei"],
+        half_width_A=20.0,
+    )
+
+    assert len(windows) == 1
+    assert windows[0][0] == "He I 4471.5 Å + Mg II 4481.1 Å"
 
 
 def test_line_panel_columns_follow_identified_line_count():
