@@ -14,6 +14,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
+from .preprocessing import (
+    OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
+    nonstellar_feature_metadata,
+)
 
 
 @dataclass(frozen=True)
@@ -327,6 +331,31 @@ def _parameter_defaults(window_label, mode):
     }
 
 
+def _telluric_catalog_overlaps(regions):
+    """Return broad telluric catalog features overlapping suggested regions."""
+    overlaps = []
+    for meta in nonstellar_feature_metadata(OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES):
+        feature_lo, feature_hi = meta["region_A"]
+        overlap_A = 0.0
+        for region_lo, region_hi in regions:
+            overlap_A += max(
+                0.0,
+                min(float(feature_hi), float(region_hi))
+                - max(float(feature_lo), float(region_lo)),
+            )
+        if overlap_A > 0.0:
+            item = dict(meta)
+            item["overlap_A"] = float(overlap_A)
+            item["default_action"] = "warn_only"
+            item["masking_note"] = (
+                "Broad catalog telluric regions are for warning/provenance. "
+                "Use telluric_transmission_exclusion_mask() for opt-in "
+                "high-resolution transmission-threshold masking."
+            )
+            overlaps.append(item)
+    return overlaps
+
+
 def suggest_phoenix_fit_defaults(
     spectrum,
     mode="quicklook",
@@ -361,6 +390,7 @@ def suggest_phoenix_fit_defaults(
     summary = _coverage_summary(segments)
     window = _choose_window(summary, mode)
     params = _parameter_defaults(window["label"], mode)
+    telluric_overlaps = _telluric_catalog_overlaps(window["regions"])
 
     multistart = 1 if mode == "quicklook" else 2
     rv_grid_n = 41 if mode == "quicklook" else 61
@@ -401,6 +431,14 @@ def suggest_phoenix_fit_defaults(
         warnings.append(
             "selected wavelength span is narrow; treat atmospheric parameters as local diagnostics"
         )
+    if telluric_overlaps:
+        warnings.append(
+            "suggested fit window overlaps broad topocentric telluric catalog "
+            "regions; these are warning/provenance regions, not the preferred "
+            "actual mask. Use telluric_transmission_exclusion_mask() if "
+            "telluric masking is explicitly desired and the wavelength frame "
+            "is suitable."
+        )
 
     fit_kwargs = {
         "p0": params["p0"],
@@ -424,6 +462,13 @@ def suggest_phoenix_fit_defaults(
         "science_case": science_case,
         "coverage": summary,
         "window": window,
+        "telluric_catalog_policy": {
+            "default_action": "warn_only",
+            "feature_source": "broad_catalog_regions",
+            "actual_masking_preference": "transmission_threshold",
+            "recommended_helper": "telluric_transmission_exclusion_mask",
+            "overlaps": telluric_overlaps,
+        },
         "assumption_policy": "metadata-backed where available; otherwise conservative and provenance-recorded",
     }
     return PhoenixFitDefaults(

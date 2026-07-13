@@ -24,6 +24,7 @@ from Spyctres.preprocessing import (
     nonstellar_feature_masks,
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
+    telluric_transmission_exclusion_mask,
 )
 
 
@@ -270,6 +271,83 @@ def test_telluric_features_are_topocentric_fixed_and_cross_reference_dib():
     assert nonstellar_feature_regions("telluric_o2_alpha_6280") == [
         (6260.0, 6300.0)
     ]
+
+
+def test_telluric_transmission_exclusion_mask_records_precise_mask_provenance():
+    def loader(threshold):
+        assert threshold == pytest.approx(0.9)
+
+        def transmission(wave):
+            return np.ones_like(np.asarray(wave, dtype=float))
+
+        def mask(wave):
+            wave = np.asarray(wave, dtype=float)
+            return np.where((wave >= 2.0) & (wave <= 3.0), 1.0, 0.0)
+
+        return transmission, mask
+
+    segment = SpectrumSegment(
+        wave=[1.0, 2.0, 3.0, 4.0],
+        flux=[1.0, 1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1, 0.1],
+        observer_frame="topocentric",
+        stellar_rest_status="raw",
+    )
+
+    mask = telluric_transmission_exclusion_mask(threshold=0.9, loader=loader)
+    result = compose_fit_mask(segment, exclude_masks=[mask])
+
+    assert np.array_equal(result.effective_mask, [True, False, False, True])
+    metadata = result.settings["exclude_mask_metadata"][mask.name]
+    assert metadata["method"] == "transmission_threshold"
+    assert metadata["threshold"] == pytest.approx(0.9)
+    assert metadata["coarse_mask"] is False
+    assert metadata["model_file"] == "LBL_A10_s0_w050_R0300000_T.fits"
+    assert result.settings["telluric_mask_frame_warnings"] == []
+
+
+def test_topocentric_telluric_mask_warns_on_stellar_rest_frame():
+    def loader(_threshold):
+        return (
+            lambda wave: np.ones_like(np.asarray(wave, dtype=float)),
+            lambda wave: np.asarray(wave, dtype=float) > 1.0,
+        )
+
+    segment = SpectrumSegment(
+        wave=[1.0, 2.0, 3.0],
+        flux=[1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1],
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+    )
+
+    mask = telluric_transmission_exclusion_mask(threshold=0.95, loader=loader)
+    result = compose_fit_mask(segment, exclude_masks=[mask])
+    warning = result.settings["telluric_mask_frame_warnings"][0]
+
+    assert warning["warning"] == "telluric_mask_frame_ambiguous"
+    assert warning["observer_frame"] == "barycentric"
+    assert "telluric_mask_frame_ambiguous" in result.settings["quality_flags"]
+
+
+def test_catalog_telluric_mask_is_labelled_coarse_and_warns_on_frame():
+    segment = SpectrumSegment(
+        wave=np.linspace(7550.0, 7660.0, 12),
+        flux=np.ones(12),
+        err=np.ones(12),
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+    )
+
+    mask = nonstellar_feature_mask("telluric_o2_a_7605")
+    result = compose_fit_mask(segment, exclude_masks=[mask])
+    metadata = result.settings["exclude_mask_metadata"][mask.name]
+
+    assert metadata["method"] == "broad_catalog_regions"
+    assert metadata["coarse_mask"] is True
+    assert metadata["warning"] == "coarse_telluric_mask"
+    assert "coarse_telluric_mask_applied" in result.settings["quality_flags"]
+    assert "telluric_mask_frame_ambiguous" in result.settings["quality_flags"]
 
 
 def test_overlapping_nonstellar_features_reports_valid_coverage_overlap():

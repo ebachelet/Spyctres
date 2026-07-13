@@ -283,6 +283,7 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
     ]
     assert callable(Spyctres.annotate_nonstellar_features)
     assert callable(Spyctres.diagnose_known_residual_windows)
+    assert callable(Spyctres.telluric_transmission_exclusion_mask)
     assert Spyctres.KNOWN_RESIDUAL_WINDOWS[0]["linked_feature"] == "dib_4882"
 
 

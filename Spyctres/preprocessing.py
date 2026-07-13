@@ -279,10 +279,12 @@ class ExclusionMaskSpec:
     after numeric thresholding, True means the pixel is rejected/excluded.
     ``ExclusionMaskSpec`` gives that callable a stable provenance name without
     requiring users to remember the accepted tuple/dict shorthand forms.
+    Optional metadata is copied into mask provenance when masks are composed.
     """
 
     name: str
     callable: object
+    metadata: dict | None = None
 
     def __post_init__(self):
         name = str(self.name).strip()
@@ -291,12 +293,14 @@ class ExclusionMaskSpec:
         if not callable(self.callable):
             raise TypeError("ExclusionMaskSpec.callable must be callable.")
         object.__setattr__(self, "name", name)
+        metadata = {} if self.metadata is None else dict(self.metadata)
+        object.__setattr__(self, "metadata", metadata)
 
     def __call__(self, wave):
         return self.callable(wave)
 
 
-def exclusion_mask(name, fn):
+def exclusion_mask(name, fn, metadata=None):
     """Return a named exclusion-mask specification.
 
     Examples
@@ -308,7 +312,53 @@ def exclusion_mask(name, fn):
     ``value > mask_threshold``. Nonfinite numeric outputs are rejected and
     recorded in mask provenance.
     """
-    return ExclusionMaskSpec(name=name, callable=fn)
+    return ExclusionMaskSpec(name=name, callable=fn, metadata=metadata)
+
+
+def telluric_transmission_exclusion_mask(
+    threshold=0.95,
+    *,
+    name="telluric:transmission_threshold",
+    loader=None,
+):
+    """Return a named high-resolution telluric transmission exclusion mask.
+
+    This wraps Spyctres' legacy ``load_telluric_lines(threshold)`` mechanism in
+    the newer named-mask API.  It is intentionally distinct from the broad
+    Phase-A telluric catalog regions: this helper is the preferred opt-in path
+    for actual telluric masking when the wavelength frame is suitable.
+
+    The returned callable follows the exclusion-mask convention:
+    ``True`` means reject this pixel from the stellar fit.
+    """
+    threshold = float(threshold)
+    if not np.isfinite(threshold) or threshold <= 0.0 or threshold >= 1.0:
+        raise ValueError("telluric transmission threshold must satisfy 0 < threshold < 1.")
+    if loader is None:
+        from .Spyctres import load_telluric_lines
+
+        loader = load_telluric_lines
+    _transmission, telluric_mask = loader(threshold)
+
+    def _mask(wave):
+        return np.asarray(telluric_mask(wave)) > 0.5
+
+    metadata = {
+        "mask_type": "telluric",
+        "method": "transmission_threshold",
+        "model_file": "LBL_A10_s0_w050_R0300000_T.fits",
+        "threshold": threshold,
+        "frame_type": "topocentric_fixed",
+        "feature_frame": "topocentric",
+        "action": "masked",
+        "coarse_mask": False,
+        "preferred_for_actual_telluric_masking": True,
+        "note": (
+            "High-resolution telluric transmission-threshold mask; distinct "
+            "from broad catalog-region telluric warnings."
+        ),
+    }
+    return exclusion_mask(name, _mask, metadata=metadata)
 
 
 def nonstellar_feature_mask(names=("dib_4428",), padding_A=0.0):
@@ -320,7 +370,12 @@ def nonstellar_feature_mask(names=("dib_4428",), padding_A=0.0):
     feature_names = tuple(names) if not isinstance(names, str) else (names,)
     regions = nonstellar_feature_regions(feature_names, padding_A=padding_A)
     label = "nonstellar:" + "+".join(str(name).strip().lower() for name in feature_names)
-    return exclusion_mask(label, lambda wave: _inside_regions(np.asarray(wave, dtype=float), regions))
+    metadata = _catalog_feature_mask_metadata(feature_names, padding_A=padding_A)
+    return exclusion_mask(
+        label,
+        lambda wave: _inside_regions(np.asarray(wave, dtype=float), regions),
+        metadata=metadata,
+    )
 
 
 def nonstellar_feature_masks(names=("dib_4428",), padding_A=0.0):
@@ -339,8 +394,41 @@ def nonstellar_feature_masks(names=("dib_4428",), padding_A=0.0):
 
 
 def known_feature_masks(names=("dib_4428",), padding_A=0.0):
-    """Alias for non-stellar feature masks using reviewer-facing terminology."""
+    """Alias for non-stellar feature masks using public diagnostic terminology."""
     return nonstellar_feature_masks(names=names, padding_A=padding_A)
+
+
+def _catalog_feature_mask_metadata(names, padding_A=0.0):
+    metadata = nonstellar_feature_metadata(names, padding_A=padding_A)
+    kinds = {item.get("kind") for item in metadata}
+    telluric_ids = [
+        item["id"] for item in metadata if item.get("kind") == "telluric_band"
+    ]
+    return {
+        "mask_type": "nonstellar_catalog_region",
+        "method": "broad_catalog_regions",
+        "catalog_feature_ids": [item["id"] for item in metadata],
+        "catalog_feature_names": [item["name"] for item in metadata],
+        "feature_types": sorted(str(kind) for kind in kinds if kind),
+        "regions_A": [item["region_A"] for item in metadata],
+        "padding_A": float(padding_A),
+        "action": "masked",
+        "coarse_mask": bool(telluric_ids),
+        "warning": "coarse_telluric_mask" if telluric_ids else None,
+        "quality_flags": (
+            ["coarse_telluric_mask_applied"] if telluric_ids else []
+        ),
+        "frame_type": (
+            "topocentric_fixed"
+            if telluric_ids and len(telluric_ids) == len(metadata)
+            else "mixed_or_feature_specific"
+        ),
+        "feature_frame": (
+            "topocentric"
+            if telluric_ids and len(telluric_ids) == len(metadata)
+            else "mixed_or_feature_specific"
+        ),
+    }
 
 
 def overlapping_nonstellar_features(spectrum_or_segments, names=("dib_4428",), padding_A=0.0):
@@ -627,6 +715,16 @@ def _mask_callable_name(mask_spec, fallback="exclude_mask"):
     return getattr(mask_spec, "__name__", type(mask_spec).__name__) or fallback
 
 
+def _mask_callable_metadata(mask_spec):
+    """Return JSON-safe metadata attached to a mask callable spec."""
+    if isinstance(mask_spec, ExclusionMaskSpec):
+        return dict(mask_spec.metadata or {})
+    if isinstance(mask_spec, dict):
+        metadata = mask_spec.get("metadata", {})
+        return dict(metadata or {})
+    return {}
+
+
 def _is_named_mask_tuple(mask_spec):
     return (
         isinstance(mask_spec, tuple)
@@ -664,7 +762,7 @@ def _mask_callable_function(mask_spec):
 
 
 def _normalize_mask_specs(exclude_mask=None, exclude_masks=None):
-    """Normalize one or more mask callable specs to ``(name, callable)`` pairs."""
+    """Normalize mask specs to ``(name, callable, metadata)`` triples."""
     if exclude_mask is not None and exclude_masks is not None:
         raise ValueError(
             "Pass exclusion masks through either exclude_mask or exclude_masks, "
@@ -695,14 +793,59 @@ def _normalize_mask_specs(exclude_mask=None, exclude_masks=None):
     for spec in specs:
         name = _mask_callable_name(spec)
         fn = _mask_callable_function(spec)
+        metadata = _mask_callable_metadata(spec)
         if name in used_names:
             raise ValueError(
                 "Duplicate exclusion mask name {0!r}; use unique names so "
                 "mask provenance and overlap counts remain unambiguous.".format(name)
             )
         used_names.add(name)
-        normalized.append((name, fn))
+        normalized.append((name, fn, metadata))
     return normalized
+
+
+def _telluric_frame_warning_for_segment(seg, callable_name, metadata):
+    """Return a frame warning for topocentric telluric masks, if needed."""
+    if metadata.get("frame_type") != "topocentric_fixed":
+        return None
+    mask_type = str(metadata.get("mask_type", "")).lower()
+    method = str(metadata.get("method", "")).lower()
+    is_telluric = (
+        mask_type == "telluric"
+        or "telluric" in mask_type
+        or method == "transmission_threshold"
+        or any(
+            str(feature_type) == "telluric_band"
+            for feature_type in metadata.get("feature_types", [])
+        )
+    )
+    if not is_telluric:
+        return None
+    observer_frame = str(getattr(seg, "observer_frame", "unknown")).lower()
+    stellar_rest_status = str(
+        getattr(seg, "stellar_rest_status", "unknown")
+    ).lower()
+    reasons = []
+    if observer_frame != "topocentric":
+        reasons.append("observer_frame_not_known_topocentric")
+    if stellar_rest_status != "raw":
+        reasons.append("stellar_rest_status_not_known_raw")
+    if not reasons:
+        return None
+    return {
+        "mask": callable_name,
+        "warning": "telluric_mask_frame_ambiguous",
+        "frame_type": metadata.get("frame_type"),
+        "feature_frame": metadata.get("feature_frame"),
+        "observer_frame": observer_frame,
+        "stellar_rest_status": stellar_rest_status,
+        "reasons": reasons,
+        "message": (
+            "Telluric features are topocentric. This spectrum is not known to "
+            "be on a raw topocentric wavelength grid, so fixed telluric mask "
+            "intervals may be misaligned."
+        ),
+    }
 
 
 def _inside_regions(wave, regions):
@@ -783,10 +926,19 @@ def compose_fit_mask(
 
     callable_masks = []
     nonfinite_callable_masks = []
-    for callable_name, callable_fn in _normalize_mask_specs(
+    callable_metadata = {}
+    telluric_frame_warnings = []
+    callable_quality_flags = []
+    for callable_name, callable_fn, metadata in _normalize_mask_specs(
         exclude_mask=exclude_mask,
         exclude_masks=exclude_masks,
     ):
+        callable_metadata[callable_name] = dict(metadata)
+        callable_quality_flags.extend(str(flag) for flag in metadata.get("quality_flags", []))
+        warning = _telluric_frame_warning_for_segment(seg, callable_name, metadata)
+        if warning is not None:
+            telluric_frame_warnings.append(warning)
+            callable_quality_flags.append("telluric_mask_frame_ambiguous")
         raw_values = callable_fn(wave)
         callable_mask = coerce_boolean_mask(
             raw_values,
@@ -844,6 +996,11 @@ def compose_fit_mask(
         "explicit_exclusion_union_mask_name": "exclude_mask",
         "individual_exclusion_masks": list(callable_names),
         "exclude_mask_union_derived_from": list(callable_names),
+        "exclude_mask_metadata": {
+            name: callable_metadata.get(name, {}) for name in callable_names
+        },
+        "telluric_mask_frame_warnings": telluric_frame_warnings,
+        "quality_flags": sorted(set(callable_quality_flags)),
         "mask_threshold": mask_threshold,
         "numeric_mask_threshold": mask_threshold,
         "numeric_mask_reject_if": "> threshold",

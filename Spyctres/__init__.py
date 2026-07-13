@@ -36,6 +36,7 @@ from .preprocessing import (
     nonstellar_feature_metadata,
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
+    telluric_transmission_exclusion_mask,
 )
 from .waveutils import convert_segment_wavelength_medium, convert_wavelength_medium
 from .fitting import FitProgressEvent
@@ -60,7 +61,7 @@ __all__ = [
     "OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES",
     "known_feature_masks", "nonstellar_feature_mask", "nonstellar_feature_masks",
     "nonstellar_feature_metadata", "nonstellar_feature_regions",
-    "overlapping_nonstellar_features",
+    "overlapping_nonstellar_features", "telluric_transmission_exclusion_mask",
     "convert_wavelength_medium", "convert_segment_wavelength_medium",
     "FitProgressEvent",
 ]

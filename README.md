@@ -220,6 +220,21 @@ window, parameter bounds, coarse grid, and RV scan budget from spectrum coverage
 and metadata. It returns provenance, reasons, and warnings; it does not hide
 air/vacuum, frame, or stellar-type assumptions, and every suggested keyword can
 be overridden by expert users.
+Broad telluric catalog regions are used for warning/provenance only by default.
+They are intentionally coarser than Spyctres' legacy high-resolution telluric
+transmission template. When you explicitly want to mask telluric absorption,
+prefer the provenance-aware wrapper:
+
+```python
+from Spyctres import telluric_transmission_exclusion_mask
+
+telluric_mask = telluric_transmission_exclusion_mask(threshold=0.90)
+```
+
+This returns an `ExclusionMaskSpec` compatible with `exclude_masks=` and records
+`method="transmission_threshold"` in mask provenance. Broad catalog telluric
+masks are still available as explicit coarse fallbacks through
+`known_feature_masks()` / `nonstellar_feature_masks()`.
 Long-running fits accept a `progress_callback`; callbacks now receive a
 `FitProgressEvent` with fields such as `phase`, `message`, `fraction`, and
 `elapsed_s`, while `str(event)` remains the printable status message.

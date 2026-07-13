@@ -48,6 +48,12 @@ def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():
     assert any("wavelength medium is unknown" in item for item in suggestion.warnings)
     assert any("lacks formal uncertainties" in item for item in suggestion.warnings)
     assert any("lacks resolution metadata" in item for item in suggestion.warnings)
+    assert any("telluric catalog" in item for item in suggestion.warnings)
+    telluric_policy = suggestion.provenance["telluric_catalog_policy"]
+    assert telluric_policy["default_action"] == "warn_only"
+    assert telluric_policy["actual_masking_preference"] == "transmission_threshold"
+    assert telluric_policy["recommended_helper"] == "telluric_transmission_exclusion_mask"
+    assert any(item["id"] == "telluric_o2_b_6867" for item in telluric_policy["overlaps"])
 
 
 def test_suggest_phoenix_fit_defaults_uses_shorter_rv_scan_for_stellar_rest_collection():
@@ -79,6 +85,7 @@ def test_suggest_phoenix_fit_defaults_uses_shorter_rv_scan_for_stellar_rest_coll
     assert suggestion.fit_kwargs["multistart"] == 2
     assert suggestion.fit_kwargs["rv_grid_n"] == 21
     assert suggestion.provenance["coverage"]["stellar_rest_status"] == ["corrected"]
+    assert suggestion.provenance["telluric_catalog_policy"]["overlaps"]
 
 
 def test_prepare_phoenix_fit_kwargs_applies_expert_overrides_and_clips_grids():

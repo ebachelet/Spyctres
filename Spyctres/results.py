@@ -406,6 +406,15 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "Inspect the mask provenance before comparing this fit with unmasked "
         "runs."
     ),
+    "telluric_mask_frame_ambiguous": (
+        "A topocentric telluric mask was applied to a spectrum whose wavelength "
+        "grid is not known to be raw/topocentric; the masked telluric intervals "
+        "may be misaligned."
+    ),
+    "coarse_telluric_mask_applied": (
+        "A broad catalog-region telluric mask was applied. This is a coarse "
+        "fallback, not the high-resolution transmission-threshold mask."
+    ),
 }
 
 

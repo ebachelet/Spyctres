@@ -113,6 +113,27 @@ Balmer structure, and model-domain limitations. A DIB-window residual in this
 example is a candidate explanation to test, not a settled identification.
 The shared known-feature catalog also contains common topocentric telluric
 bands, but the simple UVB example only annotates the DIB subset.
+These broad telluric catalog regions are for warning, annotation, and coarse
+provenance. They are not a replacement for Spyctres' legacy high-resolution
+telluric transmission template. When actual telluric masking is requested,
+prefer the transmission-threshold helper:
+
+```python
+from Spyctres import telluric_transmission_exclusion_mask
+
+telluric_mask = telluric_transmission_exclusion_mask(threshold=0.90)
+result = fit_stellar_spectrum(
+    spectrum,
+    exclude_masks=[telluric_mask],
+    # other PHOENIX settings...
+)
+```
+
+The helper records `method="transmission_threshold"` provenance and warns in
+mask metadata if the spectrum is not known to be on a raw topocentric wavelength
+grid. Broad catalog telluric masks remain available through
+`known_feature_masks()` / `nonstellar_feature_masks()`, but should be treated as
+explicit coarse fallbacks.
 For controlled mask experiments, run the example once with the default policy
 and once with `--mask-dibs`, then compare the two saved JSON products with
 `Spyctres.compare_fit_results()`. The comparison helper reports parameter,
