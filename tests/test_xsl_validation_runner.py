@@ -50,6 +50,35 @@ def test_json_native_rejects_nonfinite_json_extensions():
     assert converted == {"array": [1.0, None], "scalar": 2.0}
 
 
+def test_xsl_initialization_configuration_defaults_to_neutral():
+    parser = xsl_validation.build_parser()
+    args = parser.parse_args(["manifest.csv", "--output", "results.json"])
+
+    config = xsl_validation._run_configuration(args)
+
+    assert args.initialization == "neutral"
+    assert config["initialization"] == "neutral"
+    assert config["neutral_initialization"] is True
+
+
+def test_xsl_reference_seeded_mode_is_explicit():
+    parser = xsl_validation.build_parser()
+    args = parser.parse_args(
+        [
+            "manifest.csv",
+            "--output",
+            "results.json",
+            "--initialization",
+            "reference_seeded",
+        ]
+    )
+
+    config = xsl_validation._run_configuration(args)
+
+    assert config["initialization"] == "reference_seeded"
+    assert config["neutral_initialization"] is False
+
+
 def test_ordinary_statistics_exclude_stress_targets():
     results = [
         {
@@ -201,10 +230,14 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
 
     assert writes == [1, 2, 2]
     assert [call["multistart"] for call in fit_calls] == [4, 2]
+    assert fit_calls[0]["p0"] == (5750.0, 0.0, 4.0, 0.0)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["run_configuration"]["mdeg"] == 2
+    assert payload["run_configuration"]["initialization"] == "neutral"
     assert payload["ordinary_recovery_statistics"]["count"] == 1
     assert payload["results"][1]["statistics_group"] == "diagnostic_only"
+    assert payload["results"][0]["initialization"]["mode"] == "neutral"
+    assert payload["results"][0]["initialization"]["reference_seeded"] is False
     assert payload["results"][0]["quality_report"]["mask_fraction"] == 0.1
     assert payload["results"][0]["initialization"]["local_solutions"][0][
         "start"

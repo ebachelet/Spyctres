@@ -19,6 +19,11 @@ from .results import (
 )
 from .linefitting import LineSpec, LineFitConfig, LineFitResult, fit_line, fit_lines
 from .plotting import plot_fit_referee, plot_line_fit, plot_xsl_validation_payload
+from .diagnostics import (
+    KNOWN_RESIDUAL_WINDOWS,
+    annotate_nonstellar_features,
+    diagnose_known_residual_windows,
+)
 from .preprocessing import (
     NONSTELLAR_FEATURES,
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
@@ -48,6 +53,8 @@ __all__ = [
     "format_fit_quality_report",
     "LineSpec", "LineFitConfig", "LineFitResult", "fit_line", "fit_lines",
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
+    "KNOWN_RESIDUAL_WINDOWS", "annotate_nonstellar_features",
+    "diagnose_known_residual_windows",
     "ExclusionMaskSpec", "exclusion_mask",
     "NONSTELLAR_FEATURES", "OPTICAL_DIB_DIAGNOSTIC_FEATURES",
     "OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES",

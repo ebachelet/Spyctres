@@ -108,10 +108,10 @@ NONSTELLAR_FEATURES = {
             "entangled with nearby telluric oxygen absorption."
         ),
         reference_ids=("hobbs2008_dib_catalog_hd204827",),
-        cross_references=("telluric_o2_alpha_6280",),
+        cross_references=("telluric_o2_gamma_6280",),
     ),
-    "telluric_o2_alpha_6280": NonStellarFeature(
-        name="Telluric O2 alpha 6280",
+    "telluric_o2_gamma_6280": NonStellarFeature(
+        name="Telluric O2 6280 region",
         center_A=6280.0,
         half_width_A=20.0,
         kind="telluric_band",
@@ -203,10 +203,16 @@ NONSTELLAR_FEATURES = {
         velocity_margin_kms=None,
     ),
 }
+# Backward-compatible alias for JSON/tests/scripts produced before the 6280 Å
+# region was renamed.  The public label avoids the ambiguous "alpha" wording;
+# optical O2 A and B conventionally refer to the ~7605 Å and ~6867 Å bands.
+NONSTELLAR_FEATURES["telluric_o2_alpha_6280"] = NONSTELLAR_FEATURES[
+    "telluric_o2_gamma_6280"
+]
 
 OPTICAL_DIB_DIAGNOSTIC_FEATURES = ("dib_4428", "dib_4882")
 OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES = (
-    "telluric_o2_alpha_6280",
+    "telluric_o2_gamma_6280",
     "telluric_o2_b_6867",
     "telluric_o2_a_7605",
     "telluric_h2o_7200",
@@ -352,23 +358,47 @@ def overlapping_nonstellar_features(spectrum_or_segments, names=("dib_4428",), p
     for meta in nonstellar_feature_metadata(names, padding_A=padding_A):
         wmin, wmax = meta["region_A"]
         total_overlap = 0.0
+        total_overlap_pixels = 0
+        total_valid_pixels = 0
         segment_names = []
+        segment_overlaps = []
         for segment in segments:
             wave = np.asarray(segment.wave, dtype=float)
             mask = np.asarray(getattr(segment, "mask", np.ones(wave.shape, dtype=bool)), dtype=bool)
             good = mask & np.isfinite(wave)
             if not np.any(good):
                 continue
+            total_valid_pixels += int(np.count_nonzero(good))
             lo = float(np.nanmin(wave[good]))
             hi = float(np.nanmax(wave[good]))
             overlap = max(0.0, min(wmax, hi) - max(wmin, lo))
             if overlap > 0.0:
+                in_feature = good & (wave >= float(wmin)) & (wave <= float(wmax))
+                overlap_pixels = int(np.count_nonzero(in_feature))
                 total_overlap += overlap
+                total_overlap_pixels += overlap_pixels
                 segment_names.append(getattr(segment, "name", None))
+                segment_overlaps.append(
+                    {
+                        "segment": getattr(segment, "name", None),
+                        "overlap_A": float(overlap),
+                        "overlap_pixels": overlap_pixels,
+                        "valid_pixels": int(np.count_nonzero(good)),
+                        "overlap_fraction_of_valid_pixels": float(
+                            overlap_pixels / max(1, int(np.count_nonzero(good)))
+                        ),
+                    }
+                )
         if total_overlap > 0.0:
             item = dict(meta)
             item["overlap_A"] = float(total_overlap)
+            item["overlap_pixels"] = int(total_overlap_pixels)
+            item["valid_pixels"] = int(total_valid_pixels)
+            item["overlap_fraction_of_valid_pixels"] = float(
+                total_overlap_pixels / max(1, total_valid_pixels)
+            )
             item["segments"] = [name for name in segment_names if name]
+            item["segment_overlaps"] = segment_overlaps
             overlaps.append(item)
     return overlaps
 

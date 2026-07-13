@@ -90,11 +90,22 @@ def build_parser():
     parser.add_argument("--wave-min", type=float, default=4000.0)
     parser.add_argument("--wave-max", type=float, default=9000.0)
     parser.add_argument(
+        "--initialization",
+        choices=("neutral", "reference_seeded"),
+        default="neutral",
+        help=(
+            "Starting point policy. The default neutral mode avoids seeding "
+            "the validation with literature labels; reference_seeded is a "
+            "diagnostic local-convergence test only, not an independent "
+            "validation baseline."
+        ),
+    )
+    parser.add_argument(
         "--neutral-initialization",
         action="store_true",
         help=(
-            "Use neutral p0 values instead of the literature values. This tests "
-            "local convergence only; it is not a broad-grid blind classifier."
+            "Backward-compatible alias for --initialization neutral. Neutral "
+            "initialization is now the default."
         ),
     )
     parser.add_argument(
@@ -215,11 +226,15 @@ def _validate_manifest_rows(rows):
 
 def _run_configuration(args):
     """Return checkpoint-critical settings that make resume scientifically safe."""
+    initialization = (
+        "neutral" if args.neutral_initialization else args.initialization
+    )
     return {
         "wave_medium": args.wave_medium,
         "fit_wave_range_A": [float(args.wave_min), float(args.wave_max)],
         "mdeg": int(args.mdeg),
-        "neutral_initialization": bool(args.neutral_initialization),
+        "initialization": initialization,
+        "neutral_initialization": initialization == "neutral",
         "coarse_init_override": args.coarse_init,
         "multistart_override": args.multistart,
         "max_nfev_override": args.max_nfev,
@@ -385,6 +400,8 @@ def _atomic_write_json(path, payload):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.neutral_initialization:
+        args.initialization = "neutral"
     if args.plot_points_per_segment < 0:
         raise ValueError("plot_points_per_segment must be >= 0.")
     if args.cache_dir:
@@ -572,10 +589,11 @@ def main(argv=None):
             if args.cache_dir:
                 identifier = xsl_id or "row_{0:04d}".format(index)
                 cache_path = os.path.join(args.cache_dir, identifier + ".npz")
+            reference_seeded = args.initialization == "reference_seeded"
             p0 = (
-                (args.teff_default, args.feh_default, args.logg_default, 0.0)
-                if args.neutral_initialization
-                else (teff_ref, feh_ref, logg_ref, 0.0)
+                (teff_ref, feh_ref, logg_ref, 0.0)
+                if reference_seeded
+                else (args.teff_default, args.feh_default, args.logg_default, 0.0)
             )
             result = fit_phoenix_spectrum(
                 spectrum,
@@ -611,6 +629,14 @@ def main(argv=None):
                 "logg": result["logg"] - logg_ref,
             },
             initialization={
+                "mode": args.initialization,
+                "reference_seeded": bool(reference_seeded),
+                "reference_seeded_note": (
+                    "Diagnostic local-convergence test only; not an "
+                    "independent validation baseline."
+                    if reference_seeded
+                    else None
+                ),
                 "physical": result.get("physical_initialization"),
                 "coarse": result.get("coarse_initialization"),
                 "multistart": result.get("multistart", 1),

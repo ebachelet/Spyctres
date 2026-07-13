@@ -230,6 +230,9 @@ def test_nonstellar_feature_annotation_flags_dib_balmer_overlap():
     assert payload["policy"] == "warn"
     assert payload["mask_application_frame"] == "data"
     assert [item["name"] for item in payload["features"]] == ["DIB 4428", "DIB 4882"]
+    assert payload["features"][0]["action"] == "flagged"
+    assert payload["features"][0]["mask_applied"] is False
+    assert payload["features"][0]["residual_detection"] is None
     assert payload["overlap_diagnostics"][0]["flag"] == "dib_overlap_balmer_wing"
     assert payload["overlap_diagnostics"][0]["origin_hypothesis"] == "catalog_overlap_only"
     assert payload["frame_warnings"][0]["warning"] == "nonstellar_feature_frame_ambiguous"
@@ -255,6 +258,8 @@ def test_nonstellar_feature_annotation_mask_policy_records_mask_flag():
 
     assert payload["policy"] == "mask_known"
     assert payload["mask_dibs"] is True
+    assert payload["features"][0]["action"] == "masked"
+    assert payload["features"][0]["mask_applied"] is True
     assert "nonstellar_mask_applied" in result.quality_flags
 
 
@@ -273,4 +278,5 @@ def test_nonstellar_feature_annotation_ignore_policy_records_without_flags():
 
     assert payload["policy"] == "ignore"
     assert payload["features"][0]["name"] == "DIB 4882"
+    assert payload["features"][0]["action"] == "ignored"
     assert result.quality_flags == ()

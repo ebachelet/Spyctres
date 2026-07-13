@@ -257,7 +257,7 @@ def test_dib_4882_feature_uses_balmer_overlap_region():
 
 def test_telluric_features_are_topocentric_fixed_and_cross_reference_dib():
     o2_a = NONSTELLAR_FEATURES["telluric_o2_a_7605"]
-    o2_alpha = NONSTELLAR_FEATURES["telluric_o2_alpha_6280"]
+    o2_6280 = NONSTELLAR_FEATURES["telluric_o2_gamma_6280"]
     region = nonstellar_feature_regions("telluric_o2_a_7605")
 
     assert o2_a.kind == "telluric_band"
@@ -265,7 +265,11 @@ def test_telluric_features_are_topocentric_fixed_and_cross_reference_dib():
     assert o2_a.feature_frame == "topocentric"
     assert o2_a.velocity_margin_kms is None
     assert region == [(7550.0, 7660.0)]
-    assert "dib_6284" in o2_alpha.cross_references
+    assert "dib_6284" in o2_6280.cross_references
+    assert NONSTELLAR_FEATURES["telluric_o2_alpha_6280"] is o2_6280
+    assert nonstellar_feature_regions("telluric_o2_alpha_6280") == [
+        (6260.0, 6300.0)
+    ]
 
 
 def test_overlapping_nonstellar_features_reports_valid_coverage_overlap():
@@ -286,10 +290,13 @@ def test_overlapping_nonstellar_features_reports_valid_coverage_overlap():
     assert by_name["DIB 4428"]["center_A"] == pytest.approx(4428.8)
     assert by_name["DIB 4428"]["overlap_A"] > 0.0
     assert by_name["DIB 4882"]["overlap_A"] == pytest.approx(45.0)
+    assert by_name["DIB 4882"]["overlap_pixels"] > 0
+    assert by_name["DIB 4882"]["overlap_fraction_of_valid_pixels"] > 0.0
     assert by_name["DIB 4882"]["id"] == "dib_4882"
     assert by_name["DIB 4882"]["frame_type"] == "ism_velocity"
     assert by_name["DIB 4882"]["diagnostic_lines"] == ["Hbeta"]
     assert by_name["DIB 4882"]["segments"] == ["demo"]
+    assert by_name["DIB 4882"]["segment_overlaps"][0]["segment"] == "demo"
 
 
 def test_overlap_aware_counts_do_not_double_count_total_rejections():
