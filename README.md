@@ -2,7 +2,7 @@
 
 Spyctres is a Python package for stellar spectral fitting and spectral typing from reduced spectra. It can compare a measured spectrum with publicly available spectral-template libraries to find the closest match.
 
-Developer: Etienne Bachelet
+Developers: Etienne Bachelet and Yiannis Tsapras
 
 Spyctres is still under active development. It includes core fitting utilities, instrument I/O helpers, plotting tools, and example workflows. Recent additions include PHOENIX template-based fitting and a clearer separation between generic fitting code, workflow recipes, examples, and smoke tests.
 
