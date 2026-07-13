@@ -44,6 +44,20 @@ python scripts/xsl_validation.py examples/xsl_validation_manifest.csv \
   --output /tmp/xsl_validation_results.json --resume
 ```
 
+Render the saved observed-versus-model classification panels without opening a
+notebook:
+
+```bash
+python scripts/xsl_validation_plots.py /tmp/xsl_validation_results.json \
+  --output-dir /tmp/xsl_validation_plots \
+  --output-pdf /tmp/xsl_validation_plots.pdf
+```
+
+The plot renderer uses the saved `validation_plot` payloads and defaults to
+one global display scale per star. Use `--scale-mode per_segment` only for
+line-shape debugging, because that mode independently median-normalizes each
+arm and should not be read as an arm-to-arm flux comparison.
+
 The DR3 paper identifies the stellar-rest-frame wavelengths as air wavelengths,
 which is therefore the reader and runner default. The runner uses 4000--9000 A
 by default, excludes the published dichroic-contamination region, and records
