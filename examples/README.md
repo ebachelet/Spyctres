@@ -105,6 +105,59 @@ and once with `--mask-dibs`, then compare the two saved JSON products with
 chi-square, quality-flag, known-feature, and residual-window changes; it does
 not decide which fit is scientifically correct.
 
+### Controlled DIB-mask sensitivity check
+
+Use this as a diagnostic sensitivity test when the quality report or plots flag
+DIB 4428, DIB 4882, or a related residual window. The first run records the
+catalog overlaps but keeps the stellar fit unchanged:
+
+```bash
+python examples/simple_phoenix_fit.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output-json /tmp/spyctres_default.json \
+  --output-plot /tmp/spyctres_default.png \
+  --no-show
+```
+
+The second run applies the named DIB masks explicitly:
+
+```bash
+python examples/simple_phoenix_fit.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --mask-dibs \
+  --output-json /tmp/spyctres_mask_dibs.json \
+  --output-plot /tmp/spyctres_mask_dibs.png \
+  --no-show
+```
+
+Then compare the structured outputs:
+
+```python
+import json
+from Spyctres import compare_fit_results
+
+with open("/tmp/spyctres_default.json", "r", encoding="utf-8") as handle:
+    default = json.load(handle)
+with open("/tmp/spyctres_mask_dibs.json", "r", encoding="utf-8") as handle:
+    masked = json.load(handle)
+
+comparison = compare_fit_results(
+    default,
+    masked,
+    labels=("default", "mask_dibs"),
+    thresholds={"teff": 250.0, "logg": 0.25, "chi2_red": 1.0},
+)
+print(json.dumps(comparison, indent=2))
+```
+
+Interpret this as a robustness check. A large parameter or chi-square change
+means the affected wavelength region matters for the current setup; it does not
+by itself prove that the DIB identification is correct or that masking is the
+final scientific choice. Inspect the residuals, other Balmer lines, continuum
+placement, and LSF assumptions before drawing that conclusion.
+
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 
 ## What this notebook demonstrates

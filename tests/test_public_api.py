@@ -272,6 +272,7 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
 
     assert "dib_4428" in Spyctres.NONSTELLAR_FEATURES
     assert "dib_4882" in Spyctres.NONSTELLAR_FEATURES
+    assert "telluric_o2_gamma_6280" in Spyctres.OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES
     assert "telluric_o2_a_7605" in Spyctres.OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES
     assert "dib_4882" in Spyctres.OPTICAL_DIB_DIAGNOSTIC_FEATURES
     assert regions == [(4416.8, 4440.8)]
@@ -280,6 +281,9 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
         "nonstellar:dib_4428",
         "nonstellar:dib_4882",
     ]
+    assert callable(Spyctres.annotate_nonstellar_features)
+    assert callable(Spyctres.diagnose_known_residual_windows)
+    assert Spyctres.KNOWN_RESIDUAL_WINDOWS[0]["linked_feature"] == "dib_4882"
 
 
 def test_structured_result_can_save_compact_json(tmp_path):
