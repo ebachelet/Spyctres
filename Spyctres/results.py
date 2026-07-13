@@ -102,6 +102,213 @@ def _normalize_plot_paths(plot_paths, relative_to=None, include_local_paths=Fals
     )
 
 
+def _mapping_get(mapping, key, default=None):
+    if mapping is None:
+        return default
+    try:
+        return mapping.get(key, default)
+    except AttributeError:
+        try:
+            return mapping[key]
+        except (KeyError, TypeError):
+            return default
+
+
+def _as_result_payload(result):
+    if isinstance(result, PhoenixFitResult):
+        return result.to_dict(include_arrays=False)
+    if hasattr(result, "to_dict"):
+        try:
+            return result.to_dict(include_arrays=False)
+        except TypeError:
+            return result.to_dict()
+    if isinstance(result, Mapping):
+        return dict(result)
+    raise TypeError("fit result must be a mapping or PhoenixFitResult-like object.")
+
+
+def _extract_result_value(payload, key):
+    if key in payload:
+        return payload.get(key)
+    report = payload.get("quality_report") or {}
+    if isinstance(report, Mapping) and key in report:
+        return report.get(key)
+    diagnostics = payload.get("diagnostics") or {}
+    if isinstance(diagnostics, Mapping) and key in diagnostics:
+        return diagnostics.get(key)
+    return None
+
+
+def _numeric_delta(reference, comparison):
+    try:
+        ref = float(reference)
+        cmp = float(comparison)
+    except (TypeError, ValueError):
+        return {
+            "reference": reference,
+            "comparison": comparison,
+            "delta": None,
+            "abs_delta": None,
+            "fractional_delta": None,
+        }
+    if not np.isfinite(ref) or not np.isfinite(cmp):
+        return {
+            "reference": reference,
+            "comparison": comparison,
+            "delta": None,
+            "abs_delta": None,
+            "fractional_delta": None,
+        }
+    delta = cmp - ref
+    return {
+        "reference": ref,
+        "comparison": cmp,
+        "delta": float(delta),
+        "abs_delta": float(abs(delta)),
+        "fractional_delta": (
+            None if np.isclose(ref, 0.0) else float(delta / ref)
+        ),
+    }
+
+
+def _flag_set(payload):
+    flags = payload.get("quality_flags")
+    if flags is None:
+        report = payload.get("quality_report") or {}
+        flags = report.get("quality_flags") if isinstance(report, Mapping) else None
+    return {str(flag) for flag in list(flags or [])}
+
+
+def _feature_names_from_payload(payload):
+    nonstellar = payload.get("nonstellar_features")
+    if nonstellar is None:
+        report = payload.get("quality_report") or {}
+        nonstellar = (
+            report.get("nonstellar_features")
+            if isinstance(report, Mapping)
+            else None
+        )
+    features = []
+    if isinstance(nonstellar, Mapping):
+        features = list(nonstellar.get("features") or [])
+    return {
+        str(item.get("name", item.get("id", "")))
+        for item in features
+        if isinstance(item, Mapping) and (item.get("name") or item.get("id"))
+    }
+
+
+def _residual_window_names_from_payload(payload):
+    windows = payload.get("known_residual_windows")
+    if windows is None:
+        report = payload.get("quality_report") or {}
+        windows = (
+            report.get("known_residual_windows")
+            if isinstance(report, Mapping)
+            else None
+        )
+    flagged = []
+    if isinstance(windows, Mapping):
+        flagged = list(windows.get("flagged_windows") or [])
+    return {
+        str(item.get("name", "window"))
+        for item in flagged
+        if isinstance(item, Mapping)
+    }
+
+
+def compare_fit_results(
+    reference,
+    comparison,
+    *,
+    labels=("reference", "comparison"),
+    parameter_keys=("teff", "feh", "logg", "rv_kms"),
+    metric_keys=("chi2_red", "mask_fraction", "n_points", "degrees_of_freedom"),
+    thresholds=None,
+):
+    """Return a JSON-safe comparison of two structured fit results.
+
+    The helper is intentionally model-agnostic. It compares values already
+    reported by the two fits and does not decide whether a change is
+    scientifically acceptable. If ``thresholds`` is supplied as a mapping from
+    key to absolute-delta threshold, the corresponding entries include an
+    ``exceeds_threshold`` boolean for caller-side sensitivity checks.
+    """
+    ref_payload = _as_result_payload(reference)
+    cmp_payload = _as_result_payload(comparison)
+    if len(labels) != 2:
+        raise ValueError("labels must contain exactly two entries.")
+    label_ref, label_cmp = [str(label) for label in labels]
+    thresholds = {} if thresholds is None else dict(thresholds)
+
+    parameters = {}
+    for key in parameter_keys:
+        key = str(key)
+        entry = _numeric_delta(
+            _extract_result_value(ref_payload, key),
+            _extract_result_value(cmp_payload, key),
+        )
+        if key in thresholds and entry["abs_delta"] is not None:
+            entry["threshold"] = float(thresholds[key])
+            entry["exceeds_threshold"] = bool(
+                entry["abs_delta"] > float(thresholds[key])
+            )
+        parameters[key] = entry
+
+    metrics = {}
+    for key in metric_keys:
+        key = str(key)
+        entry = _numeric_delta(
+            _extract_result_value(ref_payload, key),
+            _extract_result_value(cmp_payload, key),
+        )
+        if key in thresholds and entry["abs_delta"] is not None:
+            entry["threshold"] = float(thresholds[key])
+            entry["exceeds_threshold"] = bool(
+                entry["abs_delta"] > float(thresholds[key])
+            )
+        metrics[key] = entry
+
+    ref_flags = _flag_set(ref_payload)
+    cmp_flags = _flag_set(cmp_payload)
+    ref_features = _feature_names_from_payload(ref_payload)
+    cmp_features = _feature_names_from_payload(cmp_payload)
+    ref_windows = _residual_window_names_from_payload(ref_payload)
+    cmp_windows = _residual_window_names_from_payload(cmp_payload)
+
+    out = {
+        "schema_version": 1,
+        "labels": [label_ref, label_cmp],
+        "parameters": parameters,
+        "metrics": metrics,
+        "quality_flags": {
+            label_ref: sorted(ref_flags),
+            label_cmp: sorted(cmp_flags),
+            "common": sorted(ref_flags & cmp_flags),
+            "only_" + label_ref: sorted(ref_flags - cmp_flags),
+            "only_" + label_cmp: sorted(cmp_flags - ref_flags),
+            "changed": bool(ref_flags != cmp_flags),
+        },
+        "known_features": {
+            label_ref: sorted(ref_features),
+            label_cmp: sorted(cmp_features),
+            "common": sorted(ref_features & cmp_features),
+            "only_" + label_ref: sorted(ref_features - cmp_features),
+            "only_" + label_cmp: sorted(cmp_features - ref_features),
+            "changed": bool(ref_features != cmp_features),
+        },
+        "known_residual_windows": {
+            label_ref: sorted(ref_windows),
+            label_cmp: sorted(cmp_windows),
+            "common": sorted(ref_windows & cmp_windows),
+            "only_" + label_ref: sorted(ref_windows - cmp_windows),
+            "only_" + label_cmp: sorted(cmp_windows - ref_windows),
+            "changed": bool(ref_windows != cmp_windows),
+        },
+    }
+    return _jsonable(out)
+
+
 QUALITY_FLAG_DESCRIPTIONS = {
     "ok": "No fit-quality warning flags were raised.",
     "optimizer_local_minimum_suspected": (

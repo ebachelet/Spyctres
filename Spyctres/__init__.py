@@ -13,6 +13,7 @@ from .results import (
     PhoenixFitDiagnostics,
     PhoenixFitResult,
     build_fit_quality_report,
+    compare_fit_results,
     describe_quality_flags,
     format_fit_quality_report,
 )
@@ -43,7 +44,7 @@ __all__ = [
     "PhoenixFitDefaults", "clip_grid_to_bounds",
     "prepare_phoenix_fit_kwargs", "spectrum_wavelength_range",
     "suggest_phoenix_fit_defaults",
-    "build_fit_quality_report", "describe_quality_flags",
+    "build_fit_quality_report", "compare_fit_results", "describe_quality_flags",
     "format_fit_quality_report",
     "LineSpec", "LineFitConfig", "LineFitResult", "fit_line", "fit_lines",
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",

@@ -99,6 +99,11 @@ Balmer structure, and model-domain limitations. A DIB-window residual in this
 example is a candidate explanation to test, not a settled identification.
 The shared known-feature catalog also contains common topocentric telluric
 bands, but the simple UVB example only annotates the DIB subset.
+For controlled mask experiments, run the example once with the default policy
+and once with `--mask-dibs`, then compare the two saved JSON products with
+`Spyctres.compare_fit_results()`. The comparison helper reports parameter,
+chi-square, quality-flag, known-feature, and residual-window changes; it does
+not decide which fit is scientifically correct.
 
 The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
 

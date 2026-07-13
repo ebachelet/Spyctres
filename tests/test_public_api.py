@@ -8,6 +8,7 @@ from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
     PhoenixFitDiagnostics,
     PhoenixFitResult,
+    compare_fit_results,
     describe_quality_flags,
     format_fit_quality_report,
 )
@@ -153,6 +154,79 @@ def test_quality_report_includes_known_feature_and_residual_windows():
         in text
     )
     assert "DIB 4882 / Hβ red wing median=-3.1σ rms=4.2σ origin=ambiguous" in text
+
+
+def test_compare_fit_results_reports_parameter_and_quality_deltas():
+    reference = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": np.float64(9800.0),
+            "feh": np.float64(-0.1),
+            "logg": np.float64(2.7),
+            "rv_kms": np.float64(-5.0),
+            "chi2_red": np.float64(12.0),
+            "quality_flags": ["high_chi2", "dib_candidate_detected"],
+            "nonstellar_features": {
+                "features": [{"name": "DIB 4882"}],
+            },
+            "known_residual_windows": {
+                "flagged_windows": [{"name": "DIB 4882 / Hβ red wing"}],
+            },
+        },
+        diagnostics={"mask_fraction": np.float64(0.45), "n_pixels": np.int64(100)},
+    )
+    masked = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": np.float64(9600.0),
+            "feh": np.float64(-0.05),
+            "logg": np.float64(2.9),
+            "rv_kms": np.float64(-4.0),
+            "chi2_red": np.float64(9.0),
+            "quality_flags": ["high_chi2", "nonstellar_mask_applied"],
+            "nonstellar_features": {
+                "features": [{"name": "DIB 4882"}, {"name": "DIB 4428"}],
+            },
+            "known_residual_windows": {"flagged_windows": []},
+        },
+        diagnostics={"mask_fraction": np.float64(0.5), "n_pixels": np.int64(90)},
+    )
+
+    comparison = compare_fit_results(
+        reference,
+        masked,
+        labels=("unmasked", "masked"),
+        thresholds={"teff": 100.0, "chi2_red": 1.0},
+    )
+
+    assert comparison["labels"] == ["unmasked", "masked"]
+    assert comparison["parameters"]["teff"]["delta"] == -200.0
+    assert comparison["parameters"]["teff"]["exceeds_threshold"] is True
+    assert comparison["metrics"]["chi2_red"]["delta"] == -3.0
+    assert comparison["metrics"]["mask_fraction"]["delta"] == pytest.approx(0.05)
+    assert comparison["metrics"]["n_points"]["reference"] == 100.0
+    assert comparison["metrics"]["n_points"]["comparison"] == 90.0
+    assert comparison["quality_flags"]["changed"] is True
+    assert comparison["quality_flags"]["only_unmasked"] == ["dib_candidate_detected"]
+    assert comparison["quality_flags"]["only_masked"] == ["nonstellar_mask_applied"]
+    assert comparison["known_features"]["only_masked"] == ["DIB 4428"]
+    assert comparison["known_residual_windows"]["only_unmasked"] == [
+        "DIB 4882 / Hβ red wing"
+    ]
+    json.dumps(comparison)
+
+
+def test_compare_fit_results_is_top_level_public_api():
+    import Spyctres
+
+    reference = {"teff": 6000.0, "quality_flags": ["ok"]}
+    comparison = {"teff": 6100.0, "quality_flags": ["high_chi2"]}
+
+    out = Spyctres.compare_fit_results(reference, comparison)
+
+    assert out["parameters"]["teff"]["delta"] == 100.0
+    assert out["quality_flags"]["only_reference"] == ["ok"]
+    assert out["quality_flags"]["only_comparison"] == ["high_chi2"]
 
 
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
