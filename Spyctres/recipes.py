@@ -16,10 +16,13 @@ These helpers operate on generic SpectrumSegment objects, so the logic is not
 strictly tied to one instrument even when some presets are X-SHOOTER-oriented.
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.optimize import least_squares
 
 from .io import SpectrumSegment, make_padded_window_segments
+from .preprocessing import exclusion_mask, telluric_transmission_exclusion_mask
 from .waveutils import (
     C_KMS,
     convert_segment_wavelength_medium,
@@ -87,6 +90,19 @@ BALMER_LABEL_ALIASES = {
     "hdelta": "Hδ",
     "hd": "Hδ",
 }
+
+
+@dataclass(frozen=True)
+class XshooterBalmerCase:
+    """Prepared X-SHOOTER/Balmer fitting inputs with provenance."""
+
+    input_segment: SpectrumSegment
+    clipped_segment: SpectrumSegment
+    fit_segments: tuple
+    balmer_windows: tuple
+    exclude_masks: tuple
+    norm_info: object
+    provenance: dict
 
 
 def _sideband_fit_parameter_count(n_segments, sideband_poly_order):
@@ -496,6 +512,18 @@ def _solve_sideband_multiplicative_poly(wave, flux, err, model, used_mask, order
     return model * poly_all, coeffs
 
 
+def solve_sideband_multiplicative_poly(wave, flux, err, model, used_mask, order=1):
+    """Public wrapper for the sideband multiplicative-polynomial solve."""
+    return _solve_sideband_multiplicative_poly(
+        wave=wave,
+        flux=flux,
+        err=err,
+        model=model,
+        used_mask=used_mask,
+        order=order,
+    )
+
+
 def make_balmer_core_exclude_mask(
     core_halfwidth=XSHOOTER_BALMER_CORE_MASK_DEFAULT_A,
     wave_medium="vacuum",
@@ -544,11 +572,136 @@ def make_balmer_core_exclude_mask(
     return _mask
 
 
+def prepare_xshooter_balmer_case(
+    segment,
+    *,
+    wmin=None,
+    wmax=None,
+    clip_left=0,
+    clip_right=0,
+    window_mode="notebook",
+    window_pad=5.0,
+    norm_mode="poly",
+    sideband_width=10.0,
+    sideband_order=1,
+    core_mask=XSHOOTER_BALMER_CORE_MASK_DEFAULT_A,
+    use_telluric_mask=False,
+    telluric_threshold=0.90,
+):
+    """Prepare X-SHOOTER UVB Balmer-window fit segments and masks.
+
+    This centralizes the workflow assembly used by scripts and notebooks:
+    clipping/selection, padded Balmer windows, Balmer metadata, optional
+    sideband normalization, optional Balmer-core masking, and optional
+    high-resolution telluric transmission masking.
+
+    The helper does not read files and does not choose PHOENIX parameter
+    bounds. Those remain caller responsibilities.
+    """
+    if norm_mode not in ("poly", "sideband"):
+        raise ValueError("norm_mode must be 'poly' or 'sideband'.")
+
+    if not isinstance(segment, SpectrumSegment):
+        raise TypeError("segment must be a SpectrumSegment.")
+
+    clipped = segment.window(
+        wmin=wmin,
+        wmax=wmax,
+        clip_left=clip_left,
+        clip_right=clip_right,
+        name_suffix="fitwin",
+    )
+
+    balmer_windows = tuple(xshooter_balmer_windows(window_mode))
+    fit_segments = make_padded_window_segments(
+        clipped,
+        [(wmin_i, wmax_i) for _label, wmin_i, wmax_i in balmer_windows],
+        pad=window_pad,
+        name_prefix="balmer",
+    )
+
+    for seg_i, (label, _wmin_i, _wmax_i) in zip(fit_segments, balmer_windows):
+        seg_i.name = label
+
+    if str(window_mode).strip().lower() == "notebook":
+        attach_balmer_metadata(fit_segments)
+    else:
+        attach_balmer_metadata(
+            fit_segments,
+            cont_windows={label: None for label, _wmin_i, _wmax_i in balmer_windows},
+        )
+
+    norm_info = None
+    if norm_mode == "sideband":
+        fit_segments, norm_info = normalize_segments_sidebands(
+            fit_segments,
+            sideband_width=sideband_width,
+            sideband_order=sideband_order,
+        )
+
+    exclude_masks = []
+    if use_telluric_mask:
+        exclude_masks.append(
+            telluric_transmission_exclusion_mask(threshold=telluric_threshold)
+        )
+
+    if core_mask is not None and float(core_mask) > 0.0:
+        exclude_masks.append(
+            exclusion_mask(
+                "balmer_core",
+                make_balmer_core_exclude_mask(
+                    core_halfwidth=float(core_mask),
+                    wave_medium=fit_segments[0].wave_medium,
+                ),
+                metadata={
+                    "mask_type": "stellar_line_core",
+                    "method": "balmer_core_halfwidth",
+                    "core_halfwidth_A": float(core_mask),
+                    "feature_frame": "stellar_rest_or_data_line_center",
+                    "action": "masked",
+                },
+            )
+        )
+
+    provenance = {
+        "recipe": "prepare_xshooter_balmer_case",
+        "window_mode": str(window_mode),
+        "window_pad_A": float(window_pad),
+        "norm_mode": str(norm_mode),
+        "sideband_width_A": float(sideband_width),
+        "sideband_order": int(sideband_order),
+        "core_mask_halfwidth_A": None if core_mask is None else float(core_mask),
+        "telluric_mask_requested": bool(use_telluric_mask),
+        "telluric_threshold": (
+            float(telluric_threshold) if use_telluric_mask else None
+        ),
+        "balmer_windows": [
+            (str(label), float(wmin_i), float(wmax_i))
+            for label, wmin_i, wmax_i in balmer_windows
+        ],
+        "exclude_masks": [mask.name for mask in exclude_masks],
+        "exclude_mask_metadata": {
+            mask.name: dict(mask.metadata) for mask in exclude_masks
+        },
+    }
+
+    return XshooterBalmerCase(
+        input_segment=segment,
+        clipped_segment=clipped,
+        fit_segments=tuple(fit_segments),
+        balmer_windows=balmer_windows,
+        exclude_masks=tuple(exclude_masks),
+        norm_info=norm_info,
+        provenance=provenance,
+    )
+
+
 def fit_phoenix_sideband_symmetric(
     segments,
     phoenix_lib,
     p0,
     exclude_mask=None,
+    exclude_masks=None,
     rv_bary_kms=0.0,
     R=None,
     forward_model="native_interp",
@@ -655,7 +808,11 @@ def fit_phoenix_sideband_symmetric(
         raise ValueError("forward_model must be 'interp_observed' or 'native_interp'.")
 
     used_masks = [
-        build_effective_fit_mask(seg, exclude_mask=exclude_mask)
+        build_effective_fit_mask(
+            seg,
+            exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
+        )
         for seg in segments
     ]
     if not any(np.any(m) for m in used_masks):
@@ -956,6 +1113,7 @@ def build_plot_models_for_segments(
     phoenix_lib,
     fit_result,
     exclude_mask=None,
+    exclude_masks=None,
     mdeg=2,
     rv_bary_kms=0.0,
     R=None,
@@ -993,6 +1151,7 @@ def build_plot_models_for_segments(
             phoenix_lib=phoenix_lib,
             fit_result=fit_result,
             exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
             mdeg=mdeg,
             rv_bary_kms=rv_bary_kms,
             R=R,
@@ -1005,11 +1164,19 @@ def build_plot_models_for_segments(
         raise ValueError("norm_mode must be 'poly' or 'sideband'.")
 
     used_masks = [
-        build_effective_fit_mask(seg, exclude_mask=exclude_mask)
+        build_effective_fit_mask(
+            seg,
+            exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
+        )
         for seg in segments
     ]
     excluded_masks = [
-        build_excluded_mask(seg, exclude_mask=exclude_mask)
+        build_excluded_mask(
+            seg,
+            exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
+        )
         for seg in segments
     ]
     segment_fwhm_kms = [
@@ -1442,12 +1609,15 @@ __all__ = [
     "XSHOOTER_NOTEBOOK_CONT_WINDOWS",
     "XSHOOTER_BALMER_CORE_MASK_DEFAULT_A",
     "XSHOOTER_BALMER_CORE_MASK_CONSERVATIVE_A",
+    "XshooterBalmerCase",
     "xshooter_balmer_windows",
     "attach_balmer_metadata",
     "normalize_segment_sidebands",
     "normalize_segments_sidebands",
     "normalize_model_sidebands",
+    "solve_sideband_multiplicative_poly",
     "make_balmer_core_exclude_mask",
+    "prepare_xshooter_balmer_case",
     "fit_phoenix_sideband_symmetric",
     "build_plot_models_for_segments",
     "PEPSI_LEGACY_CENTERS_AIR",

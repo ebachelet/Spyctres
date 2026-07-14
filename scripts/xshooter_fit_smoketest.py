@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 from Spyctres.results import format_fit_quality_report
 from Spyctres.defaults import prepare_phoenix_fit_kwargs
-from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segments
+from Spyctres.io import read_spectrum, SpectrumSegment
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
 from Spyctres.fitting import (
@@ -27,13 +27,10 @@ from Spyctres.fitting import (
     build_effective_fit_mask,
 )
 from Spyctres.plotting import plot_full_spectrum_fit
-from Spyctres.Spyctres import load_telluric_lines
+from Spyctres.preprocessing import telluric_transmission_exclusion_mask
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.recipes import (
-    xshooter_balmer_windows,
-    attach_balmer_metadata,
-    normalize_segments_sidebands,
-    make_balmer_core_exclude_mask,
+    prepare_xshooter_balmer_case,
     fit_phoenix_sideband_symmetric,
     build_plot_models_for_segments,
     pick_grid_range,
@@ -458,7 +455,7 @@ def evaluate_region_quality(segments, model_corr_list, used_masks):
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "PHOENIX full-spectrum fitting smoke test for reduced X-SHOOTER 1D spectra.\n"
+            "Developer/regression smoke test for PHOENIX fitting of reduced X-SHOOTER 1D spectra.\n"
             "Use this to exercise the generic package fitter on a real X-SHOOTER file.\n"
             "For the validated Balmer-wing benchmark, use --balmer-only --forward-model native_interp "
             "--window-mode notebook --core-mask 12."
@@ -604,8 +601,15 @@ def main():
     parser.add_argument("--rv0", type=float, default=None, help="Initial stellar RV in km/s")
     parser.add_argument("--rv-init", choices=["grid", "none"], default="grid", help="RV initialization strategy")
     parser.add_argument("--rv-grid-n", type=int, default=None, help="Number of trial RV points in coarse RV scan")
-    parser.add_argument("--telluric-threshold", type=float, default=0.90, help="Telluric mask threshold")
-    parser.add_argument("--use-telluric-mask", action="store_true", help="Apply built-in telluric mask")
+    parser.add_argument("--telluric-threshold", type=float, default=0.90, help="Telluric transmission threshold")
+    parser.add_argument(
+        "--use-telluric-mask",
+        action="store_true",
+        help=(
+            "Apply the high-resolution telluric transmission-threshold mask. "
+            "Broad catalog telluric regions are not used by this option."
+        ),
+    )
     parser.add_argument("--use-barycorr", action="store_true", help="Pass header barycentric correction into fit")
     parser.add_argument("--cache-path", default="/tmp/spyctres_xshooter_fit_cache.npz")
     parser.add_argument("--verbose", type=int, default=1)
@@ -697,75 +701,74 @@ def main():
     fit_wmin, fit_wmax = fit_regions[0]
 
     print("Preparing fit window and segments...", flush=True)
-    seg_clip = seg0.window(
-        wmin=fit_wmin,
-        wmax=fit_wmax,
-        clip_left=args.clip_left,
-        clip_right=args.clip_right,
-        name_suffix="fitwin",
-    )
-
-    balmer_windows = xshooter_balmer_windows(args.window_mode)
-
     if args.balmer_only:
-        segments = make_padded_window_segments(
-            seg_clip,
-            [(wmin, wmax) for _, wmin, wmax in balmer_windows],
-            pad=args.window_pad,
-            name_prefix="balmer",
-        )
-
-        # Rename the generic padded-window segments to the physical Balmer labels
-        # expected by the recipe metadata helper.
-        for seg_i, (label, _wmin, _wmax) in zip(segments, balmer_windows):
-            seg_i.name = label
-    else:
-        segments = [seg_clip]
-
-    if args.balmer_only:
-        if args.window_mode == "notebook":
-            attach_balmer_metadata(segments)
-        else:
-            current_cont_windows = {label: None for label, _, _ in balmer_windows}
-            attach_balmer_metadata(segments, cont_windows=current_cont_windows)
-
-    norm_info = None
-    fit_mdeg = args.mdeg
-
-    if args.balmer_only and args.norm_mode == "sideband":
-        segments, norm_info = normalize_segments_sidebands(
-            segments,
+        balmer_case = prepare_xshooter_balmer_case(
+            seg0,
+            wmin=fit_wmin,
+            wmax=fit_wmax,
+            clip_left=args.clip_left,
+            clip_right=args.clip_right,
+            window_mode=args.window_mode,
+            window_pad=args.window_pad,
+            norm_mode=args.norm_mode,
             sideband_width=args.sideband_width,
             sideband_order=args.sideband_order,
+            core_mask=args.core_mask,
+            use_telluric_mask=args.use_telluric_mask,
+            telluric_threshold=args.telluric_threshold,
         )
+        seg_clip = balmer_case.clipped_segment
+        segments = list(balmer_case.fit_segments)
+        norm_info = balmer_case.norm_info
+        exclude_masks = list(balmer_case.exclude_masks)
+    else:
+        seg_clip = seg0.window(
+            wmin=fit_wmin,
+            wmax=fit_wmax,
+            clip_left=args.clip_left,
+            clip_right=args.clip_right,
+            name_suffix="fitwin",
+        )
+        segments = [seg_clip]
+        norm_info = None
+        exclude_masks = []
+        if args.use_telluric_mask:
+            exclude_masks.append(
+                telluric_transmission_exclusion_mask(
+                    threshold=args.telluric_threshold
+                )
+            )
+
+    fit_mdeg = args.mdeg
 
     seg_ref = segments[0]
-    exclude_mask_list = []
-
-    if args.use_telluric_mask:
-        print("Loading telluric mask...", flush=True)
-        _, telluric_mask = load_telluric_lines(args.telluric_threshold)
-        exclude_mask_list.append(telluric_mask)
-
     if args.balmer_only:
-        core_mask = make_balmer_core_exclude_mask(
-            core_halfwidth=args.core_mask,
-            wave_medium=seg_ref.wave_medium,
+        print(
+            "Prepared X-SHOOTER Balmer case with {0} segment(s).".format(
+                len(segments)
+            ),
+            flush=True,
         )
-        exclude_mask_list.append(core_mask)
+    for mask in exclude_masks:
+        meta = getattr(mask, "metadata", {}) or {}
+        if meta.get("method") == "transmission_threshold":
+            print(
+                "Telluric mask method={0}, threshold={1}, model={2}, frame_type={3}, "
+                "fallback_broad_regions_used={4}".format(
+                    meta.get("method"),
+                    meta.get("threshold"),
+                    meta.get("model_file"),
+                    meta.get("frame_type"),
+                    meta.get("fallback_broad_regions_used"),
+                ),
+                flush=True,
+            )
 
-    if len(exclude_mask_list) == 0:
-        exclude_mask = None
-    else:
-        def exclude_mask(wave):
-            wave = np.asarray(wave, dtype=float)
-            m = np.zeros_like(wave, dtype=bool)
-            for fn in exclude_mask_list:
-                m |= (np.asarray(fn(wave)) > 0.5)
-            return m
+    exclude_mask = None
+    exclude_masks = exclude_masks or None
 
     used_masks_plot = [
-        build_effective_fit_mask(seg, exclude_mask=exclude_mask)
+        build_effective_fit_mask(seg, exclude_masks=exclude_masks)
         for seg in segments
     ]
 
@@ -827,6 +830,7 @@ def main():
                 p0=p0_i,
                 bounds=fit_kwargs["bounds"],
                 exclude_mask=exclude_mask,
+                exclude_masks=exclude_masks,
                 rv_bary_kms=rv_bary_kms,
                 R=R,
                 forward_model=fit_kwargs["forward_model"],
@@ -852,6 +856,7 @@ def main():
                 p0=p0_i,
                 bounds=fit_kwargs["bounds"],
                 exclude_mask=exclude_mask,
+                exclude_masks=exclude_masks,
                 mdeg=fit_mdeg,
                 rv_bary_kms=rv_bary_kms,
                 R=R,
@@ -880,6 +885,7 @@ def main():
             phoenix_lib=phoenix_lib,
             fit_result=result_i,
             exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
             mdeg=fit_mdeg,
             rv_bary_kms=rv_bary_kms,
             R=R,

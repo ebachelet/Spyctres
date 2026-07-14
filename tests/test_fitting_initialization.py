@@ -21,7 +21,11 @@ from Spyctres.fitting import (
     reconstruct_phoenix_legendre_models_for_segments,
 )
 from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegment
-from Spyctres.recipes import fit_phoenix_sideband_symmetric
+from Spyctres.recipes import (
+    XshooterBalmerCase,
+    fit_phoenix_sideband_symmetric,
+    prepare_xshooter_balmer_case,
+)
 
 
 def test_phoenix_fitters_default_to_native_interp():
@@ -36,6 +40,38 @@ def test_phoenix_fitters_default_to_native_interp():
         .parameters["forward_model"]
         .default
         == "native_interp"
+    )
+
+
+def test_prepare_xshooter_balmer_case_centralizes_segments_and_masks():
+    wave = np.linspace(3950.0, 5050.0, 1200)
+    segment = SpectrumSegment(
+        wave=wave,
+        flux=1.0 + 1e-4 * (wave - np.nanmedian(wave)),
+        err=np.full_like(wave, 0.02),
+        mask=np.ones_like(wave, dtype=bool),
+        wave_medium="vacuum",
+        name="uvb",
+    )
+
+    case = prepare_xshooter_balmer_case(
+        segment,
+        window_mode="notebook",
+        window_pad=20.0,
+        norm_mode="sideband",
+        sideband_width=10.0,
+        sideband_order=1,
+        core_mask=12.0,
+    )
+
+    assert isinstance(case, XshooterBalmerCase)
+    assert [seg.name for seg in case.fit_segments] == ["Hδ", "Hγ", "Hβ"]
+    assert all(seg.meta["norm_mode"] == "sideband" for seg in case.fit_segments)
+    assert all("line_center_data" in seg.meta for seg in case.fit_segments)
+    assert [mask.name for mask in case.exclude_masks] == ["balmer_core"]
+    assert case.provenance["recipe"] == "prepare_xshooter_balmer_case"
+    assert case.provenance["exclude_mask_metadata"]["balmer_core"]["method"] == (
+        "balmer_core_halfwidth"
     )
 
 
@@ -571,6 +607,12 @@ def test_quality_flags_include_mask_derived_warnings():
                 },
                 "mask_provenance": {
                     "counts": {"nonfinite_mask_output": 1},
+                    "settings": {
+                        "quality_flags": [
+                            "telluric_mask_frame_ambiguous",
+                            "coarse_telluric_mask_applied",
+                        ],
+                    },
                 },
             }
         ],
@@ -582,6 +624,8 @@ def test_quality_flags_include_mask_derived_warnings():
     assert "segment_mask_fraction_high" in flags
     assert "explicit_exclusion_dominates" in flags
     assert "nonfinite_mask_output" in flags
+    assert "telluric_mask_frame_ambiguous" in flags
+    assert "coarse_telluric_mask_applied" in flags
 
 
 def test_quality_flags_include_robust_loss_and_error_floor_warnings():

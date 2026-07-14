@@ -315,6 +315,64 @@ def exclusion_mask(name, fn, metadata=None):
     return ExclusionMaskSpec(name=name, callable=fn, metadata=metadata)
 
 
+def dilate_boolean_mask(mask, n_pix=3):
+    """Grow a boolean mask by nearest-neighbour pixels on each side."""
+    grown = np.asarray(mask, dtype=bool).copy()
+    n_pix = int(max(0, n_pix))
+    if n_pix == 0 or grown.size == 0:
+        return grown
+    for _ in range(n_pix):
+        tmp = grown.copy()
+        tmp[:-1] |= grown[1:]
+        tmp[1:] |= grown[:-1]
+        grown = tmp
+    return grown
+
+
+def combine_exclusion_masks(mask_specs, *, name="combined_exclusion_masks", threshold=0.5):
+    """Combine named exclusion-mask specs into one compatibility callable.
+
+    Prefer passing ``exclude_masks=[...]`` directly to modern Spyctres fitting
+    helpers. This adapter is for older diagnostic paths that still accept only
+    one callable. The returned callable preserves component names and metadata
+    in the combined spec's provenance.
+    """
+    if mask_specs is None:
+        return None
+    specs = list(mask_specs)
+    if len(specs) == 0:
+        return None
+    threshold = float(threshold)
+    if not np.isfinite(threshold):
+        raise ValueError("threshold must be finite.")
+    normalized = _normalize_mask_specs(exclude_masks=specs)
+    component_metadata = {
+        item_name: dict(metadata) for item_name, _fn, metadata in normalized
+    }
+
+    def _mask(wave):
+        wave = np.asarray(wave, dtype=float)
+        combined = np.zeros_like(wave, dtype=bool)
+        for _item_name, fn, _metadata in normalized:
+            cur = np.asarray(fn(wave))
+            if cur.dtype == bool:
+                combined |= cur
+            else:
+                combined |= cur > threshold
+        return combined
+
+    return exclusion_mask(
+        name,
+        _mask,
+        metadata={
+            "method": "combined_exclusion_masks",
+            "component_masks": list(component_metadata),
+            "component_mask_metadata": component_metadata,
+            "numeric_mask_threshold": threshold,
+        },
+    )
+
+
 def telluric_transmission_exclusion_mask(
     threshold=0.95,
     *,
@@ -352,6 +410,8 @@ def telluric_transmission_exclusion_mask(
         "feature_frame": "topocentric",
         "action": "masked",
         "coarse_mask": False,
+        "fallback_broad_regions_used": False,
+        "fallback_broad_region_ids": [],
         "preferred_for_actual_telluric_masking": True,
         "note": (
             "High-resolution telluric transmission-threshold mask; distinct "
@@ -359,6 +419,43 @@ def telluric_transmission_exclusion_mask(
         ),
     }
     return exclusion_mask(name, _mask, metadata=metadata)
+
+
+def broad_telluric_catalog_fallback_mask(
+    names=OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
+    padding_A=0.0,
+    *,
+    name="telluric:broad_catalog_fallback",
+    use_case="quicklook/product_masking_fallback",
+):
+    """Return a coarse broad-catalog telluric fallback mask.
+
+    This helper is intentionally labelled as a fallback/quicklook product mask.
+    It should not be used as the preferred telluric fit mask when the
+    high-resolution transmission-threshold model is available.
+    """
+    feature_names = tuple(names) if not isinstance(names, str) else (names,)
+    regions = nonstellar_feature_regions(feature_names, padding_A=padding_A)
+    metadata = _catalog_feature_mask_metadata(feature_names, padding_A=padding_A)
+    metadata.update(
+        {
+            "method": "broad_catalog_fallback",
+            "fallback_broad_regions_used": True,
+            "fallback_broad_region_ids": list(metadata["catalog_feature_ids"]),
+            "preferred_for_actual_telluric_masking": False,
+            "use_case": str(use_case),
+            "note": (
+                "Coarse catalog-region telluric fallback for quicklook/product "
+                "masking; prefer telluric_transmission_exclusion_mask() for "
+                "actual telluric masking when the transmission model is available."
+            ),
+        }
+    )
+    return exclusion_mask(
+        name,
+        lambda wave: _inside_regions(np.asarray(wave, dtype=float), regions),
+        metadata=metadata,
+    )
 
 
 def nonstellar_feature_mask(names=("dib_4428",), padding_A=0.0):

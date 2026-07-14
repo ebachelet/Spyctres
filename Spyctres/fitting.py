@@ -19,7 +19,11 @@ from .phoenix_forward import (
     convolve_to_resolution_loglam,
     resolve_gaussian_lsf_fwhm_kms,
 )
-from .preprocessing import compose_fit_mask
+from .preprocessing import (
+    OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
+    compose_fit_mask,
+    nonstellar_feature_regions,
+)
 from .results import build_fit_quality_report
 # Profiling linear continuum coefficients inside the nonlinear fit follows the
 # separable least-squares design used by pPXF; see Cappellari (2023):
@@ -1330,6 +1334,13 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
         for segment in segment_diagnostics
     ):
         flags.append("nonfinite_mask_output")
+    for segment in segment_diagnostics:
+        mask_flags = (
+            segment.get("mask_provenance", {})
+            .get("settings", {})
+            .get("quality_flags", [])
+        )
+        flags.extend(str(flag) for flag in mask_flags)
 
     return ["ok"] if not flags else sorted(set(flags))
 
@@ -2310,14 +2321,13 @@ def diagnose_phoenix_fixed_params(
 
 def default_telluric_regions_optical_angstrom():
     """
-    Very small default set of strong O2 bands in the optical.
-    From molecfit documentation: O2 γ (0.628–0.634 µm), O2 B (0.686–0.695 µm), O2 A (0.759–0.772 µm).
+    Broad optical telluric catalog regions in Angstrom.
+
+    These are coarse warning/fallback intervals from the shared non-stellar
+    feature catalog. They are not the preferred actual telluric fit mask when
+    the high-resolution transmission-threshold model is available.
     """
-    return [
-        (6280.0, 6340.0),  # O2 gamma
-        (6860.0, 6950.0),  # O2 B
-        (7590.0, 7720.0),  # O2 A (not in your current PEPSI red-009 range, but harmless)
-    ]
+    return nonstellar_feature_regions(OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES)
 
    
 def fit_phoenix_full_spectrum(

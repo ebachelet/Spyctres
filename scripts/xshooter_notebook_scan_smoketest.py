@@ -14,14 +14,21 @@ from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
-from Spyctres.io import read_spectrum, SpectrumSegment, make_padded_window_segments
+from Spyctres.io import read_spectrum, SpectrumSegment
 from Spyctres.phoenix import PhoenixLibrary
 from Spyctres.waveutils import convert_wavelength_medium
-from Spyctres.Spyctres import load_telluric_lines
+from Spyctres.preprocessing import (
+    combine_exclusion_masks,
+)
 from Spyctres.config import load_user_config, get_config_value, resolve_setting
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
-from Spyctres.recipes import pick_grid_range
+from Spyctres.recipes import (
+    normalize_model_sidebands,
+    pick_grid_range,
+    prepare_xshooter_balmer_case,
+    solve_sideband_multiplicative_poly,
+)
 
 C_KMS = 299792.458
 
@@ -91,180 +98,6 @@ def resample_flux(w_src, f_src, w_tgt):
     )
     return np.asarray(f(w_tgt), dtype=float)
     
-
-def _build_sideband_mask(seg, wave, fit_mask, sideband_width=10.0):
-    wave = np.asarray(wave, dtype=float)
-    fit_mask = np.asarray(fit_mask, dtype=bool)
-
-    cont_windows = seg.meta.get("cont_windows", None)
-    center = seg.meta.get("line_center_data", None)
-
-    if cont_windows is not None and center is not None:
-        sb_mask = np.zeros_like(wave, dtype=bool)
-        center = float(center)
-        for a, b in cont_windows:
-            sb_mask |= fit_mask & (wave > center + float(a)) & (wave < center + float(b))
-        return sb_mask
-
-    fit_wave = wave[fit_mask]
-    lo = float(np.min(fit_wave))
-    hi = float(np.max(fit_wave))
-    sb_mask = fit_mask & (
-        ((wave >= lo) & (wave <= lo + float(sideband_width))) |
-        ((wave >= hi - float(sideband_width)) & (wave <= hi))
-    )
-    return sb_mask
-
-
-def normalize_segment_sidebands(seg, sideband_width=10.0, sideband_order=1):
-    wave = np.asarray(seg.wave, dtype=float)
-    flux = np.asarray(seg.flux, dtype=float)
-    err = None if seg.err is None else np.asarray(seg.err, dtype=float)
-    fit_mask = np.asarray(seg.mask, dtype=bool)
-
-    if np.sum(fit_mask) < 6:
-        return seg
-
-    sb_mask = _build_sideband_mask(seg, wave, fit_mask, sideband_width=sideband_width)
-
-    good = sb_mask & np.isfinite(wave) & np.isfinite(flux)
-    if err is not None:
-        good &= np.isfinite(err) & (err > 0)
-
-    order = int(sideband_order)
-
-    if np.sum(good) >= (order + 2):
-        if err is None:
-            coeffs = np.polyfit(wave[good], flux[good], deg=order)
-        else:
-            coeffs = np.polyfit(wave[good], flux[good], deg=order, w=1.0 / err[good])
-        cont = np.polyval(coeffs, wave)
-    else:
-        level = float(np.nanmedian(flux[fit_mask]))
-        cont = np.full_like(wave, level, dtype=float)
-
-    pos = np.isfinite(cont) & (cont > 0)
-    fallback = float(np.nanmedian(cont[pos]))
-    cont = np.where(np.isfinite(cont) & (cont > 0), cont, fallback)
-
-    flux_n = flux / cont
-    err_n = None if err is None else err / cont
-
-    seg_n = SpectrumSegment(
-        wave=wave,
-        flux=flux_n,
-        err=err_n,
-        mask=fit_mask,
-        meta=dict(seg.meta),
-        wave_medium=seg.wave_medium,
-        wave_frame=seg.wave_frame,
-        name=seg.name,
-    )
-    return seg_n
-
-
-def normalize_segments_sidebands(segments, sideband_width=10.0, sideband_order=1):
-    return [
-        normalize_segment_sidebands(
-            seg,
-            sideband_width=sideband_width,
-            sideband_order=sideband_order,
-        )
-        for seg in segments
-    ]
-
-
-def normalize_model_sidebands(seg, model_flux, sideband_width=10.0, sideband_order=1):
-    wave = np.asarray(seg.wave, dtype=float)
-    model_flux = np.asarray(model_flux, dtype=float)
-    fit_mask = np.asarray(seg.mask, dtype=bool)
-
-    if np.sum(fit_mask) < 6:
-        return model_flux.copy()
-
-    sb_mask = _build_sideband_mask(seg, wave, fit_mask, sideband_width=sideband_width)
-    good = sb_mask & np.isfinite(wave) & np.isfinite(model_flux)
-    order = int(sideband_order)
-
-    if np.sum(good) >= (order + 2):
-        coeffs = np.polyfit(wave[good], model_flux[good], deg=order)
-        cont = np.polyval(coeffs, wave)
-    else:
-        level = float(np.nanmedian(model_flux[fit_mask]))
-        cont = np.full_like(wave, level, dtype=float)
-
-    pos = np.isfinite(cont) & (cont > 0)
-    fallback = float(np.nanmedian(cont[pos]))
-    cont = np.where(np.isfinite(cont) & (cont > 0), cont, fallback)
-
-    return model_flux / cont
-
-
-def _solve_sideband_multiplicative_poly(wave, flux, err, model, used_mask, order=1):
-    wave = np.asarray(wave, dtype=float)
-    flux = np.asarray(flux, dtype=float)
-    err = np.asarray(err, dtype=float)
-    model = np.asarray(model, dtype=float)
-    used_mask = np.asarray(used_mask, dtype=bool)
-    order = int(order)
-
-    if order <= 0:
-        return model.copy(), np.array([1.0], dtype=float)
-
-    good = (
-        used_mask &
-        np.isfinite(wave) &
-        np.isfinite(flux) &
-        np.isfinite(err) & (err > 0) &
-        np.isfinite(model)
-    )
-
-    if np.sum(good) < (order + 2):
-        return model.copy(), np.array([1.0], dtype=float)
-
-    x0 = float(np.mean(wave[good]))
-    xscale = float(np.ptp(wave[good]))
-    if (not np.isfinite(xscale)) or (xscale <= 0):
-        xscale = 1.0
-
-    x = (wave[good] - x0) / xscale
-    A = np.vander(x, N=order + 1, increasing=True)
-
-    rhs = flux[good] / (model[good] + 1e-30)
-    W = 1.0 / err[good]
-
-    Aw = A * W[:, None]
-    bw = rhs * W
-    coeffs, *_ = np.linalg.lstsq(Aw, bw, rcond=None)
-
-    x_all = (wave - x0) / xscale
-    poly_all = np.vander(x_all, N=order + 1, increasing=True) @ coeffs
-
-    return model * poly_all, coeffs
-
-
-def make_balmer_core_exclude_mask(core_halfwidth=3.0, wave_medium="vacuum"):
-    centers_vac = np.array([4101.74, 4340.47, 4861.33], dtype=float)
-
-    wave_medium = str(wave_medium).lower()
-    if wave_medium in ("air", "vacuum"):
-        centers = convert_wavelength_medium(
-            centers_vac,
-            from_medium="vacuum",
-            to_medium=wave_medium,
-        )
-    else:
-        centers = centers_vac.copy()
-
-    def _mask(wave):
-        wave = np.asarray(wave, dtype=float)
-        m = np.zeros_like(wave, dtype=bool)
-        for c in centers:
-            m |= np.abs(wave - c) <= float(core_halfwidth)
-        return m
-
-    return _mask
-
 
 def build_used_mask(seg, exclude_mask=None):
     m = np.asarray(seg.mask, dtype=bool)
@@ -389,7 +222,7 @@ def evaluate_template_on_segments(
         excl_mask = excl_mask[idx]
 
         model0 = resample_flux(w_shift, f_conv, wave)
-        model_norm = normalize_model_sidebands(
+        model_norm, _model_norm_info = normalize_model_sidebands(
             seg=SpectrumSegment(
                 wave=wave,
                 flux=flux,
@@ -405,7 +238,7 @@ def evaluate_template_on_segments(
             sideband_order=sideband_order,
         )
 
-        model_corr, coeffs = _solve_sideband_multiplicative_poly(
+        model_corr, coeffs = solve_sideband_multiplicative_poly(
             wave=wave,
             flux=flux,
             err=err,
@@ -451,8 +284,8 @@ def evaluate_template_on_segments(
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "Notebook-faithful discrete PHOENIX grid scan for X-SHOOTER UVB Balmer windows.\n"
-            "This is a validation reference script, not the generic package fitter.\n"
+            "Developer/regression notebook-faithful discrete PHOENIX grid scan for X-SHOOTER UVB Balmer windows.\n"
+            "This is a validation reference script, not the generic package fitter or a public example.\n"
             "It expects a reduced X-SHOOTER UVB FITS file and a local PHOENIXv2 installation."
         ),
         epilog=(
@@ -537,81 +370,44 @@ def main():
         parser.error(
             "This script expects an X-SHOOTER UVB file, but the reader reported arm={0!r}.".format(arm)
         )
-    seg_clip = seg0.window(
+    balmer_case = prepare_xshooter_balmer_case(
+        seg0,
         wmin=args.wmin,
         wmax=args.wmax,
         clip_left=args.clip_left,
         clip_right=args.clip_right,
-        name_suffix="fitwin",
-    )
-    
-    balmer_windows = [
-        ("Hδ", 3980.0, 4220.0),
-        ("Hγ", 4220.0, 4480.0),
-        ("Hβ", 4700.0, 5020.0),
-    ]
-    segments = make_padded_window_segments(
-        seg_clip,
-        [(wmin, wmax) for _, wmin, wmax in balmer_windows],
-        pad=args.window_pad,
-        name_prefix="balmer",
-    )
-
-    balmer_centers_vac = {
-        "Hδ": 4101.74,
-        "Hγ": 4340.47,
-        "Hβ": 4861.33,
-    }
-    notebook_cont_windows = {
-        "Hδ": ((-80.0, -30.0), (30.0, 80.0)),
-        "Hγ": ((-80.0, -30.0), (30.0, 80.0)),
-        "Hβ": ((-120.0, -40.0), (40.0, 120.0)),
-    }
-
-    for seg_i, (label, _wmin, _wmax) in zip(segments, balmer_windows):
-        seg_i.meta["line_label"] = label
-        seg_i.meta["line_center_vac"] = float(balmer_centers_vac[label])
-
-        seg_medium = str(seg_i.wave_medium).lower()
-        if seg_medium in ("air", "vacuum"):
-            seg_i.meta["line_center_data"] = float(
-                convert_wavelength_medium(
-                    np.array([balmer_centers_vac[label]], dtype=float),
-                    from_medium="vacuum",
-                    to_medium=seg_medium,
-                )[0]
-            )
-        else:
-            seg_i.meta["line_center_data"] = float(balmer_centers_vac[label])
-
-        seg_i.meta["cont_windows"] = notebook_cont_windows[label]
-
-    segments = normalize_segments_sidebands(
-        segments,
+        window_mode="notebook",
+        window_pad=args.window_pad,
+        norm_mode="sideband",
         sideband_width=args.sideband_width,
         sideband_order=args.sideband_order,
+        core_mask=args.core_mask,
+        use_telluric_mask=args.use_telluric_mask,
+        telluric_threshold=args.telluric_threshold,
     )
-
+    segments = list(balmer_case.fit_segments)
+    balmer_windows = list(balmer_case.balmer_windows)
     seg_ref = segments[0]
-    exclude_mask_list = []
 
-    if args.use_telluric_mask:
-        _, telluric_mask = load_telluric_lines(args.telluric_threshold)
-        exclude_mask_list.append(telluric_mask)
+    for mask in balmer_case.exclude_masks:
+        meta = getattr(mask, "metadata", {}) or {}
+        if meta.get("method") == "transmission_threshold":
+            print(
+                "Telluric mask method={0}, threshold={1}, model={2}, frame_type={3}, "
+                "fallback_broad_regions_used={4}".format(
+                    meta.get("method"),
+                    meta.get("threshold"),
+                    meta.get("model_file"),
+                    meta.get("frame_type"),
+                    meta.get("fallback_broad_regions_used"),
+                ),
+                flush=True,
+            )
 
-    exclude_mask_list.append(
-        make_balmer_core_exclude_mask(
-            core_halfwidth=args.core_mask,
-            wave_medium=seg_ref.wave_medium,
-        )
+    exclude_mask = combine_exclusion_masks(
+        balmer_case.exclude_masks,
+        name="xshooter_notebook_scan_exclusions",
     )
-
-    def exclude_mask(wave):
-        wave = np.asarray(wave, dtype=float)
-        m = np.zeros_like(wave, dtype=bool)
-        for fn in exclude_mask_list:
-            m |= (np.asarray(fn(wave)) > 0.5)
-        return m
 
     phoenix_lib = PhoenixLibrary(args.phoenix_dir, verbose=bool(args.verbose))
     teff_avail, feh_avail, logg_avail = phoenix_lib.available_axes()

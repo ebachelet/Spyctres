@@ -21,7 +21,7 @@ from Spyctres.config import load_user_config, get_config_value, resolve_setting
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "PHOENIX interpolator cache-rebuild smoke test.\n"
+            "Developer/regression smoke test for PHOENIX interpolator cache rebuilds.\n"
             "This creates a synthetic spectrum, runs the fitter once to write a cache, "
             "then runs it again with the same wavelength grid but a different Teff grid. "
             "The second run should rebuild the cache and still succeed."

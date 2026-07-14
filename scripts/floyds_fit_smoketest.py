@@ -42,7 +42,7 @@ DEFAULT_FLOYDS_EXAMPLE = os.path.join(
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "Quick PHOENIX fit smoke test for a reduced 1D FLOYDS spectrum.\n"
+            "Developer/regression quicklook smoke test for a reduced 1D FLOYDS spectrum.\n"
             "This is a first-pass quicklook fitter for low-resolution FLOYDS data.\n"
             "It fits a selected wavelength range with a multiplicative polynomial continuum."
         ),

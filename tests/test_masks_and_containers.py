@@ -17,8 +17,11 @@ from Spyctres.preprocessing import (
     NONSTELLAR_FEATURES,
     ExclusionMaskSpec,
     apply_fit_mask,
+    broad_telluric_catalog_fallback_mask,
+    combine_exclusion_masks,
     compose_fit_mask,
     convert_mask_polarity,
+    dilate_boolean_mask,
     exclusion_mask,
     nonstellar_feature_mask,
     nonstellar_feature_masks,
@@ -302,6 +305,7 @@ def test_telluric_transmission_exclusion_mask_records_precise_mask_provenance():
     assert metadata["method"] == "transmission_threshold"
     assert metadata["threshold"] == pytest.approx(0.9)
     assert metadata["coarse_mask"] is False
+    assert metadata["fallback_broad_regions_used"] is False
     assert metadata["model_file"] == "LBL_A10_s0_w050_R0300000_T.fits"
     assert result.settings["telluric_mask_frame_warnings"] == []
 
@@ -348,6 +352,64 @@ def test_catalog_telluric_mask_is_labelled_coarse_and_warns_on_frame():
     assert metadata["warning"] == "coarse_telluric_mask"
     assert "coarse_telluric_mask_applied" in result.settings["quality_flags"]
     assert "telluric_mask_frame_ambiguous" in result.settings["quality_flags"]
+
+
+def test_broad_telluric_catalog_fallback_is_not_preferred_actual_mask():
+    segment = SpectrumSegment(
+        wave=np.linspace(6840.0, 6900.0, 10),
+        flux=np.ones(10),
+        err=np.ones(10),
+        observer_frame="topocentric",
+        stellar_rest_status="raw",
+    )
+
+    mask = broad_telluric_catalog_fallback_mask(
+        names=["telluric_o2_b_6867"],
+        use_case="unit_test_quicklook",
+    )
+    result = compose_fit_mask(segment, exclude_masks=[mask])
+    metadata = result.settings["exclude_mask_metadata"][mask.name]
+
+    assert metadata["method"] == "broad_catalog_fallback"
+    assert metadata["fallback_broad_regions_used"] is True
+    assert metadata["preferred_for_actual_telluric_masking"] is False
+    assert metadata["use_case"] == "unit_test_quicklook"
+    assert "telluric_o2_b_6867" in metadata["fallback_broad_region_ids"]
+    assert np.any(~result.effective_mask)
+
+
+def test_combine_exclusion_masks_preserves_component_metadata():
+    first = exclusion_mask(
+        "first",
+        lambda wave: np.asarray(wave, dtype=float) > 2.0,
+        metadata={"method": "first_method"},
+    )
+    second = exclusion_mask(
+        "second",
+        lambda wave: np.asarray(wave, dtype=float) == 1.0,
+        metadata={"method": "second_method"},
+    )
+
+    combined = combine_exclusion_masks([first, second], name="combo")
+    assert combined.name == "combo"
+    assert np.array_equal(combined([0.0, 1.0, 2.0, 3.0]), [False, True, False, True])
+    assert combined.metadata["method"] == "combined_exclusion_masks"
+    assert combined.metadata["component_masks"] == ["first", "second"]
+    assert (
+        combined.metadata["component_mask_metadata"]["first"]["method"]
+        == "first_method"
+    )
+
+
+def test_dilate_boolean_mask_grows_nearest_neighbours():
+    assert np.array_equal(
+        dilate_boolean_mask([False, False, True, False, False], n_pix=1),
+        [False, True, True, True, False],
+    )
+    assert np.array_equal(
+        dilate_boolean_mask([False, True, False], n_pix=0),
+        [False, True, False],
+    )
 
 
 def test_overlapping_nonstellar_features_reports_valid_coverage_overlap():

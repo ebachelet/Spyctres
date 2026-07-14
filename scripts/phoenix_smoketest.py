@@ -18,7 +18,7 @@ from Spyctres.config import resolve_phoenix_dir
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "PHOENIX backend smoke test.\n"
+            "Developer/regression smoke test for the PHOENIX backend.\n"
             "This checks that Spyctres can load a local PHOENIX template, build a "
             "small interpolator on a tiny parameter grid, and round-trip that "
             "interpolator through the .npz cache."

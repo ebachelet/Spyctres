@@ -62,7 +62,7 @@ def summarize(seg):
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "Read one or more reduced 1D spectra with the Spyctres I/O layer and "
+            "Setup/ingestion diagnostic for reduced 1D spectra using the Spyctres I/O layer. "
             "print a short summary. Use this to confirm that a file is recognized, "
             "its metadata look sensible, and the quick-look plot renders."
         ),

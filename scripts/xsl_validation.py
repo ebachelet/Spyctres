@@ -59,7 +59,7 @@ ROLE_BUDGET_KEYS = {
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Validate PHOENIX classifications against XSL DR3 stars.",
+        description="Validation runner for PHOENIX classifications against XSL DR3 stars.",
         epilog=(
             "Example:\n  python scripts/xsl_validation.py "
             "examples/xsl_validation_manifest.csv "

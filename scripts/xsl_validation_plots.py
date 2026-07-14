@@ -30,7 +30,7 @@ from Spyctres import plot_xsl_validation_payload
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Render validation_plot payloads saved by scripts/xsl_validation.py "
+            "Validation plotting runner for validation_plot payloads saved by scripts/xsl_validation.py "
             "as per-target PNGs and/or a multi-page PDF."
         ),
         epilog=(

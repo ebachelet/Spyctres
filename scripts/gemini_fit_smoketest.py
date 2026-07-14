@@ -25,35 +25,28 @@ from Spyctres.fitting import (
     fit_phoenix_full_spectrum,
     reconstruct_phoenix_legendre_models_for_segments,
 )
+from Spyctres.preprocessing import (
+    broad_telluric_catalog_fallback_mask,
+    dilate_boolean_mask,
+    telluric_transmission_exclusion_mask,
+)
 from Spyctres.plotting import plot_full_spectrum_fit
 from Spyctres.recipes import pick_grid_range
 
-def dilate_bad_mask(bad, n_pix=3):
-    """
-    Grow a bad-pixel mask by n_pix nearest-neighbour steps on each side.
-    """
-    bad = np.asarray(bad, dtype=bool).copy()
-    n_pix = int(max(0, n_pix))
-    if n_pix == 0 or bad.size == 0:
-        return bad
-
-    grown = bad.copy()
-    for _ in range(n_pix):
-        tmp = grown.copy()
-        tmp[:-1] |= grown[1:]
-        tmp[1:] |= grown[:-1]
-        grown = tmp
-    return grown
-
-
-def build_gemini_fit_mask(seg, gap_grow_pix=8, min_flux_frac=0.25):
+def build_gemini_fit_mask(
+    seg,
+    gap_grow_pix=8,
+    min_flux_frac=0.25,
+    broad_telluric_fallback=None,
+):
     """
     Build a stricter fit mask for Gemini/GMOS ASCII spectra.
 
     This excludes:
     - non-finite points
     - deep near-zero dropout regions, treated as instrumental gaps/bad regions
-    - the strongest optical telluric bands near 6870 A and 7600 A
+    - optional broad catalog telluric fallback regions, only when explicitly
+      requested for quicklook/product masking
 
     The bad mask is then dilated to avoid fitting the edges of discontinuities.
     """
@@ -73,14 +66,13 @@ def build_gemini_fit_mask(seg, gap_grow_pix=8, min_flux_frac=0.25):
     else:
         deep_gap = np.zeros_like(flux, dtype=bool)
 
-    # Strong telluric O2 bands
-    telluric = (
-        ((wave >= 6860.0) & (wave <= 6895.0)) |
-        ((wave >= 7590.0) & (wave <= 7640.0))
-    )
+    if broad_telluric_fallback is None:
+        telluric = np.zeros_like(wave, dtype=bool)
+    else:
+        telluric = np.asarray(broad_telluric_fallback(wave)) > 0.5
 
     bad = (~good) | deep_gap | telluric
-    bad = dilate_bad_mask(bad, n_pix=gap_grow_pix)
+    bad = dilate_boolean_mask(bad, n_pix=gap_grow_pix)
 
     good &= ~bad
     return good
@@ -89,7 +81,7 @@ def build_gemini_fit_mask(seg, gap_grow_pix=8, min_flux_frac=0.25):
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "Quick PHOENIX fit smoke test for a reduced 1D Gemini/GMOS ASCII spectrum.\n"
+            "Developer/regression quicklook smoke test for a reduced 1D Gemini/GMOS ASCII spectrum.\n"
             "This is a first-pass quicklook fitter for GMOS data.\n"
             "It masks obvious zero-flux gap regions, then fits a selected wavelength "
             "range with a multiplicative polynomial continuum."
@@ -162,6 +154,29 @@ def main():
         default=0.25,
         help="Reject points with flux below this fraction of the positive-flux median.",
     )
+    parser.add_argument(
+        "--use-telluric-mask",
+        action="store_true",
+        help=(
+            "Apply the high-resolution telluric transmission-threshold mask as "
+            "an explicit fit exclusion."
+        ),
+    )
+    parser.add_argument(
+        "--telluric-threshold",
+        type=float,
+        default=0.90,
+        help="Transmission threshold used by --use-telluric-mask.",
+    )
+    parser.add_argument(
+        "--use-broad-telluric-fallback-mask",
+        action="store_true",
+        help=(
+            "Apply coarse broad catalog telluric regions as a Gemini quicklook/"
+            "product bad-region mask. This is a fallback, not the preferred "
+            "telluric fit mask."
+        ),
+    )
     parser.add_argument("--R-override", type=float, default=500.0, help="Override resolving power R")
     parser.add_argument("--teff-min", type=float, default=None, help="Minimum Teff for explicit PHOENIX grid")
     parser.add_argument("--teff-max", type=float, default=None, help="Maximum Teff for explicit PHOENIX grid")
@@ -207,16 +222,64 @@ def main():
             "--forward-model interp_observed requires a known --wave-medium. "
             "Use --wave-medium air or vacuum, or use --forward-model native_interp."
         )
+    if args.use_telluric_mask and args.use_broad_telluric_fallback_mask:
+        parser.error(
+            "Use either --use-telluric-mask or --use-broad-telluric-fallback-mask, "
+            "not both. The broad catalog mask is only a fallback/quicklook path."
+        )
 
     print("Reading Gemini spectrum...", flush=True)
     seg0 = read_spectrum(args.file, instrument="gemini")
+
+    broad_telluric_fallback = None
+    if args.use_broad_telluric_fallback_mask:
+        print("Applying broad catalog telluric fallback as Gemini quicklook/product mask...", flush=True)
+        broad_telluric_fallback = broad_telluric_catalog_fallback_mask(
+            use_case="gemini_quicklook_product_masking",
+        )
+        meta = broad_telluric_fallback.metadata
+        print(
+            "Telluric fallback method={0}, frame_type={1}, "
+            "fallback_broad_regions_used={2}".format(
+                meta.get("method"),
+                meta.get("frame_type"),
+                meta.get("fallback_broad_regions_used"),
+            ),
+            flush=True,
+        )
 
     strict_mask = build_gemini_fit_mask(
         seg0,
         gap_grow_pix=args.gap_grow_pix,
         min_flux_frac=args.min_flux_frac,
+        broad_telluric_fallback=broad_telluric_fallback,
     )
-    seg0 = seg0.copy(mask=strict_mask)
+    seg0_meta = dict(seg0.meta)
+    if broad_telluric_fallback is not None:
+        seg0_meta["quicklook_telluric_fallback_mask"] = dict(
+            broad_telluric_fallback.metadata
+        )
+    seg0 = seg0.copy(mask=strict_mask, meta=seg0_meta)
+
+    exclude_masks = None
+    if args.use_telluric_mask:
+        print("Loading high-resolution telluric transmission mask...", flush=True)
+        telluric_mask = telluric_transmission_exclusion_mask(
+            threshold=args.telluric_threshold
+        )
+        exclude_masks = [telluric_mask]
+        meta = telluric_mask.metadata
+        print(
+            "Telluric mask method={0}, threshold={1}, model={2}, frame_type={3}, "
+            "fallback_broad_regions_used={4}".format(
+                meta.get("method"),
+                meta.get("threshold"),
+                meta.get("model_file"),
+                meta.get("frame_type"),
+                meta.get("fallback_broad_regions_used"),
+            ),
+            flush=True,
+        )
 
     if args.wave_medium != "unknown":
         meta = dict(seg0.meta)
@@ -314,7 +377,7 @@ def main():
         phoenix_lib=phoenix_lib,
         p0=fit_kwargs["p0"],
         bounds=fit_kwargs["bounds"],
-        exclude_mask=None,
+        exclude_masks=exclude_masks,
         mdeg=fit_kwargs["mdeg"],
         rv_bary_kms=0.0,
         R=R,
@@ -342,7 +405,7 @@ def main():
         segments=[seg],
         phoenix_lib=phoenix_lib,
         fit_result=out,
-        exclude_mask=None,
+        exclude_masks=exclude_masks,
         mdeg=fit_kwargs["mdeg"],
         rv_bary_kms=0.0,
         R=R,

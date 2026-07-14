@@ -235,7 +235,7 @@ def check_spectrum(args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Check a local Spyctres + PHOENIX development setup.",
+        description="Setup diagnostic for a local Spyctres + PHOENIX development environment.",
     )
     parser.add_argument("--phoenix-dir", default=None, help="Explicit PHOENIX root.")
     parser.add_argument(

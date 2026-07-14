@@ -29,6 +29,8 @@ from .preprocessing import (
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
     OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
     ExclusionMaskSpec,
+    combine_exclusion_masks,
+    dilate_boolean_mask,
     exclusion_mask,
     known_feature_masks,
     nonstellar_feature_mask,
@@ -36,6 +38,7 @@ from .preprocessing import (
     nonstellar_feature_metadata,
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
+    broad_telluric_catalog_fallback_mask,
     telluric_transmission_exclusion_mask,
 )
 from .waveutils import convert_segment_wavelength_medium, convert_wavelength_medium
@@ -56,12 +59,14 @@ __all__ = [
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
     "KNOWN_RESIDUAL_WINDOWS", "annotate_nonstellar_features",
     "diagnose_known_residual_windows",
-    "ExclusionMaskSpec", "exclusion_mask",
+    "ExclusionMaskSpec", "combine_exclusion_masks", "dilate_boolean_mask",
+    "exclusion_mask",
     "NONSTELLAR_FEATURES", "OPTICAL_DIB_DIAGNOSTIC_FEATURES",
     "OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES",
     "known_feature_masks", "nonstellar_feature_mask", "nonstellar_feature_masks",
     "nonstellar_feature_metadata", "nonstellar_feature_regions",
-    "overlapping_nonstellar_features", "telluric_transmission_exclusion_mask",
+    "overlapping_nonstellar_features", "broad_telluric_catalog_fallback_mask",
+    "telluric_transmission_exclusion_mask",
     "convert_wavelength_medium", "convert_segment_wavelength_medium",
     "FitProgressEvent",
 ]

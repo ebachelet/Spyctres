@@ -26,7 +26,7 @@ from Spyctres.config import resolve_phoenix_dir
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "Synthetic PHOENIX full-spectrum fitter smoke test.\n"
+            "Developer/regression smoke test for the synthetic PHOENIX full-spectrum fitter.\n"
             "This builds a small synthetic spectrum from the PHOENIX library, "
             "adds noise and a mild continuum tilt, then checks whether "
             "fit_phoenix_full_spectrum() recovers the planted parameters."

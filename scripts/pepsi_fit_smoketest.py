@@ -18,7 +18,6 @@ ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-from Spyctres import Spyctres
 from Spyctres.results import format_fit_quality_report
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import (
@@ -33,6 +32,7 @@ from Spyctres.fitting import (
     build_effective_fit_mask,
     reconstruct_phoenix_legendre_models_for_segments,
 )
+from Spyctres.preprocessing import telluric_transmission_exclusion_mask
 from Spyctres.plotting import plot_full_spectrum_fit
 from Spyctres.recipes import (
     apply_pepsi_wave_hypothesis,
@@ -73,7 +73,7 @@ WINDOW_PRESETS = {
 def build_parser():
     return argparse.ArgumentParser(
         description=(
-            "PEPSI PHOENIX fitting smoke test.\n"
+            "Developer/regression smoke test for PEPSI PHOENIX fitting.\n"
             "\n"
             "This script has two roles:\n"
             "  1. quicklook: a generic one-file PEPSI full-spectrum/window fit;\n"
@@ -244,7 +244,7 @@ def concat_bool_with_gap(arrays):
     return np.concatenate(out)
 
 
-def _make_unit_collection(segments, window_defs, args):
+def _make_unit_collection(segments, window_defs, args, telluric_mask_metadata=None):
     """
     Wrap PEPSI legacy line-window segments in a SpectrumCollection.
 
@@ -254,16 +254,19 @@ def _make_unit_collection(segments, window_defs, args):
     per-arm weights.
     """
     weights = np.ones(len(segments), dtype=float)
+    meta = {
+        "instrument": "PEPSI",
+        "mode": "legacy_max",
+        "wave_hypothesis": args.wave_hypothesis,
+        "legacy_windows_air": list(window_defs),
+        "legacy_flux_range": (float(args.legacy_flux_min), float(args.legacy_flux_max)),
+    }
+    if telluric_mask_metadata is not None:
+        meta["telluric_mask"] = dict(telluric_mask_metadata)
     return SpectrumCollection(
         segments=segments,
         weights=weights,
-        meta={
-            "instrument": "PEPSI",
-            "mode": "legacy_max",
-            "wave_hypothesis": args.wave_hypothesis,
-            "legacy_windows_air": list(window_defs),
-            "legacy_flux_range": (float(args.legacy_flux_min), float(args.legacy_flux_max)),
-        },
+        meta=meta,
         name="pepsi_legacy_windows",
     )
 
@@ -318,19 +321,36 @@ def run_legacy_pepsi_fit(args, parser):
         window_pad_A=args.window_pad,
     )
 
+    telluric_mask_metadata = None
     if args.use_telluric_mask:
-        print("Loading telluric mask...", flush=True)
-        _, telluric_mask = Spyctres.load_telluric_lines(args.telluric_threshold)
-
-        def exclude_mask(wave):
-            return np.asarray(telluric_mask(wave)) > 0.5
+        print("Loading high-resolution telluric transmission mask...", flush=True)
+        telluric_mask = telluric_transmission_exclusion_mask(
+            threshold=args.telluric_threshold
+        )
+        telluric_mask_metadata = dict(telluric_mask.metadata)
+        print(
+            "Telluric mask method={0}, threshold={1}, model={2}, frame_type={3}, "
+            "fallback_broad_regions_used={4}".format(
+                telluric_mask_metadata.get("method"),
+                telluric_mask_metadata.get("threshold"),
+                telluric_mask_metadata.get("model_file"),
+                telluric_mask_metadata.get("frame_type"),
+                telluric_mask_metadata.get("fallback_broad_regions_used"),
+            ),
+            flush=True,
+        )
 
         segments = [
-            seg.copy(mask=np.asarray(seg.mask, dtype=bool) & ~exclude_mask(seg.wave))
+            seg.copy(mask=np.asarray(seg.mask, dtype=bool) & ~telluric_mask(seg.wave))
             for seg in segments
         ]
 
-    collection = _make_unit_collection(segments, window_defs, args)
+    collection = _make_unit_collection(
+        segments,
+        window_defs,
+        args,
+        telluric_mask_metadata=telluric_mask_metadata,
+    )
     segments = list(collection.segments)
     segment_weights = np.asarray(collection.weights, dtype=float)
 
@@ -538,6 +558,18 @@ def run_legacy_pepsi_fit(args, parser):
     print("Wave medium hypothesis:", args.wave_hypothesis)
     print("Barycorr used [km/s]:", rv_bary_kms)
     print("Telluric mask:", bool(args.use_telluric_mask))
+    if collection.meta.get("telluric_mask"):
+        tm = collection.meta["telluric_mask"]
+        print(
+            "Telluric mask provenance: method={0}, threshold={1}, model={2}, "
+            "frame_type={3}, fallback_broad_regions_used={4}".format(
+                tm.get("method"),
+                tm.get("threshold"),
+                tm.get("model_file"),
+                tm.get("frame_type"),
+                tm.get("fallback_broad_regions_used"),
+            )
+        )
     print("R used:", R)
     print("Legacy flux range:", (args.legacy_flux_min, args.legacy_flux_max))
 
@@ -667,7 +699,10 @@ def main():
     standard.add_argument(
         "--use-telluric-mask",
         action="store_true",
-        help="Apply Spyctres' built-in telluric mask.",
+        help=(
+            "Apply Spyctres' high-resolution telluric transmission-threshold "
+            "mask. Broad catalog telluric regions are not used by this option."
+        ),
     )
     standard.add_argument(
         "--use-ssbvel",
@@ -914,16 +949,28 @@ def main():
     print("Preparing PEPSI fit windows...", flush=True)
     segments = build_window_segments(seg, window_defs, pad=args.window_pad)
 
-    exclude_mask = None
+    exclude_masks = None
     if args.use_telluric_mask:
-        print("Loading telluric mask...", flush=True)
-        _, telluric_mask = Spyctres.load_telluric_lines(args.telluric_threshold)
-
-        def exclude_mask(wave):
-            return np.asarray(telluric_mask(wave)) > 0.5
+        print("Loading high-resolution telluric transmission mask...", flush=True)
+        telluric_mask = telluric_transmission_exclusion_mask(
+            threshold=args.telluric_threshold
+        )
+        exclude_masks = [telluric_mask]
+        meta = telluric_mask.metadata
+        print(
+            "Telluric mask method={0}, threshold={1}, model={2}, frame_type={3}, "
+            "fallback_broad_regions_used={4}".format(
+                meta.get("method"),
+                meta.get("threshold"),
+                meta.get("model_file"),
+                meta.get("frame_type"),
+                meta.get("fallback_broad_regions_used"),
+            ),
+            flush=True,
+        )
 
     used_masks_plot = [
-        build_effective_fit_mask(seg_i, exclude_mask=exclude_mask)
+        build_effective_fit_mask(seg_i, exclude_masks=exclude_masks)
         for seg_i in segments
     ]
     if not any(np.any(m) for m in used_masks_plot):
@@ -960,7 +1007,7 @@ def main():
         segments,
         phoenix_lib=phoenix_lib,
         p0=(args.teff0, args.feh0, args.logg0, args.rv0),
-        exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mdeg=args.mdeg,
         rv_bary_kms=rv_bary_kms,
         R=R,
@@ -982,7 +1029,7 @@ def main():
         segments=segments,
         phoenix_lib=phoenix_lib,
         fit_result=out,
-        exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
         mdeg=args.mdeg,
         rv_bary_kms=rv_bary_kms,
         R=R,
