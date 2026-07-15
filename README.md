@@ -147,6 +147,25 @@ spectra when processing many observations. The script loads PHOENIX once,
 runs a cheap quicklook fit, narrows the local Teff/[Fe/H]/logg/RV bounds, runs
 a focused refinement, and checkpoints after each spectrum.
 
+Minimal copy/paste sequence, assuming PHOENIX is already configured:
+
+```bash
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --quick-only \
+  --output /tmp/spyctres_batch_quick.json \
+  --resume
+
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output /tmp/spyctres_batch_refined.json \
+  --resume
+
+python -m json.tool /tmp/spyctres_batch_refined.json
+```
+
 To open the PHOENIX example notebook:
 
 ```bash

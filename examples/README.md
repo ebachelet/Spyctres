@@ -79,6 +79,25 @@ python examples/batch_quickscan_then_refine.py /path/to/xshooter/*.fits \
   --resume
 ```
 
+Minimal reproduction sequence, assuming PHOENIX is already configured:
+
+```bash
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --quick-only \
+  --output /tmp/spyctres_batch_quick.json \
+  --resume
+
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output /tmp/spyctres_batch_refined.json \
+  --resume
+
+python -m json.tool /tmp/spyctres_batch_refined.json
+```
+
 The script loads the PHOENIX library once, then for each spectrum:
 
 1. reads the spectrum through the normal Spyctres reader;
