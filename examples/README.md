@@ -9,12 +9,14 @@ Start with the public examples, then move into advanced and validation
 workflows:
 
 1. `simple_phoenix_fit.py` — shortest command-line path using the public API.
-2. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
-3. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
+2. `batch_quickscan_then_refine.py` — batch-oriented quick scan followed by
+   focused refinement; useful when fitting many spectra.
+3. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
+4. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
    diagnostic workflow.
-4. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
+5. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
    useful after the basic workflow is familiar.
-5. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
+6. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
    PEPSI legacy line-window path, not the generic public classification path.
 
 The examples are ordered by how much Spyctres-specific context they assume.
@@ -52,7 +54,48 @@ the loaded spectrum metadata. Expert users can still override those choices
 with flags such as `--wmin`, `--wmax`, `--teff`, `--teff-min`, or
 `--no-auto-defaults`.
 
-## Example 4: XSL real-spectrum validation
+## Example 2: batch quick scan, then focused refinement
+
+Use `batch_quickscan_then_refine.py` when you have many spectra and do not want
+to explore a broad PHOENIX parameter box from scratch for every file. The
+example defaults to the bundled X-SHOOTER UVB spectrum because it is fast,
+line-rich, and avoids the extra arm/telluric choices involved in multi-arm
+X-SHOOTER fitting:
+
+```bash
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output /tmp/spyctres_batch_xshooter_uvb.json \
+  --resume
+```
+
+For a real batch, pass a list of files:
+
+```bash
+python examples/batch_quickscan_then_refine.py /path/to/xshooter/*.fits \
+  --instrument xshooter \
+  --output /tmp/spyctres_batch.json \
+  --resume
+```
+
+The script loads the PHOENIX library once, then for each spectrum:
+
+1. reads the spectrum through the normal Spyctres reader;
+2. runs a cheap quicklook fit;
+3. builds a narrower Teff, [Fe/H], logg, and RV box around that result;
+4. runs a focused second fit in that local box;
+5. writes an atomic JSON checkpoint after the target finishes.
+
+This is a throughput example, not a replacement for final scientific review.
+Inspect the saved quality flags and residual diagnostics before interpreting a
+large batch. Use `--quick-only` if you only want the first-pass scan, and tune
+`--teff-margin`, `--logg-margin`, `--rv-margin`, `--quick-max-nfev`, and
+`--refine-max-nfev` for the science case. Multi-arm X-SHOOTER fitting should be
+introduced after the UVB workflow is understood, because the VIS/NIR arms bring
+additional telluric, arm-scaling, and wavelength-coverage choices.
+
+## Example 5: XSL real-spectrum validation
 
 The Figure 1 validation sample from Verro et al. (2022) is listed in
 `xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
@@ -213,7 +256,7 @@ by itself prove that the DIB identification is correct or that masking is the
 final scientific choice. Inspect the residuals, other Balmer lines, continuum
 placement, and LSF assumptions before drawing that conclusion.
 
-## Example 2: first worked notebook
+## Example 3: first worked notebook
 
 The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
 example of the generic PHOENIX fitting workflow. It is not intended to be the

@@ -117,18 +117,35 @@ Recommended example order:
 
 1. `examples/simple_phoenix_fit.py` for the shortest command-line public-API
    path.
-2. `examples/full_spectrum_classification.ipynb` for the first worked
+2. `examples/batch_quickscan_then_refine.py` for fitting many spectra with a
+   cheap quick scan followed by focused local refinement.
+3. `examples/full_spectrum_classification.ipynb` for the first worked
    PHOENIX classification notebook.
-3. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
+4. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
    fitting diagnostics.
-4. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
-5. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
+5. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
+6. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
    line-window validation path.
 
 Other useful entry points include `quick_example.py` for the legacy fitting
 workflow and smoke tests under `scripts/`. See `examples/README.md` for data
 paths, PHOENIX configuration, caveats, and the same recommended order with more
 detail.
+
+For batches, start with the X-SHOOTER UVB throughput example:
+
+```bash
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output /tmp/spyctres_batch_xshooter_uvb.json \
+  --resume
+```
+
+Replace the single example file with a list or shell-expanded directory of
+spectra when processing many observations. The script loads PHOENIX once,
+runs a cheap quicklook fit, narrows the local Teff/[Fe/H]/logg/RV bounds, runs
+a focused refinement, and checkpoints after each spectrum.
 
 To open the PHOENIX example notebook:
 
