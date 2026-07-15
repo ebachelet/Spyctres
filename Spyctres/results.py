@@ -335,9 +335,53 @@ QUALITY_FLAG_DESCRIPTIONS = {
     "resolution_missing": (
         "At least one fitted segment lacks explicit resolution/LSF metadata."
     ),
+    "gaussian_lsf_assumed": (
+        "The fit used a Gaussian instrumental line-spread function assumption "
+        "for at least one segment."
+    ),
+    "constant_lsf_assumed": (
+        "The fit used a constant-velocity/constant-R LSF approximation for at "
+        "least one segment; wavelength-dependent or tabulated LSF effects were "
+        "not modelled."
+    ),
+    "low_sampling_warning": (
+        "At least one segment is sampled with fewer than about two pixels per "
+        "assumed Gaussian-LSF FWHM at its coarsest fitted spacing."
+    ),
+    "tabulated_lsf_present_but_not_supported_by_fitter": (
+        "A tabulated/wavelength-dependent LSF descriptor was present, but the "
+        "current PHOENIX fitter only supports constant Gaussian broadening."
+    ),
     "wavelength_frame_ambiguous": (
         "At least one fitted segment has an unknown wavelength frame; RV and "
         "barycentric assumptions need review."
+    ),
+    "unknown_wave_medium_used_in_fit": (
+        "At least one fitted segment has unknown air/vacuum wavelength medium; "
+        "the fitted RV may absorb a wavelength-medium mismatch."
+    ),
+    "unknown_observer_frame_used_in_fit": (
+        "At least one fitted segment has unknown observer-motion frame; the "
+        "reported RV should be treated as an alignment parameter."
+    ),
+    "stellar_rest_status_unknown": (
+        "At least one fitted segment has unknown stellar-rest correction status; "
+        "the fitted RV may not be a physical stellar radial velocity."
+    ),
+    "rv_interpretation_ambiguous": (
+        "Wavelength-frame, observer-frame, stellar-rest, or barycentric metadata "
+        "are incomplete or internally risky, so interpret RV as a model alignment "
+        "term unless the product semantics are verified."
+    ),
+    "barycentric_correction_recorded_not_applied": (
+        "A barycentric/heliocentric correction value is present in metadata but "
+        "was not applied by the fitter; verify whether the wavelength array "
+        "already includes it."
+    ),
+    "possible_double_barycentric_or_rest_correction": (
+        "A nonzero barycentric term was supplied for data whose metadata suggest "
+        "a barycentric or stellar-rest wavelength scale; this may double-correct "
+        "the model/data frame."
     ),
     "metadata_incomplete": (
         "One or more wavelength/metadata fields are unknown or incomplete."

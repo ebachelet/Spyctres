@@ -1036,11 +1036,78 @@ def _unique_metadata_value(segments, attribute):
     return "mixed"
 
 
+def _barycentric_metadata_summary(segments, rv_bary_kms):
+    """Summarize recorded observer-motion corrections without applying them."""
+    def _has_recorded_value(value):
+        if value is None:
+            return False
+        if isinstance(value, dict):
+            return any(_has_recorded_value(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(_has_recorded_value(item) for item in value)
+        return True
+
+    keys = (
+        "barycorr_kms",
+        "helicorr_kms",
+        "ssbvel_mps",
+        "velocity_corrections",
+    )
+    records = []
+    for index, segment in enumerate(segments):
+        meta = dict(getattr(segment, "meta", {}) or {})
+        present = {}
+        for key in keys:
+            value = meta.get(key)
+            if _has_recorded_value(value):
+                present[key] = value
+        if present:
+            records.append(
+                {
+                    "segment": getattr(segment, "name", None)
+                    or "segment {0}".format(index + 1),
+                    "observer_frame": getattr(segment, "observer_frame", "unknown"),
+                    "stellar_rest_status": getattr(
+                        segment, "stellar_rest_status", "unknown"
+                    ),
+                    "metadata": present,
+                }
+            )
+
+    rv_bary_applied = bool(not np.isclose(float(rv_bary_kms), 0.0))
+    recorded_not_applied = False
+    possible_double = False
+    for item in records:
+        observer_frame = str(item.get("observer_frame", "unknown")).lower()
+        stellar_rest_status = str(
+            item.get("stellar_rest_status", "unknown")
+        ).lower()
+        already_corrected = (
+            observer_frame == "barycentric"
+            or stellar_rest_status == "corrected"
+        )
+        if (not rv_bary_applied) and not already_corrected:
+            recorded_not_applied = True
+        if rv_bary_applied and already_corrected:
+            possible_double = True
+
+    return {
+        "records": records,
+        "recorded": bool(records),
+        "recorded_not_applied": bool(recorded_not_applied),
+        "possible_double_barycentric_or_rest_correction": bool(possible_double),
+    }
+
+
 def _velocity_convention_summary(forward_segments, rv_kms, rv_bary_kms):
     """Return explicit velocity/frame semantics for result JSON and audits."""
     rv_kms = float(rv_kms)
     rv_bary_kms = float(rv_bary_kms)
     total = rv_kms + rv_bary_kms
+    barycentric_metadata = _barycentric_metadata_summary(
+        forward_segments,
+        rv_bary_kms=rv_bary_kms,
+    )
     return {
         "rv_kms_fit": rv_kms,
         "rv_bary_kms_input": rv_bary_kms,
@@ -1053,6 +1120,7 @@ def _velocity_convention_summary(forward_segments, rv_kms, rv_bary_kms):
         "rv_bary_applied_to_model": bool(not np.isclose(rv_bary_kms, 0.0)),
         "rv_bary_term_in_model_formula": True,
         "rv_bary_applied_to_data": "unknown",
+        "barycentric_velocity_metadata": barycentric_metadata,
         "wavelength_frame_assumption": {
             "wave_frame": _unique_metadata_value(forward_segments, "wave_frame"),
             "observer_frame": _unique_metadata_value(forward_segments, "observer_frame"),
@@ -1061,6 +1129,119 @@ def _velocity_convention_summary(forward_segments, rv_kms, rv_bary_kms):
             ),
             "wave_medium": _unique_metadata_value(forward_segments, "wave_medium"),
         },
+    }
+
+
+def _segment_lsf_sampling_diagnostics(segment, fwhm_kms):
+    """Return per-segment Gaussian-LSF sampling diagnostics."""
+    descriptor = getattr(segment, "resolution", None)
+    descriptor_meta = (
+        None
+        if descriptor is None
+        else descriptor.to_metadata()
+        if hasattr(descriptor, "to_metadata")
+        else None
+    )
+    tabulated_present = bool(
+        descriptor_meta is not None
+        and str(descriptor_meta.get("mode", "")).lower() == "tabulated"
+    )
+    source = None
+    if descriptor_meta is not None:
+        source = descriptor_meta.get("source") or "segment_resolution_metadata"
+    elif fwhm_kms is not None:
+        source = "global_or_resolved_constant_lsf"
+
+    out = {
+        "gaussian_lsf_assumed": bool(fwhm_kms is not None),
+        "constant_lsf_assumed": bool(fwhm_kms is not None),
+        "lsf_source": source,
+        "resolution_descriptor": descriptor_meta,
+        "tabulated_lsf_present_but_not_supported_by_fitter": (
+            bool(tabulated_present and fwhm_kms is None)
+        ),
+        "pixels_per_fwhm_median": None,
+        "pixels_per_fwhm_min": None,
+        "native_delta_v_kms_median": None,
+        "native_delta_v_kms_max": None,
+        "low_sampling_warning": False,
+    }
+    if fwhm_kms is None:
+        return out
+
+    wave = np.asarray(getattr(segment, "wave", []), dtype=float)
+    wave = np.sort(wave[np.isfinite(wave) & (wave > 0)])
+    if wave.size < 2:
+        out["low_sampling_warning"] = True
+        return out
+    delta_v = np.diff(np.log(wave)) * C_KMS
+    delta_v = np.abs(delta_v[np.isfinite(delta_v) & (delta_v > 0)])
+    if delta_v.size == 0:
+        out["low_sampling_warning"] = True
+        return out
+
+    fwhm_kms = float(fwhm_kms)
+    delta_v_median = float(np.median(delta_v))
+    delta_v_max = float(np.max(delta_v))
+    pixels_median = float(fwhm_kms / delta_v_median)
+    pixels_min = float(fwhm_kms / delta_v_max)
+    out.update(
+        {
+            "pixels_per_fwhm_median": pixels_median,
+            "pixels_per_fwhm_min": pixels_min,
+            "native_delta_v_kms_median": delta_v_median,
+            "native_delta_v_kms_max": delta_v_max,
+            "low_sampling_warning": bool(pixels_min < 2.0),
+        }
+    )
+    return out
+
+
+def _lsf_sampling_summary(segment_diagnostics):
+    """Aggregate per-segment LSF diagnostics into a compact summary."""
+    lsf_items = [
+        dict(segment.get("lsf_sampling", {}))
+        for segment in segment_diagnostics
+    ]
+    medians = [
+        item.get("pixels_per_fwhm_median")
+        for item in lsf_items
+        if item.get("pixels_per_fwhm_median") is not None
+    ]
+    minima = [
+        item.get("pixels_per_fwhm_min")
+        for item in lsf_items
+        if item.get("pixels_per_fwhm_min") is not None
+    ]
+    return {
+        "gaussian_lsf_assumed": bool(
+            any(item.get("gaussian_lsf_assumed") for item in lsf_items)
+        ),
+        "constant_lsf_assumed": bool(
+            any(item.get("constant_lsf_assumed") for item in lsf_items)
+        ),
+        "lsf_sources": sorted(
+            {
+                str(item.get("lsf_source"))
+                for item in lsf_items
+                if item.get("lsf_source") is not None
+            }
+        ),
+        "pixels_per_fwhm_median": (
+            None if not medians else float(np.median(np.asarray(medians, dtype=float)))
+        ),
+        "pixels_per_fwhm_min": (
+            None if not minima else float(np.min(np.asarray(minima, dtype=float)))
+        ),
+        "low_sampling_warning": bool(
+            any(item.get("low_sampling_warning") for item in lsf_items)
+        ),
+        "tabulated_lsf_present_but_not_supported_by_fitter": bool(
+            any(
+                item.get("tabulated_lsf_present_but_not_supported_by_fitter")
+                for item in lsf_items
+            )
+        ),
     }
 
 
@@ -1140,6 +1321,11 @@ def _build_phoenix_fit_diagnostics(
         mask_summary = dict(meta.get("mask_summary", {}))
         mask_provenance = dict(meta.get("mask_provenance", {}))
         error_floor = dict(meta.get("error_floor", {}))
+        seg_fwhm = segment_fwhm_kms[index]
+        lsf_sampling = _segment_lsf_sampling_diagnostics(
+            forward_segments[index],
+            seg_fwhm,
+        )
         segment_diagnostics.append(
             {
                 "name": meta.get("name"),
@@ -1157,14 +1343,15 @@ def _build_phoenix_fit_diagnostics(
                 "mask_provenance": mask_provenance,
                 "lsf_fwhm_kms": (
                     None
-                    if segment_fwhm_kms[index] is None
-                    else float(segment_fwhm_kms[index])
+                    if seg_fwhm is None
+                    else float(seg_fwhm)
                 ),
                 "resolution_R_effective": (
                     None
-                    if segment_fwhm_kms[index] is None
-                    else float(C_KMS / segment_fwhm_kms[index])
+                    if seg_fwhm is None
+                    else float(C_KMS / seg_fwhm)
                 ),
+                "lsf_sampling": lsf_sampling,
             }
         )
 
@@ -1197,6 +1384,7 @@ def _build_phoenix_fit_diagnostics(
         rv_kms=rv_kms,
         rv_bary_kms=rv_bary_kms,
     )
+    lsf_sampling_summary = _lsf_sampling_summary(segment_diagnostics)
 
     return {
         "schema_version": 1,
@@ -1257,6 +1445,7 @@ def _build_phoenix_fit_diagnostics(
                 None if value is None else float(C_KMS / value)
                 for value in segment_fwhm_kms
             ],
+            **lsf_sampling_summary,
         },
         **residual_shape,
     }
@@ -1290,6 +1479,11 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
         flags.append("fit_bound_hit")
     if diagnostics.get("resolution_metadata_summary", {}).get("missing_count", 0) > 0:
         flags.append("resolution_missing")
+    resolution = diagnostics.get("resolution_metadata_summary", {})
+    if resolution.get("low_sampling_warning"):
+        flags.append("low_sampling_warning")
+    if resolution.get("tabulated_lsf_present_but_not_supported_by_fitter"):
+        flags.append("tabulated_lsf_present_but_not_supported_by_fitter")
 
     wavelength = diagnostics.get("wavelength_metadata_summary", {})
     unknown_fields = [
@@ -1297,10 +1491,25 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
         for field, info in wavelength.items()
         if int(info.get("unknown_count", 0)) > 0
     ]
+    if "wave_medium" in unknown_fields:
+        flags.append("unknown_wave_medium_used_in_fit")
     if "wave_frame" in unknown_fields:
         flags.append("wavelength_frame_ambiguous")
+    if "observer_frame" in unknown_fields:
+        flags.append("unknown_observer_frame_used_in_fit")
+    if "stellar_rest_status" in unknown_fields:
+        flags.append("stellar_rest_status_unknown")
     if unknown_fields:
         flags.append("metadata_incomplete")
+        flags.append("rv_interpretation_ambiguous")
+    velocity = diagnostics.get("velocity_convention", {})
+    barycentric = velocity.get("barycentric_velocity_metadata", {})
+    if barycentric.get("recorded_not_applied"):
+        flags.append("barycentric_correction_recorded_not_applied")
+        flags.append("rv_interpretation_ambiguous")
+    if barycentric.get("possible_double_barycentric_or_rest_correction"):
+        flags.append("possible_double_barycentric_or_rest_correction")
+        flags.append("rv_interpretation_ambiguous")
 
     if diagnostics.get("mask_fraction") is not None and diagnostics["mask_fraction"] > 0.5:
         flags.append("mask_fraction_high")

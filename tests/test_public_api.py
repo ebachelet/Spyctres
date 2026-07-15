@@ -231,11 +231,19 @@ def test_compare_fit_results_is_top_level_public_api():
 
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
     descriptions = describe_quality_flags(
-        ["metadata_incomplete", "grid_edge_teff_high", "surprise_flag"]
+        [
+            "metadata_incomplete",
+            "grid_edge_teff_high",
+            "rv_interpretation_ambiguous",
+            "low_sampling_warning",
+            "surprise_flag",
+        ]
     )
 
     assert "metadata" in descriptions["metadata_incomplete"]
     assert "high edge" in descriptions["grid_edge_teff_high"]
+    assert "alignment" in descriptions["rv_interpretation_ambiguous"]
+    assert "pixels" in descriptions["low_sampling_warning"]
     assert "No description" in descriptions["surprise_flag"]
 
 

@@ -555,6 +555,9 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
     assert diagnostics["grid_edge_flags"]["feh"] is False
     assert diagnostics["grid_edge_flags"]["fit_bound_hit"] is True
     assert diagnostics["resolution_metadata_summary"]["missing_count"] == 1
+    assert diagnostics["resolution_metadata_summary"]["gaussian_lsf_assumed"] is False
+    assert diagnostics["resolution_metadata_summary"]["constant_lsf_assumed"] is False
+    assert diagnostics["resolution_metadata_summary"]["pixels_per_fwhm_median"] is None
     assert diagnostics["rv_start_values"] == [0.0]
     assert diagnostics["total_model_shift_kms"] == pytest.approx(9.0)
     assert diagnostics["velocity_convention"]["rv_kms_fit"] == pytest.approx(12.0)
@@ -583,6 +586,10 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
     assert "fit_bound_hit" in flags
     assert "resolution_missing" in flags
     assert "wavelength_frame_ambiguous" in flags
+    assert "unknown_wave_medium_used_in_fit" in flags
+    assert "unknown_observer_frame_used_in_fit" in flags
+    assert "stellar_rest_status_unknown" in flags
+    assert "rv_interpretation_ambiguous" in flags
     assert "metadata_incomplete" in flags
     assert "segment_no_fit_pixels" in flags
     assert "too_few_fit_pixels" in flags
@@ -705,6 +712,179 @@ def test_velocity_convention_summary_reports_mixed_frame_state():
     assert summary["wavelength_frame_assumption"]["observer_frame"] == "mixed"
     assert summary["wavelength_frame_assumption"]["stellar_rest_status"] == "mixed"
     assert summary["wavelength_frame_assumption"]["wave_medium"] == "mixed"
+
+
+def test_velocity_convention_flags_recorded_barycentric_metadata_risks():
+    topocentric = SpectrumSegment(
+        [5000.0, 5001.0],
+        [1.0, 1.0],
+        wave_frame="topocentric",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        meta={"barycorr_kms": 22.0},
+    )
+    corrected = SpectrumSegment(
+        [5000.0, 5001.0],
+        [1.0, 1.0],
+        wave_frame="stellar_rest",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        meta={"barycorr_kms": 22.0},
+    )
+
+    recorded = _velocity_convention_summary(
+        [topocentric],
+        rv_kms=0.0,
+        rv_bary_kms=0.0,
+    )
+    assert (
+        recorded["barycentric_velocity_metadata"]["recorded_not_applied"]
+        is True
+    )
+    flags = _phoenix_quality_flags(
+        {
+            "reduced_chi2": 1.0,
+            "grid_edge_flags": {},
+            "n_dropped_segments": 0,
+            "mask_fraction": 0.0,
+            "resolution_metadata_summary": {"missing_count": 0},
+            "wavelength_metadata_summary": {},
+            "velocity_convention": recorded,
+            "segment_diagnostics": [{"n_fit": 100, "mask_fraction": 0.0}],
+            "n_parameters": 4,
+        }
+    )
+    assert "barycentric_correction_recorded_not_applied" in flags
+    assert "rv_interpretation_ambiguous" in flags
+
+    double = _velocity_convention_summary(
+        [corrected],
+        rv_kms=0.0,
+        rv_bary_kms=22.0,
+    )
+    assert (
+        double["barycentric_velocity_metadata"][
+            "possible_double_barycentric_or_rest_correction"
+        ]
+        is True
+    )
+    flags = _phoenix_quality_flags(
+        {
+            "reduced_chi2": 1.0,
+            "grid_edge_flags": {},
+            "n_dropped_segments": 0,
+            "mask_fraction": 0.0,
+            "resolution_metadata_summary": {"missing_count": 0},
+            "wavelength_metadata_summary": {},
+            "velocity_convention": double,
+            "segment_diagnostics": [{"n_fit": 100, "mask_fraction": 0.0}],
+            "n_parameters": 4,
+        }
+    )
+    assert "possible_double_barycentric_or_rest_correction" in flags
+    assert "rv_interpretation_ambiguous" in flags
+
+
+def test_lsf_sampling_diagnostics_flag_low_sampling_and_tabulated_lsf():
+    class Library:
+        DEFAULT_TEFF_GRID = np.array([5000.0, 6000.0])
+        DEFAULT_FEH_GRID = np.array([-0.5, 0.0])
+        DEFAULT_LOGG_GRID = np.array([3.0, 4.0])
+
+    segment = SpectrumSegment(
+        [5000.0, 5010.0, 5020.0],
+        [1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1],
+        mask=[True, True, True],
+        name="undersampled",
+        wave_medium="vacuum",
+        wave_frame="topocentric",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+    )
+    diagnostics = _build_phoenix_fit_diagnostics(
+        residuals=np.array([0.0, 0.0, 0.0]),
+        chi2=0.0,
+        chi2_red=0.0,
+        dof=1,
+        n_parameters=4,
+        input_segments=[segment],
+        forward_segments=[segment],
+        seg_meta=[
+            {
+                "name": "undersampled",
+                "index": 0,
+                "weight": 1.0,
+                "n_support": 3,
+                "n_fit": 3,
+                "wave_min": 5000.0,
+                "wave_max": 5020.0,
+                "mask_summary": {"n_fit": 3},
+                "mask_provenance": {},
+                "error_floor": {},
+            }
+        ],
+        mdeg=0,
+        best_parameters=np.array([5500.0, -0.25, 3.5, 0.0]),
+        phoenix_lib=Library(),
+        segment_fwhm_kms=[5.0],
+        local_solutions=[],
+        coarse_initialization=None,
+    )
+    resolution = diagnostics["resolution_metadata_summary"]
+    assert resolution["gaussian_lsf_assumed"] is True
+    assert resolution["constant_lsf_assumed"] is True
+    assert resolution["pixels_per_fwhm_min"] < 2.0
+    assert resolution["low_sampling_warning"] is True
+    flags = _phoenix_quality_flags(diagnostics)
+    assert "low_sampling_warning" in flags
+
+    tabulated = segment.copy(
+        resolution=ResolutionDescriptor(
+            quantity="R",
+            mode="tabulated",
+            wave_A=[5000.0, 5020.0],
+            values=[8000.0, 9000.0],
+            source="unit_test_tabulated_lsf",
+        )
+    )
+    diagnostics = _build_phoenix_fit_diagnostics(
+        residuals=np.array([0.0, 0.0, 0.0]),
+        chi2=0.0,
+        chi2_red=0.0,
+        dof=1,
+        n_parameters=4,
+        input_segments=[tabulated],
+        forward_segments=[tabulated],
+        seg_meta=[
+            {
+                "name": "tabulated",
+                "index": 0,
+                "weight": 1.0,
+                "n_support": 3,
+                "n_fit": 3,
+                "wave_min": 5000.0,
+                "wave_max": 5020.0,
+                "mask_summary": {"n_fit": 3},
+                "mask_provenance": {},
+                "error_floor": {},
+            }
+        ],
+        mdeg=0,
+        best_parameters=np.array([5500.0, -0.25, 3.5, 0.0]),
+        phoenix_lib=Library(),
+        segment_fwhm_kms=[None],
+        local_solutions=[],
+        coarse_initialization=None,
+    )
+    assert (
+        diagnostics["resolution_metadata_summary"][
+            "tabulated_lsf_present_but_not_supported_by_fitter"
+        ]
+        is True
+    )
+    flags = _phoenix_quality_flags(diagnostics)
+    assert "tabulated_lsf_present_but_not_supported_by_fitter" in flags
 
 
 class _NodeLibrary:
