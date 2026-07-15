@@ -1363,6 +1363,47 @@ def _build_phoenix_fit_diagnostics(
         if support_points <= 0
         else float(1.0 - fit_points / float(support_points))
     )
+    mask_summary_pixels = int(
+        sum(
+            int(dict(meta.get("mask_summary", {})).get("n_pixels", 0))
+            for meta in seg_meta
+        )
+    )
+    outside_fit_window_points = int(
+        sum(
+            int(dict(meta.get("mask_summary", {})).get("n_outside_fit_window", 0))
+            for meta in seg_meta
+        )
+    )
+    inside_fit_window_points = int(
+        sum(
+            int(dict(meta.get("mask_summary", {})).get("n_inside_fit_window", 0))
+            for meta in seg_meta
+        )
+    )
+    rejected_inside_fit_window_points = int(
+        sum(
+            int(
+                dict(meta.get("mask_summary", {})).get(
+                    "n_rejected_inside_fit_window",
+                    0,
+                )
+            )
+            for meta in seg_meta
+        )
+    )
+    outside_fit_window_fraction = (
+        None
+        if mask_summary_pixels <= 0
+        else float(outside_fit_window_points / float(mask_summary_pixels))
+    )
+    rejected_inside_fit_window_fraction = (
+        None
+        if inside_fit_window_points <= 0
+        else float(
+            rejected_inside_fit_window_points / float(inside_fit_window_points)
+        )
+    )
 
     segment_diagnostics = []
     for index, meta in enumerate(seg_meta):
@@ -1385,6 +1426,12 @@ def _build_phoenix_fit_diagnostics(
                 "n_fit": n_fit,
                 "mask_fraction": (
                     None if n_support <= 0 else float(1.0 - n_fit / float(n_support))
+                ),
+                "outside_fit_window_fraction": mask_summary.get(
+                    "outside_fit_window_fraction"
+                ),
+                "rejected_inside_fit_window_fraction": mask_summary.get(
+                    "rejected_inside_fit_window_fraction"
                 ),
                 "wave_min": meta.get("wave_min"),
                 "wave_max": meta.get("wave_max"),
@@ -1489,6 +1536,8 @@ def _build_phoenix_fit_diagnostics(
         "coarse_grid_candidates": coarse_summary,
         "local_solution_summaries": local_solution_summaries,
         "mask_fraction": mask_fraction,
+        "outside_fit_window_fraction": outside_fit_window_fraction,
+        "rejected_inside_fit_window_fraction": rejected_inside_fit_window_fraction,
         "continuum_degree": int(mdeg),
         "continuum_warning_flags": [],
         "segment_rv_scatter": None,
@@ -1575,7 +1624,11 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
         flags.append("possible_double_barycentric_or_rest_correction")
         flags.append("rv_interpretation_ambiguous")
 
-    if diagnostics.get("mask_fraction") is not None and diagnostics["mask_fraction"] > 0.5:
+    report_mask_fraction = diagnostics.get(
+        "rejected_inside_fit_window_fraction",
+        diagnostics.get("mask_fraction"),
+    )
+    if report_mask_fraction is not None and float(report_mask_fraction) > 0.5:
         flags.append("mask_fraction_high")
     if int(diagnostics.get("n_dropped_segments", 0)) > 0:
         flags.append("segment_no_fit_pixels")
@@ -1585,9 +1638,16 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
     min_pixels = max(20, n_parameters + 5)
     if any(int(segment.get("n_fit", 0)) < min_pixels for segment in segment_diagnostics):
         flags.append("too_few_fit_pixels")
+
+    def _effective_rejected_fraction(segment):
+        fraction = segment.get("rejected_inside_fit_window_fraction")
+        if fraction is None:
+            fraction = segment.get("mask_fraction")
+        return fraction
+
     if any(
-        segment.get("mask_fraction") is not None
-        and float(segment.get("mask_fraction")) > 0.5
+        _effective_rejected_fraction(segment) is not None
+        and float(_effective_rejected_fraction(segment)) > 0.5
         for segment in segment_diagnostics
     ):
         flags.append("segment_mask_fraction_high")

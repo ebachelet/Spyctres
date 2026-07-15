@@ -387,7 +387,8 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "One or more wavelength/metadata fields are unknown or incomplete."
     ),
     "mask_fraction_high": (
-        "More than half of the global support pixels were excluded from the fit."
+        "More than half of the pixels inside the selected fit window were "
+        "excluded from the fit."
     ),
     "segment_no_fit_pixels": (
         "At least one input segment had no usable fit pixels and was dropped."
@@ -397,8 +398,8 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "the model complexity."
     ),
     "segment_mask_fraction_high": (
-        "At least one retained segment had more than half of its support pixels "
-        "masked out."
+        "At least one retained segment had more than half of its selected "
+        "fit-window pixels rejected."
     ),
     "explicit_exclusion_dominates": (
         "Explicit user/recipe exclusions removed more pixels than remained in "
@@ -554,6 +555,14 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
                 "n_fit": segment.get("n_fit"),
                 "n_support": segment.get("n_support"),
                 "mask_fraction": segment.get("mask_fraction"),
+                "outside_fit_window_fraction": segment.get(
+                    "outside_fit_window_fraction",
+                    mask_summary.get("outside_fit_window_fraction"),
+                ),
+                "rejected_inside_fit_window_fraction": segment.get(
+                    "rejected_inside_fit_window_fraction",
+                    mask_summary.get("rejected_inside_fit_window_fraction"),
+                ),
                 "explicit_exclusion_count": mask_summary.get(
                     "n_rejected_by_explicit_union"
                 ),
@@ -612,6 +621,12 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
         "n_parameters": diagnostics.get("n_parameters"),
         "degrees_of_freedom": diagnostics.get("degrees_of_freedom"),
         "mask_fraction": diagnostics.get("mask_fraction"),
+        "outside_fit_window_fraction": diagnostics.get(
+            "outside_fit_window_fraction"
+        ),
+        "rejected_inside_fit_window_fraction": diagnostics.get(
+            "rejected_inside_fit_window_fraction"
+        ),
         "n_input_segments": diagnostics.get("n_input_segments"),
         "n_retained_segments": diagnostics.get("n_retained_segments"),
         "n_dropped_segments": diagnostics.get("n_dropped_segments"),
@@ -679,6 +694,21 @@ def format_fit_quality_report(result_or_report):
         lines.append("  fit size: {0}".format(", ".join(point_parts)))
     if report.get("mask_fraction") is not None:
         lines.append("  masked fraction: {0:.1%}".format(float(report["mask_fraction"])))
+    mask_split = []
+    if report.get("outside_fit_window_fraction") is not None:
+        mask_split.append(
+            "outside fit window={0:.1%}".format(
+                float(report["outside_fit_window_fraction"])
+            )
+        )
+    if report.get("rejected_inside_fit_window_fraction") is not None:
+        mask_split.append(
+            "rejected inside fit window={0:.1%}".format(
+                float(report["rejected_inside_fit_window_fraction"])
+            )
+        )
+    if mask_split:
+        lines.append("  mask split: {0}".format(", ".join(mask_split)))
     if report.get("n_dropped_segments"):
         lines.append("  dropped segments: {0}".format(int(report["n_dropped_segments"])))
     nonstellar = report.get("nonstellar_features") or {}
@@ -741,6 +771,18 @@ def format_fit_quality_report(result_or_report):
             )
         if segment.get("mask_fraction") is not None:
             pieces.append("masked={0:.1%}".format(float(segment["mask_fraction"])))
+        if segment.get("outside_fit_window_fraction") is not None:
+            pieces.append(
+                "outside_window={0:.1%}".format(
+                    float(segment["outside_fit_window_fraction"])
+                )
+            )
+        if segment.get("rejected_inside_fit_window_fraction") is not None:
+            pieces.append(
+                "rejected_inside={0:.1%}".format(
+                    float(segment["rejected_inside_fit_window_fraction"])
+                )
+            )
         if segment.get("explicit_exclusion_count") is not None:
             pieces.append(
                 "explicit rejects={0}".format(

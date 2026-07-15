@@ -580,6 +580,28 @@ def test_missing_errors_do_not_reject_otherwise_valid_pixels():
     assert not np.any(result.rejection_masks["invalid_error"])
 
 
+def test_fit_mask_summary_splits_window_trimming_from_inside_rejections():
+    segment = SpectrumSegment(
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [1.0, 1.0, 1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1, 0.1, 0.1],
+    )
+
+    result = compose_fit_mask(
+        segment,
+        regions=[(2.0, 4.0)],
+        exclude_regions=[(3.0, 3.0)],
+    )
+    summary = result.to_summary()
+
+    assert summary["n_outside_fit_window"] == 2
+    assert summary["outside_fit_window_fraction"] == pytest.approx(2.0 / 5.0)
+    assert summary["n_inside_fit_window"] == 3
+    assert summary["n_rejected_inside_fit_window"] == 1
+    assert summary["rejected_inside_fit_window_fraction"] == pytest.approx(1.0 / 3.0)
+    assert summary["rejected_fraction"] == pytest.approx(3.0 / 5.0)
+
+
 def test_padded_windows_preserve_wavelength_state_and_resolution():
     resolution = ResolutionDescriptor(quantity="sigma_kms", value=11.0)
     segment = SpectrumSegment(

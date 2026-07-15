@@ -54,6 +54,21 @@ the loaded spectrum metadata. Expert users can still override those choices
 with flags such as `--wmin`, `--wmax`, `--teff`, `--teff-min`, or
 `--no-auto-defaults`.
 
+For SDSS spectra, the reader deliberately leaves `resolution=None` because a
+validated SDSS LSF conversion is not yet implemented. For a quick visual
+classification pass you may supply an explicit approximate resolution, for
+example:
+
+```bash
+python examples/simple_phoenix_fit.py spec-1660-53230-0023.fits \
+  --instrument sdss \
+  --R 2000
+```
+
+Treat this as a quicklook approximation only. It is not precision SDSS LSF
+modelling, and the fitted line widths should not be interpreted as calibrated
+instrumental-broadening measurements.
+
 ## Example 2: batch quick scan, then focused refinement
 
 Use `batch_quickscan_then_refine.py` when you have many spectra and do not want

@@ -125,6 +125,30 @@ def test_append_exclusion_mask_preserves_existing_masks():
     assert names == ["existing", "nonstellar:dib_4428"]
 
 
+def test_resolution_override_filters_missing_resolution_display():
+    module = _load_example_module()
+    args = SimpleNamespace(resolution_R=2000.0)
+
+    payload = module._resolution_override_summary(args)
+
+    assert payload == {
+        "resolution_source": "user_override",
+        "assumed_resolution_R": 2000.0,
+        "assumption_warning": "approximate quicklook resolution",
+    }
+    assert module._display_risk_flags(
+        args,
+        ["missing_resolution", "unknown_wave_medium"],
+    ) == ["unknown_wave_medium"]
+    assert module._display_warnings(
+        args,
+        [
+            "segment lacks resolution metadata",
+            "wavelength medium is unknown",
+        ],
+    ) == ["wavelength medium is unknown"]
+
+
 def test_known_residual_window_diagnostic_flags_hbeta_red_wing():
     module = _load_example_module()
     wave = np.linspace(4800.0, 4930.0, 400)

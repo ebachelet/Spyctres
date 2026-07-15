@@ -54,6 +54,8 @@ def test_structured_result_quality_report_summarizes_fit_selection():
             "n_parameters": np.int64(6),
             "degrees_of_freedom": np.int64(36),
             "mask_fraction": np.float64(0.25),
+            "outside_fit_window_fraction": np.float64(0.20),
+            "rejected_inside_fit_window_fraction": np.float64(0.0625),
             "n_input_segments": 2,
             "n_retained_segments": 1,
             "n_dropped_segments": 1,
@@ -64,7 +66,14 @@ def test_structured_result_quality_report_summarizes_fit_selection():
                     "n_fit": np.int64(42),
                     "n_support": np.int64(80),
                     "mask_fraction": np.float64(0.475),
+                    "outside_fit_window_fraction": np.float64(0.20),
+                    "rejected_inside_fit_window_fraction": np.float64(0.34375),
                     "mask_summary": {
+                        "n_outside_fit_window": np.int64(16),
+                        "outside_fit_window_fraction": np.float64(0.20),
+                        "n_inside_fit_window": np.int64(64),
+                        "n_rejected_inside_fit_window": np.int64(22),
+                        "rejected_inside_fit_window_fraction": np.float64(0.34375),
                         "n_rejected_by_explicit_union": np.int64(10),
                         "explicit_exclusion_fraction": np.float64(0.125),
                         "n_rejected_by_data_invalid": np.int64(4),
@@ -89,8 +98,12 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     )
     assert report["reduced_chi2"] == 2.0
     assert report["mask_fraction"] == 0.25
+    assert report["outside_fit_window_fraction"] == 0.20
+    assert report["rejected_inside_fit_window_fraction"] == 0.0625
     assert report["n_dropped_segments"] == 1
     assert report["segments"][0]["name"] == "VIS"
+    assert report["segments"][0]["outside_fit_window_fraction"] == 0.20
+    assert report["segments"][0]["rejected_inside_fit_window_fraction"] == 0.34375
     assert report["segments"][0]["explicit_exclusion_count"] == 10
     assert report["segments"][0]["explicit_exclusion_fraction"] == 0.125
     assert report["segments"][0]["data_invalid_count"] == 4
@@ -103,8 +116,11 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     assert "flags: segment_mask_fraction_high" in text
     assert "chi2_red: 2" in text
     assert "masked fraction: 25.0%" in text
+    assert "mask split: outside fit window=20.0%, rejected inside fit window=6.2%" in text
     assert "dropped segments: 1" in text
     assert "VIS; Nfit=42/80" in text
+    assert "outside_window=20.0%" in text
+    assert "rejected_inside=34.4%" in text
 
     text_from_dict = format_fit_quality_report(result.to_dict(include_arrays=False))
     assert "Quality report:" in text_from_dict

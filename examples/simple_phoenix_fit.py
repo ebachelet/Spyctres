@@ -75,7 +75,13 @@ def build_parser():
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
             "--instrument xshooter "
             "--output-json /tmp/spyctres_result.json "
-            "--output-plot /tmp/spyctres_fit.png"
+            "--output-plot /tmp/spyctres_fit.png\n\n"
+            "Approximate SDSS quicklook example:\n"
+            "  python examples/simple_phoenix_fit.py spec-PLATE-MJD-FIBER.fits "
+            "--instrument sdss --R 2000\n"
+            "  SDSS reader metadata intentionally keeps resolution=None; "
+            "--R 2000 is an explicit quicklook approximation, not precision "
+            "SDSS LSF modelling."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -269,6 +275,34 @@ def _fit_kwargs_from_args(args, spectrum):
         ):
             _append_exclusion_mask(fit_kwargs, mask_spec)
     return fit_kwargs, suggestion
+
+
+def _resolution_override_summary(args):
+    if args.resolution_R is None:
+        return None
+    return {
+        "resolution_source": "user_override",
+        "assumed_resolution_R": float(args.resolution_R),
+        "assumption_warning": "approximate quicklook resolution",
+    }
+
+
+def _display_risk_flags(args, risk_flags):
+    flags = [str(flag) for flag in risk_flags]
+    if args.resolution_R is not None:
+        flags = [flag for flag in flags if flag != "missing_resolution"]
+    return flags
+
+
+def _display_warnings(args, warnings):
+    warnings = [str(warning) for warning in warnings]
+    if args.resolution_R is None:
+        return warnings
+    return [
+        warning
+        for warning in warnings
+        if "lacks resolution metadata" not in warning
+    ]
 
 
 def _append_exclusion_mask(fit_kwargs, mask_spec):
@@ -573,10 +607,18 @@ def main(argv=None):
     print("Reading spectrum...", flush=True)
     spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, spectrum)
+    resolution_override = _resolution_override_summary(args)
     if suggestion is not None:
         print("Suggested first-pass fit defaults:", flush=True)
         for reason in suggestion.reasons:
             print("  - {0}".format(reason), flush=True)
+        if resolution_override is not None:
+            print(
+                "  - using user-supplied assumed resolution R={0:g}".format(
+                    resolution_override["assumed_resolution_R"]
+                ),
+                flush=True,
+            )
         interpretation = suggestion.provenance.get("interpretation", {})
         if interpretation:
             print("Default interpretation:", flush=True)
@@ -596,7 +638,10 @@ def main(argv=None):
                 "  - {0}".format(interpretation.get("rv_note", "")),
                 flush=True,
             )
-            risk_flags = interpretation.get("risk_flags", [])
+            risk_flags = _display_risk_flags(
+                args,
+                interpretation.get("risk_flags", []),
+            )
             if risk_flags:
                 print(
                     "  - assumption/risk flags: {0}".format(
@@ -604,8 +649,15 @@ def main(argv=None):
                     ),
                     flush=True,
                 )
-        for warning in suggestion.warnings:
+        for warning in _display_warnings(args, suggestion.warnings):
             print("  WARNING: {0}".format(warning), flush=True)
+    elif resolution_override is not None:
+        print(
+            "Using user-supplied assumed resolution R={0:g}.".format(
+                resolution_override["assumed_resolution_R"]
+            ),
+            flush=True,
+        )
     print("Running public fit_stellar_spectrum() workflow...", flush=True)
     result = fit_stellar_spectrum(
         spectrum,
@@ -618,6 +670,9 @@ def main(argv=None):
     )
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
+    if resolution_override is not None:
+        result.summary.update(resolution_override)
+        result.provenance["resolution_override"] = dict(resolution_override)
     nonstellar_payload = _annotate_nonstellar_features(args, spectrum, result)
     _diagnose_known_residual_windows(args, spectrum, result)
     summary = {

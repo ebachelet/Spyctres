@@ -667,6 +667,19 @@ class MaskResult:
             np.count_nonzero(self.data_invalid_mask)
         )
         counts["n_rejected_by_multiple_reasons"] = int(np.count_nonzero(n_reasons > 1))
+        outside_regions = np.asarray(
+            self.rejection_masks.get(
+                "outside_regions",
+                np.zeros_like(self.effective_mask, dtype=bool),
+            ),
+            dtype=bool,
+        )
+        inside_regions = ~outside_regions
+        counts["n_outside_fit_window"] = int(np.count_nonzero(outside_regions))
+        counts["n_inside_fit_window"] = int(np.count_nonzero(inside_regions))
+        counts["n_rejected_inside_fit_window"] = int(
+            np.count_nonzero(inside_regions & self.fit_rejection_mask)
+        )
         return counts
 
     def to_metadata(self, label="fit_mask"):
@@ -693,6 +706,20 @@ class MaskResult:
             "n_rejected_total": int(counts["n_rejected_total"]),
             "fit_fraction": float(counts["n_fit"] / total),
             "rejected_fraction": float(counts["n_rejected_total"] / total),
+            "n_outside_fit_window": int(counts["n_outside_fit_window"]),
+            "outside_fit_window_fraction": float(
+                counts["n_outside_fit_window"] / total
+            ),
+            "n_inside_fit_window": int(counts["n_inside_fit_window"]),
+            "n_rejected_inside_fit_window": int(
+                counts["n_rejected_inside_fit_window"]
+            ),
+            "rejected_inside_fit_window_fraction": float(
+                0.0
+                if counts["n_inside_fit_window"] <= 0
+                else counts["n_rejected_inside_fit_window"]
+                / float(counts["n_inside_fit_window"])
+            ),
             "n_rejected_by_data_invalid": int(counts["n_rejected_by_data_invalid"]),
             "data_invalid_fraction": float(
                 counts["n_rejected_by_data_invalid"] / total
