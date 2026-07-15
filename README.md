@@ -219,7 +219,10 @@ legacy/fast compatibility option.
 window, parameter bounds, coarse grid, and RV scan budget from spectrum coverage
 and metadata. It returns provenance, reasons, and warnings; it does not hide
 air/vacuum, frame, or stellar-type assumptions, and every suggested keyword can
-be overridden by expert users.
+be overridden by expert users. The provenance also includes an
+`interpretation` block for examples and future GUIs, naming the intended
+quicklook/standard/diagnostic use, how to interpret `rv_kms`, any metadata-risk
+flags, and the recommended next step before treating a result as scientific.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,

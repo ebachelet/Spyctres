@@ -28,6 +28,11 @@ def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     assert suggestion.fit_kwargs["bounds"][1][0] == pytest.approx(10000.0)
     assert not suggestion.warnings
     assert suggestion.provenance["window"]["label"] == "blue_optical_classification"
+    interpretation = suggestion.provenance["interpretation"]
+    assert interpretation["intended_use"] == "first_pass_classification"
+    assert interpretation["rv_role"] == "candidate_stellar_rv"
+    assert interpretation["risk_flags"] == []
+    assert interpretation["automatic_choices_are_overridable"] is True
 
 
 def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():
@@ -49,6 +54,14 @@ def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():
     assert any("lacks formal uncertainties" in item for item in suggestion.warnings)
     assert any("lacks resolution metadata" in item for item in suggestion.warnings)
     assert any("telluric catalog" in item for item in suggestion.warnings)
+    interpretation = suggestion.provenance["interpretation"]
+    assert interpretation["rv_role"] == "alignment_parameter_until_metadata_verified"
+    assert "unknown_wave_medium" in interpretation["risk_flags"]
+    assert "unknown_observer_frame" in interpretation["risk_flags"]
+    assert "stellar_rest_status_unknown" in interpretation["risk_flags"]
+    assert "missing_uncertainties" in interpretation["risk_flags"]
+    assert "missing_resolution" in interpretation["risk_flags"]
+    assert "broad_telluric_catalog_overlap" in interpretation["risk_flags"]
     telluric_policy = suggestion.provenance["telluric_catalog_policy"]
     assert telluric_policy["default_action"] == "warn_only"
     assert telluric_policy["actual_masking_preference"] == "transmission_threshold"
@@ -85,6 +98,10 @@ def test_suggest_phoenix_fit_defaults_uses_shorter_rv_scan_for_stellar_rest_coll
     assert suggestion.fit_kwargs["multistart"] == 2
     assert suggestion.fit_kwargs["rv_grid_n"] == 21
     assert suggestion.provenance["coverage"]["stellar_rest_status"] == ["corrected"]
+    assert (
+        suggestion.provenance["interpretation"]["rv_role"]
+        == "rest_frame_consistency_check"
+    )
     assert suggestion.provenance["telluric_catalog_policy"]["overlaps"]
 
 

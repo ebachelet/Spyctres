@@ -356,6 +356,93 @@ def _telluric_catalog_overlaps(regions):
     return overlaps
 
 
+def _interpretation_policy(summary, window, mode, science_case, telluric_overlaps):
+    """Return a compact, machine-readable interpretation of the defaults.
+
+    This block is intended for examples, notebooks, and future GUI displays.
+    It does not change fit behavior; it names how conservative automatic
+    defaults should be interpreted before the user inspects the final quality
+    report.
+    """
+    risk_flags = []
+    if "unknown" in summary["wave_media"]:
+        risk_flags.append("unknown_wave_medium")
+    if "unknown" in summary["observer_frames"]:
+        risk_flags.append("unknown_observer_frame")
+    if "unknown" in summary["stellar_rest_status"]:
+        risk_flags.append("stellar_rest_status_unknown")
+    if not summary["all_have_errors"]:
+        risk_flags.append("missing_uncertainties")
+    if not summary["all_have_resolution"]:
+        risk_flags.append("missing_resolution")
+    if window["overlap_A"] < 300.0:
+        risk_flags.append("narrow_wavelength_window")
+    if telluric_overlaps:
+        risk_flags.append("broad_telluric_catalog_overlap")
+
+    stellar_rest_values = set(summary["stellar_rest_status"])
+    observer_values = set(summary["observer_frames"])
+    medium_values = set(summary["wave_media"])
+    metadata_complete = (
+        "unknown" not in medium_values
+        and "unknown" not in observer_values
+        and "unknown" not in stellar_rest_values
+    )
+    if stellar_rest_values == {"corrected"}:
+        rv_role = "rest_frame_consistency_check"
+        rv_note = (
+            "The loaded spectrum is labelled stellar-rest corrected, so fitted "
+            "rv_kms should be interpreted as a residual alignment/check, not a "
+            "new stellar radial-velocity measurement."
+        )
+    elif metadata_complete and observer_values <= {"barycentric", "heliocentric"}:
+        rv_role = "candidate_stellar_rv"
+        rv_note = (
+            "The wavelength metadata are sufficiently explicit for rv_kms to "
+            "be treated as a candidate stellar RV, subject to the final quality "
+            "flags and product-specific frame validation."
+        )
+    else:
+        rv_role = "alignment_parameter_until_metadata_verified"
+        rv_note = (
+            "The fitted rv_kms should be treated as a model/data alignment "
+            "parameter until wavelength medium, observer frame, and stellar-rest "
+            "semantics are verified."
+        )
+
+    if mode == "quicklook":
+        recommended_next_step = (
+            "Inspect the quality report and diagnostic plots; rerun with "
+            "mode='standard' or expert bounds if the target is scientifically "
+            "important or the quicklook flags are non-trivial."
+        )
+    elif mode == "standard":
+        recommended_next_step = (
+            "Use the result as an ordinary first-pass classification only after "
+            "checking quality flags, residual structure, and model-domain flags."
+        )
+    else:
+        recommended_next_step = (
+            "Treat this as a diagnostic/stress run. It deliberately widens the "
+            "search and should not be folded into ordinary validation statistics."
+        )
+
+    return {
+        "intended_use": "first_pass_{0}".format(science_case or "classification"),
+        "mode": mode,
+        "classification_scope": (
+            "Line/shape-based PHOENIX classification over the selected window; "
+            "not a precision abundance, rotation, macroturbulence, or detailed "
+            "instrument-LSF analysis."
+        ),
+        "rv_role": rv_role,
+        "rv_note": rv_note,
+        "automatic_choices_are_overridable": True,
+        "risk_flags": sorted(set(risk_flags)),
+        "recommended_next_step": recommended_next_step,
+    }
+
+
 def suggest_phoenix_fit_defaults(
     spectrum,
     mode="quicklook",
@@ -391,6 +478,13 @@ def suggest_phoenix_fit_defaults(
     window = _choose_window(summary, mode)
     params = _parameter_defaults(window["label"], mode)
     telluric_overlaps = _telluric_catalog_overlaps(window["regions"])
+    interpretation = _interpretation_policy(
+        summary,
+        window,
+        mode,
+        science_case,
+        telluric_overlaps,
+    )
 
     multistart = 1 if mode == "quicklook" else 2
     rv_grid_n = 41 if mode == "quicklook" else 61
@@ -469,6 +563,7 @@ def suggest_phoenix_fit_defaults(
             "recommended_helper": "telluric_transmission_exclusion_mask",
             "overlaps": telluric_overlaps,
         },
+        "interpretation": interpretation,
         "assumption_policy": "metadata-backed where available; otherwise conservative and provenance-recorded",
     }
     return PhoenixFitDefaults(

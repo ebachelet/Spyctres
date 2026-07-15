@@ -577,6 +577,33 @@ def main(argv=None):
         print("Suggested first-pass fit defaults:", flush=True)
         for reason in suggestion.reasons:
             print("  - {0}".format(reason), flush=True)
+        interpretation = suggestion.provenance.get("interpretation", {})
+        if interpretation:
+            print("Default interpretation:", flush=True)
+            print(
+                "  - intended use: {0}".format(
+                    interpretation.get("intended_use", "first_pass_classification")
+                ),
+                flush=True,
+            )
+            print(
+                "  - RV role: {0}".format(
+                    interpretation.get("rv_role", "alignment_parameter")
+                ),
+                flush=True,
+            )
+            print(
+                "  - {0}".format(interpretation.get("rv_note", "")),
+                flush=True,
+            )
+            risk_flags = interpretation.get("risk_flags", [])
+            if risk_flags:
+                print(
+                    "  - assumption/risk flags: {0}".format(
+                        ", ".join(str(flag) for flag in risk_flags)
+                    ),
+                    flush=True,
+                )
         for warning in suggestion.warnings:
             print("  WARNING: {0}".format(warning), flush=True)
     print("Running public fit_stellar_spectrum() workflow...", flush=True)
