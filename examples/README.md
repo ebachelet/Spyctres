@@ -226,7 +226,10 @@ The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
 windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
 after the UVB-only notebook because it introduces arm-balanced weights,
 sideband-normalized UVB windows, per-segment resolution metadata, and
-arm-by-arm residual interpretation.
+arm-by-arm residual interpretation. It runs several PHOENIX fits and may take
+several minutes on a normal workstation; progress messages are printed during
+cache construction, RV scanning, and local optimization so users can tell it is
+still working.
 
 ## Example 5: PEPSI legacy line-window validation
 
