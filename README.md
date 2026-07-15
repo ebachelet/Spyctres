@@ -113,12 +113,22 @@ example, not a precision line-width or abundance analysis. Expert users can
 override the suggested values with flags such as `--wmin`, `--wmax`, `--teff`,
 `--teff-min`, or `--no-auto-defaults`.
 
-Other useful entry points include:
+Recommended example order:
 
-- `quick_example.py` for the legacy fitting workflow
-- `examples/full_spectrum_classification.ipynb` for a longer PHOENIX classification walkthrough
-- `examples/xshooter_multiarm_classification.ipynb` for multi-arm fitting
-- smoke tests under `scripts/`
+1. `examples/simple_phoenix_fit.py` for the shortest command-line public-API
+   path.
+2. `examples/full_spectrum_classification.ipynb` for the first worked
+   PHOENIX classification notebook.
+3. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
+   fitting diagnostics.
+4. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
+5. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
+   line-window validation path.
+
+Other useful entry points include `quick_example.py` for the legacy fitting
+workflow and smoke tests under `scripts/`. See `examples/README.md` for data
+paths, PHOENIX configuration, caveats, and the same recommended order with more
+detail.
 
 To open the PHOENIX example notebook:
 

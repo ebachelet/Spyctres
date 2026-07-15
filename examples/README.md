@@ -1,6 +1,26 @@
-# Spyctres PHOENIX full-spectrum example
+# Spyctres PHOENIX examples
 
-This directory contains a worked notebook example of PHOENIX-based full-spectrum fitting in Spyctres, using a reduced X-SHOOTER UVB spectrum of Gaia21ccu as the reference dataset.
+This directory contains user-facing examples and validation notebooks for
+PHOENIX-based spectral fitting in Spyctres.
+
+## Recommended order
+
+Start with the public examples, then move into advanced and validation
+workflows:
+
+1. `simple_phoenix_fit.py` — shortest command-line path using the public API.
+2. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
+3. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
+   diagnostic workflow.
+4. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
+   useful after the basic workflow is familiar.
+5. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
+   PEPSI legacy line-window path, not the generic public classification path.
+
+The examples are ordered by how much Spyctres-specific context they assume.
+The first two are the best place for a new user to start.
+
+## Example 1: command-line public API quickstart
 
 For a shorter non-notebook workflow, use `simple_phoenix_fit.py`. It reads any
 registered instrument format, invokes the public `fit_stellar_spectrum()`
@@ -32,7 +52,7 @@ the loaded spectrum metadata. Expert users can still override those choices
 with flags such as `--wmin`, `--wmax`, `--teff`, `--teff-min`, or
 `--no-auto-defaults`.
 
-## XSL real-spectrum validation
+## Example 4: XSL real-spectrum validation
 
 The Figure 1 validation sample from Verro et al. (2022) is listed in
 `xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
@@ -193,7 +213,27 @@ by itself prove that the DIB identification is correct or that masking is the
 final scientific choice. Inspect the residuals, other Balmer lines, continuum
 placement, and LSF assumptions before drawing that conclusion.
 
-The notebook is meant to be a clean first example of the generic PHOENIX fitting workflow. It is not intended to be the final precision analysis for this spectrum, and it is not the full benchmark-validation path used for development testing.
+## Example 2: first worked notebook
+
+The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
+example of the generic PHOENIX fitting workflow. It is not intended to be the
+final precision analysis for this spectrum, and it is not the full
+benchmark-validation path used for development testing.
+
+## Example 3: advanced X-SHOOTER multi-arm notebook
+
+The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
+windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
+after the UVB-only notebook because it introduces arm-balanced weights,
+sideband-normalized UVB windows, per-segment resolution metadata, and
+arm-by-arm residual interpretation.
+
+## Example 5: PEPSI legacy line-window validation
+
+The `pepsi_legacy_linefit_validation.ipynb` notebook is a developer validation
+example for the PEPSI legacy line-window workflow. Use it to understand and
+test that specialized path; do not treat it as the public first-contact
+classification workflow.
 
 ## What this notebook demonstrates
 
@@ -247,7 +287,7 @@ The fitted values should be treated as an initial model-based estimate, not as a
 - instrumental resolving power
 - wavelength medium and velocity conventions
 - continuum treatment
--PHOENIX subgrid selection
+- PHOENIX subgrid selection
 
 In other words, the notebook shows the workflow cleanly, while leaving room for later refinement.
 

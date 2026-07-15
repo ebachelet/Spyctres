@@ -1,4 +1,4 @@
-"""Minimal command-line example for the public Spyctres PHOENIX API.
+"""Example 1: minimal command-line path for the public Spyctres PHOENIX API.
 
 Purpose
 -------
