@@ -49,7 +49,7 @@ def test_plot_fit_referee_saves_without_mutating_result(tmp_path):
     )
     result = _fit_result_for_segments([segment])
     before = json.dumps(result.to_dict(include_arrays=False), sort_keys=True)
-    path = tmp_path / "referee.png"
+    path = tmp_path / "nested" / "plots" / "referee.png"
 
     fig, axes = plot_fit_referee(result, segment=segment, savepath=path)
 

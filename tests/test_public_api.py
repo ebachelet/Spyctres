@@ -323,7 +323,7 @@ def test_structured_result_can_save_compact_json(tmp_path):
         diagnostics={"residual_rms": np.float64(np.nan)},
         quality_flags=("metadata_incomplete",),
     )
-    path = tmp_path / "result.json"
+    path = tmp_path / "nested" / "products" / "result.json"
 
     result.save_json(path)
 

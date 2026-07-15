@@ -31,6 +31,7 @@ python examples/batch_quickscan_then_refine.py /path/to/xshooter/*.fits \
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -72,8 +73,9 @@ def build_parser():
             "Example:\n"
             "  python examples/batch_quickscan_then_refine.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter --output /tmp/spyctres_batch_xshooter_uvb.json "
-            "--resume"
+            "--instrument xshooter "
+            "--output-json /tmp/spyctres_batch_xshooter_uvb.json "
+            "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv --resume"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -93,8 +95,18 @@ def build_parser():
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
         "--output",
+        "--output-json",
+        dest="output",
         default="/tmp/spyctres_batch_quickscan_then_refine.json",
         help="Checkpoint/output JSON path.",
+    )
+    parser.add_argument(
+        "--summary-csv",
+        default=None,
+        help=(
+            "Optional compact CSV summary path for spreadsheet/pandas review. "
+            "The full auditable record remains in --output-json."
+        ),
     )
     parser.add_argument(
         "--resume",
@@ -108,8 +120,13 @@ def build_parser():
     )
     parser.add_argument(
         "--quick-only",
+        "--quicklook",
+        dest="quick_only",
         action="store_true",
-        help="Run only the cheap quick-scan stage.",
+        help=(
+            "Run only the cheap quick-scan stage. --quicklook is a friendly "
+            "alias for this mode."
+        ),
     )
     parser.add_argument(
         "--quick-defaults-mode",
@@ -137,6 +154,17 @@ def build_parser():
     parser.add_argument("--quick-rv-grid-n", type=int, default=31)
     parser.add_argument("--refine-rv-grid-n", type=int, default=41)
     parser.add_argument("--refine-multistart", type=int, default=2)
+    parser.add_argument(
+        "--R",
+        type=float,
+        default=None,
+        dest="resolution_R",
+        help=(
+            "Explicit assumed resolving power used for both quicklook and "
+            "refinement. Treat this as a user-supplied approximation unless "
+            "the product metadata justify it."
+        ),
+    )
     parser.add_argument("--teff-margin", type=float, default=1000.0)
     parser.add_argument("--feh-margin", type=float, default=0.5)
     parser.add_argument("--logg-margin", type=float, default=0.8)
@@ -175,6 +203,23 @@ def _json_native(value):
     return str(value)
 
 
+def _resolution_override_payload(args):
+    if getattr(args, "resolution_R", None) is None:
+        return None
+    return {
+        "resolution_source": "user_override",
+        "assumed_resolution_R": float(args.resolution_R),
+        "assumption_warning": "approximate quicklook resolution",
+    }
+
+
+def _resolution_fit_kwargs(args):
+    payload = _resolution_override_payload(args)
+    if payload is None:
+        return {}
+    return {"R": payload["assumed_resolution_R"]}
+
+
 def _atomic_write_json(path, payload):
     # Checkpoint through a temporary file and atomic replace so interrupted runs
     # do not leave behind half-written JSON.
@@ -190,6 +235,78 @@ def _atomic_write_json(path, payload):
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(_json_native(payload), handle, indent=2, allow_nan=False)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_summary_csv(path, payload):
+    """Write a compact per-target CSV beside the detailed JSON checkpoint."""
+    path = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".{0}.".format(os.path.basename(path)),
+        suffix=".tmp",
+        dir=directory,
+    )
+    fieldnames = [
+        "target_id",
+        "path",
+        "status",
+        "teff",
+        "feh",
+        "logg",
+        "rv_kms",
+        "chi2_red",
+        "quality_flags",
+        "quick_teff",
+        "quick_feh",
+        "quick_logg",
+        "quick_rv_kms",
+        "quick_chi2_red",
+        "quick_seconds",
+        "refine_seconds",
+        "total_seconds",
+    ]
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for item in payload.get("results", []):
+                refined = item.get("refined_result") or {}
+                quick = item.get("quick_result") or {}
+                primary = refined if refined else quick
+                writer.writerow(
+                    {
+                        "target_id": item.get("target_id"),
+                        "path": item.get("path"),
+                        "status": item.get("status"),
+                        "teff": primary.get("teff"),
+                        "feh": primary.get("feh"),
+                        "logg": primary.get("logg"),
+                        "rv_kms": primary.get("rv_kms"),
+                        "chi2_red": primary.get("chi2_red"),
+                        "quality_flags": ",".join(
+                            str(flag)
+                            for flag in (primary.get("quality_flags") or [])
+                        ),
+                        "quick_teff": quick.get("teff"),
+                        "quick_feh": quick.get("feh"),
+                        "quick_logg": quick.get("logg"),
+                        "quick_rv_kms": quick.get("rv_kms"),
+                        "quick_chi2_red": quick.get("chi2_red"),
+                        "quick_seconds": item.get("quick_seconds"),
+                        "refine_seconds": item.get("refine_seconds"),
+                        "total_seconds": item.get("total_seconds"),
+                    }
+                )
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -298,6 +415,7 @@ def make_refine_fit_kwargs(spectrum, quick_result, quick_fit_kwargs, args):
         # Usually the quick stage chooses where the spectrum is useful; the
         # refinement then spends extra optimizer effort on the same pixels.
         fit_kwargs["regions"] = list(quick_fit_kwargs["regions"])
+    fit_kwargs.update(_resolution_fit_kwargs(args))
     p0, bounds = focused_bounds_from_quick_result(
         quick_result,
         fit_kwargs["bounds"],
@@ -329,6 +447,8 @@ def make_refine_fit_kwargs(spectrum, quick_result, quick_fit_kwargs, args):
         },
         "refine_window_policy": args.refine_window,
     }
+    if _resolution_override_payload(args) is not None:
+        focus["resolution_assumption"] = _resolution_override_payload(args)
     return fit_kwargs, suggestion, focus
 
 
@@ -349,6 +469,7 @@ def _run_configuration(args, paths):
         "refine_multistart": int(args.refine_multistart),
         "quick_only": bool(args.quick_only),
         "reconstruct_final": bool(args.reconstruct_final),
+        "resolution_assumption": _resolution_override_payload(args),
         "focus_margins": {
             "teff": float(args.teff_margin),
             "feh": float(args.feh_margin),
@@ -392,6 +513,7 @@ def _fit_one(path, args, phoenix_lib):
         max_nfev=int(args.quick_max_nfev),
         rv_grid_n=int(args.quick_rv_grid_n),
         progress_callback=_progress_callback(args.verbose, "quick"),
+        **_resolution_fit_kwargs(args),
     )
     quick_seconds = time.perf_counter() - quick_start
     quick_fit_kwargs = (
@@ -405,6 +527,8 @@ def _fit_one(path, args, phoenix_lib):
         "quick_result": _brief_result(quick_result),
         "quick_result_full": _result_payload(quick_result),
     }
+    if _resolution_override_payload(args) is not None:
+        record["resolution_assumption"] = _resolution_override_payload(args)
     print(
         "  Quick result: Teff={teff} logg={logg} [Fe/H]={feh} RV={rv_kms} chi2={chi2_red}".format(
             **record["quick_result"]
@@ -463,6 +587,13 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     paths = _input_paths(args.spectra)
     run_configuration = _run_configuration(args, paths)
+    if _resolution_override_payload(args) is not None:
+        print(
+            "Using user-supplied assumed resolution R={0:g} for this batch.".format(
+                float(args.resolution_R)
+            ),
+            flush=True,
+        )
 
     # Load any existing checkpoint before touching PHOENIX. On a resumed batch,
     # this lets completed targets be skipped quickly.
@@ -489,6 +620,8 @@ def main(argv=None):
             "results": ordered,
         }
         _atomic_write_json(args.output, payload)
+        if args.summary_csv:
+            _atomic_write_summary_csv(args.summary_csv, payload)
         return payload
 
     resolved_phoenix_dir = resolve_phoenix_dir(args.phoenix_dir)
@@ -530,6 +663,8 @@ def main(argv=None):
             print("  ERROR: {0}: {1}".format(type(exc).__name__, exc), flush=True)
         checkpoint()
         print("  Wrote checkpoint: {0}".format(args.output), flush=True)
+        if args.summary_csv:
+            print("  Wrote summary CSV: {0}".format(args.summary_csv), flush=True)
 
     payload = checkpoint()
     # Detailed quality flags live in JSON; the terminal gets a compact summary.
@@ -545,6 +680,8 @@ def main(argv=None):
         ),
         flush=True,
     )
+    if args.summary_csv:
+        print("Summary CSV: {0}".format(args.summary_csv), flush=True)
 
 
 if __name__ == "__main__":

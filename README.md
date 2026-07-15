@@ -138,14 +138,17 @@ For batches, start with the X-SHOOTER UVB throughput example:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --output /tmp/spyctres_batch_xshooter_uvb.json \
+  --output-json /tmp/spyctres_batch_xshooter_uvb.json \
+  --summary-csv /tmp/spyctres_batch_xshooter_uvb.csv \
   --resume
 ```
 
 Replace the single example file with a list or shell-expanded directory of
 spectra when processing many observations. The script loads PHOENIX once,
 runs a cheap quicklook fit, narrows the local Teff/[Fe/H]/logg/RV bounds, runs
-a focused refinement, and checkpoints after each spectrum.
+a focused refinement, and checkpoints after each spectrum. The optional CSV is
+only a compact table for sorting/filtering; the JSON keeps the full auditable
+per-spectrum provenance and quality reports.
 
 Minimal copy/paste sequence, assuming PHOENIX is already configured:
 
@@ -153,14 +156,16 @@ Minimal copy/paste sequence, assuming PHOENIX is already configured:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --quick-only \
-  --output /tmp/spyctres_batch_quick.json \
+  --quicklook \
+  --output-json /tmp/spyctres_batch_quick.json \
+  --summary-csv /tmp/spyctres_batch_quick.csv \
   --resume
 
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --output /tmp/spyctres_batch_refined.json \
+  --output-json /tmp/spyctres_batch_refined.json \
+  --summary-csv /tmp/spyctres_batch_refined.csv \
   --resume
 
 python -m json.tool /tmp/spyctres_batch_refined.json

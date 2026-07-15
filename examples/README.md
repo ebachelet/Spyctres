@@ -81,7 +81,8 @@ X-SHOOTER fitting:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --output /tmp/spyctres_batch_xshooter_uvb.json \
+  --output-json /tmp/spyctres_batch_xshooter_uvb.json \
+  --summary-csv /tmp/spyctres_batch_xshooter_uvb.csv \
   --resume
 ```
 
@@ -90,9 +91,15 @@ For a real batch, pass a list of files:
 ```bash
 python examples/batch_quickscan_then_refine.py /path/to/xshooter/*.fits \
   --instrument xshooter \
-  --output /tmp/spyctres_batch.json \
+  --output-json /tmp/spyctres_batch.json \
+  --summary-csv /tmp/spyctres_batch.csv \
   --resume
 ```
+
+The JSON file is the authoritative product: it preserves the quick-scan
+result, the focused refinement, quality flags, timing, and the local bounds
+used for each spectrum. The optional CSV is a compact convenience table for
+sorting many spectra by Teff, χ², or quality flags.
 
 Minimal reproduction sequence, assuming PHOENIX is already configured:
 
@@ -100,17 +107,33 @@ Minimal reproduction sequence, assuming PHOENIX is already configured:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --quick-only \
-  --output /tmp/spyctres_batch_quick.json \
+  --quicklook \
+  --output-json /tmp/spyctres_batch_quick.json \
+  --summary-csv /tmp/spyctres_batch_quick.csv \
   --resume
 
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
-  --output /tmp/spyctres_batch_refined.json \
+  --output-json /tmp/spyctres_batch_refined.json \
+  --summary-csv /tmp/spyctres_batch_refined.csv \
   --resume
 
 python -m json.tool /tmp/spyctres_batch_refined.json
+```
+
+For SDSS or any other product without validated LSF metadata, keep resolution
+explicit rather than changing reader defaults. For example, `--R 2000` is a
+quicklook approximation only:
+
+```bash
+python examples/batch_quickscan_then_refine.py /path/to/sdss/spec-*.fits \
+  --instrument sdss \
+  --quicklook \
+  --R 2000 \
+  --output-json /tmp/spyctres_sdss_quick.json \
+  --summary-csv /tmp/spyctres_sdss_quick.csv \
+  --resume
 ```
 
 The script loads the PHOENIX library once, then for each spectrum:

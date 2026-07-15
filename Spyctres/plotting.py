@@ -16,6 +16,7 @@ Design principles
 """
 
 import textwrap
+from pathlib import Path
 
 import numpy as np
 from .matplotlib_setup import ensure_matplotlib_config_dir
@@ -1109,6 +1110,8 @@ def plot_fit_referee(
 
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     if savepath is not None:
+        savepath = Path(savepath)
+        savepath.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(savepath, bbox_inches="tight")
         fig.spyctres_generated_files = {"referee_plot": str(savepath)}
     return fig, axes

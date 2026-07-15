@@ -930,6 +930,7 @@ class PhoenixFitResult(Mapping):
             relative_to = os.path.dirname(os.path.abspath(os.fspath(path))) or "."
         path = os.path.abspath(os.path.expanduser(os.fspath(path)))
         directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(
             prefix=".{0}.".format(os.path.basename(path)),
             suffix=".tmp",

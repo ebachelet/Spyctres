@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +26,33 @@ def test_default_input_is_bundled_xshooter_uvb_file():
     assert len(paths) == 1
     assert paths[0].endswith("TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits")
     assert Path(paths[0]).is_file()
+
+
+def test_parser_accepts_quicklook_output_json_and_resolution_aliases():
+    module = _load_example_module()
+
+    args = module.build_parser().parse_args(
+        [
+            "spectrum.fits",
+            "--quicklook",
+            "--output-json",
+            "/tmp/out.json",
+            "--summary-csv",
+            "/tmp/out.csv",
+            "--R",
+            "2000",
+        ]
+    )
+
+    assert args.quick_only is True
+    assert args.output == "/tmp/out.json"
+    assert args.summary_csv == "/tmp/out.csv"
+    assert args.resolution_R == pytest.approx(2000.0)
+    assert module._resolution_override_payload(args) == {
+        "resolution_source": "user_override",
+        "assumed_resolution_R": 2000.0,
+        "assumption_warning": "approximate quicklook resolution",
+    }
 
 
 def test_focused_bounds_from_quick_result_clip_to_base_bounds():
@@ -79,6 +107,7 @@ def test_make_refine_fit_kwargs_can_keep_quick_window(monkeypatch):
     args = SimpleNamespace(
         refine_defaults_mode="standard",
         refine_window="quick",
+        resolution_R=2000.0,
         teff_margin=500.0,
         feh_margin=0.25,
         logg_margin=0.5,
@@ -109,4 +138,41 @@ def test_make_refine_fit_kwargs_can_keep_quick_window(monkeypatch):
     assert fit_kwargs["rv_grid_n"] == 21
     assert fit_kwargs["multistart"] == 2
     assert fit_kwargs["max_nfev"] == 99
+    assert fit_kwargs["R"] == pytest.approx(2000.0)
     assert focus["refine_window_policy"] == "quick"
+    assert focus["resolution_assumption"]["resolution_source"] == "user_override"
+
+
+def test_atomic_outputs_create_parent_directories(tmp_path):
+    module = _load_example_module()
+    payload = {
+        "results": [
+            {
+                "target_id": "target",
+                "path": "spectrum.fits",
+                "status": "quick_ok",
+                "quick_result": {
+                    "teff": 6000.0,
+                    "feh": 0.0,
+                    "logg": 4.0,
+                    "rv_kms": 5.0,
+                    "chi2_red": 1.2,
+                    "quality_flags": ["ok"],
+                },
+                "quick_seconds": 0.5,
+                "total_seconds": 0.6,
+            }
+        ]
+    }
+    json_path = tmp_path / "nested" / "products" / "batch.json"
+    csv_path = tmp_path / "nested" / "tables" / "batch.csv"
+
+    module._atomic_write_json(json_path, payload)
+    module._atomic_write_summary_csv(csv_path, payload)
+
+    assert json.loads(json_path.read_text(encoding="utf-8"))["results"][0][
+        "status"
+    ] == "quick_ok"
+    text = csv_path.read_text(encoding="utf-8")
+    assert "target_id,path,status" in text
+    assert "target,spectrum.fits,quick_ok" in text

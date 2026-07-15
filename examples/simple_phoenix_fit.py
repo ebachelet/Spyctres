@@ -586,6 +586,7 @@ def _build_line_diagnostic_plots(args, spectrum, result):
             model_label="model on fitted pixels",
         )
         if savepath is not None:
+            Path(savepath).parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(savepath, bbox_inches="tight")
             key = "line_diagnostics"
             if multiple_segments:
