@@ -43,11 +43,18 @@ from .preprocessing import (
 )
 from .waveutils import convert_segment_wavelength_medium, convert_wavelength_medium
 from .fitting import FitProgressEvent
-from .io import SpectrumCollection, SpectrumSegment, read_spectrum
+from .io import (
+    SpectrumCollection,
+    SpectrumSegment,
+    read_sdss_spec,
+    read_spectrum,
+    read_uves_pop_ascii,
+)
 
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
-    "read_spectrum", "SpectrumSegment", "SpectrumCollection",
+    "read_spectrum", "read_uves_pop_ascii", "read_sdss_spec",
+    "SpectrumSegment", "SpectrumCollection",
     "ensure_matplotlib_config_dir",
     "PhoenixFitDiagnostics", "PhoenixFitResult",
     "PhoenixFitDefaults", "clip_grid_to_bounds",

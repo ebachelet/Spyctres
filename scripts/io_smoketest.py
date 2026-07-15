@@ -72,9 +72,17 @@ def build_parser():
             "  python scripts/io_smoketest.py --instrument pepsi path/to/seg1.dxt.nor path/to/seg2.dxt.nor path/to/seg3.dxt.nor --join\n"
             "  python scripts/io_smoketest.py --instrument floyds path/to/FLOYDS.csv\n"
             "  python scripts/io_smoketest.py --instrument gemini path/to/gmos_ascii.dat\n"
+            "  python scripts/io_smoketest.py --instrument uves_pop ~/Data/Spectra/spectra_test_set/UVES-POP/hd22049.dat --no-show --plot-dir io_plots\n"
+            "  python scripts/io_smoketest.py --instrument sdss ~/Data/Spectra/spectra_test_set/SDSS/spec-1660-53230-0023.fits --no-show --plot-dir io_plots\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+
+def _safe_plot_name(path, index):
+    stem = os.path.splitext(os.path.basename(path))[0] or "spectrum"
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in stem)
+    return "{0:02d}_{1}.png".format(index + 1, safe)
 
 
 def main():
@@ -87,7 +95,7 @@ def main():
     parser.add_argument(
         "--instrument",
         required=True,
-        choices=["pepsi", "xshooter", "floyds", "gemini"],
+        choices=["pepsi", "xshooter", "floyds", "gemini", "uves_pop", "sdss"],
         help="Instrument reader to use",
     )
     parser.add_argument(
@@ -95,21 +103,41 @@ def main():
         action="store_true",
         help="Concatenate segments and print a joined summary",
     )
+    parser.add_argument(
+        "--no-show",
+        action="store_true",
+        help="Do not open interactive plot windows.",
+    )
+    parser.add_argument(
+        "--plot-dir",
+        default=None,
+        help="Optional directory where quick-look PNG plots are written.",
+    )
     args = parser.parse_args()
 
     missing = [p for p in args.files if not os.path.isfile(p)]
     if missing:
         parser.error("Input file(s) not found: {0}".format(", ".join(missing)))
 
+    if args.plot_dir is not None:
+        os.makedirs(args.plot_dir, exist_ok=True)
+
     segs = []
-    for p in args.files:
+    for index, p in enumerate(args.files):
         s = read_spectrum(p, instrument=args.instrument)
         segs.append(s)
         print(p)
         print(summarize(s))
 
         fig, ax = plot_spectrum_quicklook(s, use_mask=True, show_error=False)
-        plt.show()
+        if args.plot_dir is not None:
+            out_path = os.path.join(args.plot_dir, _safe_plot_name(p, index))
+            fig.savefig(out_path, dpi=150, bbox_inches="tight")
+            print("Wrote quick-look plot: {0}".format(out_path))
+        if args.no_show:
+            plt.close(fig)
+        else:
+            plt.show()
 
     if args.join and len(segs) > 1:
         joined = concatenate_segments(segs, sort=True, name="{0}_joined".format(args.instrument))

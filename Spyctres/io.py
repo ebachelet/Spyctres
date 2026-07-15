@@ -32,7 +32,11 @@ XSL_DR3_PROVENANCE_HEADER_KEYS = (
 def _fits_header_scalar(value):
     """Return a simple Python scalar suitable for metadata/provenance."""
     if isinstance(value, np.generic):
-        return value.item()
+        return _fits_header_scalar(value.item())
+    if isinstance(value, np.ndarray):
+        if value.shape == ():
+            return _fits_header_scalar(value.item())
+        return [_fits_header_scalar(item) for item in value.tolist()]
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -1870,6 +1874,303 @@ def read_gemini_gmos_ascii(path, name=None):
         stellar_rest_status="unknown",
         resolution=None,
     ).sorted()
+
+
+def read_uves_pop_ascii(
+    path,
+    name=None,
+    wave_unit="auto",
+    err_column=None,
+):
+    """
+    Read a UVES-POP ASCII spectrum into the common Spyctres container.
+
+    The reader treats column 0 as wavelength and column 1 as flux. A third
+    column is *not* assumed to be an uncertainty unless ``err_column`` is
+    explicitly supplied as a zero-based numeric column index. With
+    ``wave_unit="auto"``, wavelength values below 2000 are interpreted as nm
+    and converted to Angstrom; otherwise they are interpreted as Angstrom.
+
+    UVES-POP products are high-resolution atlas spectra, but their exact
+    product-specific LSF/provenance should be checked before precision work.
+    The stored R=80000 descriptor is therefore nominal/cautionary metadata.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+
+    wave_values = []
+    flux_values = []
+    err_values = [] if err_column is not None else None
+    n_numeric_rows = 0
+
+    if err_column is not None:
+        err_column = int(err_column)
+        if err_column < 0:
+            raise ValueError("err_column must be a zero-based non-negative column index.")
+
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "!", ";")):
+                continue
+            tokens = stripped.replace(",", " ").split()
+            if len(tokens) < 2:
+                continue
+            try:
+                wave = float(tokens[0].replace("D", "E").replace("d", "e"))
+                flux = float(tokens[1].replace("D", "E").replace("d", "e"))
+            except ValueError:
+                continue
+            n_numeric_rows += 1
+            wave_values.append(wave)
+            flux_values.append(flux)
+
+            if err_column is not None:
+                if len(tokens) <= err_column:
+                    raise ValueError(
+                        "Requested err_column={0}, but line {1} has only {2} columns.".format(
+                            err_column,
+                            line_number,
+                            len(tokens),
+                        )
+                    )
+                try:
+                    err_values.append(
+                        float(tokens[err_column].replace("D", "E").replace("d", "e"))
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "Requested err_column={0}, but line {1} is not numeric.".format(
+                            err_column,
+                            line_number,
+                        )
+                    ) from exc
+
+    if len(wave_values) == 0:
+        raise ValueError(
+            "No rows with at least two leading numeric columns found in UVES-POP ASCII file: {0}".format(
+                path
+            )
+        )
+
+    wave = np.asarray(wave_values, dtype=float)
+    flux = np.asarray(flux_values, dtype=float)
+    err = None if err_values is None else np.asarray(err_values, dtype=float)
+
+    unit = str(wave_unit).strip().lower()
+    if unit == "auto":
+        finite_wave = wave[np.isfinite(wave)]
+        if finite_wave.size == 0:
+            raise ValueError("UVES-POP wavelength column contains no finite values.")
+        unit = "nm" if float(np.nanmax(finite_wave)) < 2000.0 else "angstrom"
+    if unit in {"a", "aa", "angstrom", "angstroms", "ang"}:
+        wave_A = wave
+        unit_input = "angstrom"
+    elif unit in {"nm", "nanometer", "nanometers"}:
+        wave_A = wave * 10.0
+        unit_input = "nm"
+    else:
+        raise ValueError("wave_unit must be 'auto', 'angstrom', or 'nm'.")
+
+    mask = np.isfinite(wave_A) & np.isfinite(flux)
+    if err is not None:
+        mask &= np.isfinite(err) & (err > 0)
+
+    meta = {
+        "path": path,
+        "instrument": "UVES-POP",
+        "wave_unit_input": unit_input,
+        "wave_medium": "unknown",
+        "wave_frame": "unknown",
+        "observer_frame": "unknown",
+        "stellar_rest_status": "unknown",
+        "resolution_R": 80000.0,
+        "resolution_note": (
+            "Nominal UVES-POP resolving power only; verify product-specific "
+            "resolution/LSF metadata before precision fitting."
+        ),
+        "uves_pop_reader": {
+            "numeric_rows": int(n_numeric_rows),
+            "err_column": None if err_column is None else int(err_column),
+            "third_column_assumed_error": False,
+        },
+    }
+
+    return SpectrumSegment(
+        wave=wave_A,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium="unknown",
+        wave_frame="unknown",
+        name=name or os.path.basename(path),
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+        resolution=ResolutionDescriptor(
+            quantity="R",
+            value=80000.0,
+            source="nominal UVES-POP atlas resolving power; cautionary metadata",
+        ),
+    ).sorted()
+
+
+def _sdss_get_table_column(data, required_name, required=True):
+    names = {} if data.names is None else {str(n).lower(): n for n in data.names}
+    key = str(required_name).lower()
+    if key not in names:
+        if required:
+            raise ValueError(
+                "SDSS spec table requires column '{0}'; found {1}.".format(
+                    required_name,
+                    sorted(names),
+                )
+            )
+        return None
+    return np.asarray(data[names[key]])
+
+
+def _first_header_value(headers, keys, default=None):
+    for key in keys:
+        for header in headers:
+            if key in header:
+                return _fits_header_scalar(header[key])
+    return default
+
+
+def read_sdss_spec(
+    path,
+    name=None,
+    ext=1,
+    use_and_mask=True,
+):
+    """
+    Read a standard SDSS/SEGUE ``spec-PLATE-MJD-FIBER`` FITS spectrum.
+
+    The SDSS spectrum table stores logarithmic vacuum wavelengths in ``loglam``
+    and flux in ``flux``. If ``ivar`` is present, Spyctres converts it to
+    1-sigma uncertainty as ``err = 1/sqrt(ivar)`` for positive inverse
+    variance pixels and masks non-positive-ivar pixels. If ``and_mask`` is
+    present, pixels with non-zero AND mask are rejected by default.
+
+    Resolution/LSF metadata are deliberately left unset until SDSS-specific
+    LSF conversion has been validated for the product being read.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    with fits.open(path, memmap=False) as hdul:
+        if len(hdul) <= ext:
+            raise ValueError("SDSS spec FITS file has no HDU {0}: {1}".format(ext, path))
+        data = hdul[ext].data
+        if data is None:
+            raise ValueError("SDSS spec HDU {0} contains no table data: {1}".format(ext, path))
+
+        loglam = _sdss_get_table_column(data, "loglam", required=True).astype(float)
+        flux = _sdss_get_table_column(data, "flux", required=True).astype(float)
+        if loglam.shape != flux.shape:
+            raise ValueError("SDSS loglam and flux columns must have matching shape.")
+
+        with np.errstate(over="ignore", invalid="ignore"):
+            wave_A = 10.0 ** loglam
+
+        ivar = _sdss_get_table_column(data, "ivar", required=False)
+        if ivar is not None:
+            ivar = ivar.astype(float)
+            if ivar.shape != flux.shape:
+                raise ValueError("SDSS ivar column must match flux shape.")
+            positive_ivar = np.isfinite(ivar) & (ivar > 0)
+            err = np.full(flux.shape, np.nan, dtype=float)
+            err[positive_ivar] = 1.0 / np.sqrt(ivar[positive_ivar])
+        else:
+            positive_ivar = np.ones(flux.shape, dtype=bool)
+            err = None
+
+        and_mask = _sdss_get_table_column(data, "and_mask", required=False)
+        if and_mask is not None:
+            if and_mask.shape != flux.shape:
+                raise ValueError("SDSS and_mask column must match flux shape.")
+            clean_and_mask = np.asarray(and_mask) == 0
+        else:
+            clean_and_mask = np.ones(flux.shape, dtype=bool)
+
+        mask = np.isfinite(wave_A) & (wave_A > 0) & np.isfinite(flux)
+        if err is not None:
+            mask &= positive_ivar & np.isfinite(err) & (err > 0)
+        if use_and_mask:
+            mask &= clean_and_mask
+
+        primary_header = hdul[0].header if len(hdul) else fits.Header()
+        table_header = hdul[ext].header
+        headers = (primary_header, table_header)
+
+        def get_specobj_value(keys):
+            for hdu_index in range(2, len(hdul)):
+                table = hdul[hdu_index].data
+                names = getattr(table, "names", None)
+                if table is None or names is None or len(table) == 0:
+                    continue
+                lookup = {str(col).lower(): col for col in names}
+                for key in keys:
+                    col = lookup.get(str(key).lower())
+                    if col is not None:
+                        return _fits_header_scalar(table[col][0])
+            return None
+
+        def header_or_specobj(header_keys, table_keys=None):
+            value = _first_header_value(headers, header_keys)
+            if value is not None:
+                return value
+            return get_specobj_value(header_keys if table_keys is None else table_keys)
+
+        plate = header_or_specobj(("PLATEID", "PLATE"), ("PLATEID", "PLATE"))
+        mjd = header_or_specobj(("MJD",))
+        fiber = header_or_specobj(("FIBERID", "FIBER"))
+        sdss_object = header_or_specobj(("OBJECT",), ("OBJID", "THING_ID", "SPECOBJID"))
+        sdss_class = header_or_specobj(("CLASS", "SPECTROTYPE"), ("CLASS", "SPECTROTYPE"))
+        subclass = header_or_specobj(("SUBCLASS",))
+        redshift = header_or_specobj(("Z", "REDSHIFT"), ("Z", "REDSHIFT"))
+
+        meta = {
+            "path": path,
+            "instrument": "SDSS",
+            "sdss_product": "spec",
+            "ext": int(ext),
+            "columns": list(data.names or []),
+            "plate": plate,
+            "mjd": mjd,
+            "fiber": fiber,
+            "object": sdss_object,
+            "class": sdss_class,
+            "subclass": subclass,
+            "redshift": redshift,
+            "wave_unit_input": "log10(angstrom)",
+            "wave_medium": "vacuum",
+            "wave_frame": "heliocentric",
+            "observer_frame": "heliocentric",
+            "stellar_rest_status": "observed",
+            "mask_true_means": "use",
+            "sdss_mask_policy": {
+                "finite_wave_flux": True,
+                "ivar_positive_required": bool(ivar is not None),
+                "and_mask_zero_required": bool(use_and_mask and and_mask is not None),
+            },
+            "resolution_note": (
+                "SDSS resolution is not attached here; per-pixel/per-fiber LSF "
+                "conversion should be validated separately before use."
+            ),
+        }
+
+    return SpectrumSegment(
+        wave=wave_A,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium="vacuum",
+        wave_frame="heliocentric",
+        name=name or os.path.basename(path),
+        observer_frame="heliocentric",
+        stellar_rest_status="observed",
+        resolution=None,
+    ).sorted()
     
 
 READERS = {}
@@ -1894,6 +2195,8 @@ register_reader(["xsl", "xsl_dr3", "xsl-dr3"], read_xsl_dr3)
 register_reader(["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"], read_xshooter_1d)
 register_reader(["floyds", "floyds_csv", "lco_floyds"], read_floyds_csv)
 register_reader(["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"], read_gemini_gmos_ascii)
+register_reader(["uves_pop", "uves-pop", "uvespop"], read_uves_pop_ascii)
+register_reader(["sdss", "sdss_spec", "segue"], read_sdss_spec)
 
   
 def read_spectrum(
@@ -1924,8 +2227,10 @@ def read_spectrum(
 
     if func is None:
         raise ValueError(
-            "Unknown instrument '{0}'. Supported: pepsi, xsl_dr3, xshooter, "
-            "floyds, gemini".format(instrument)
+            "Unknown instrument '{0}'. Supported: {1}".format(
+                instrument,
+                ", ".join(sorted(READERS)),
+            )
         )
 
     spectrum = func(path, **kwargs)
