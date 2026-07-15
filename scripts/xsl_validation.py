@@ -376,6 +376,84 @@ def _ordinary_recovery_statistics(results):
     return statistics
 
 
+def _validation_role_summary(results):
+    """Summarize validation tiers without mixing stress targets into accuracy stats."""
+    by_role = {}
+    by_statistics_group = {}
+    by_status = {}
+    ordinary_ids = []
+    diagnostic_ids = []
+    unsupported_ids = []
+
+    for item in results:
+        role = str(item.get("validation_role", "unknown") or "unknown")
+        statistics_group = str(
+            item.get("statistics_group", "unknown") or "unknown"
+        )
+        status = str(item.get("status", "unknown") or "unknown")
+        xsl_id = str(item.get("xsl_id", "") or "")
+
+        role_entry = by_role.setdefault(
+            role,
+            {
+                "count": 0,
+                "statistics_groups": {},
+                "statuses": {},
+            },
+        )
+        role_entry["count"] += 1
+        role_entry["statistics_groups"][statistics_group] = (
+            role_entry["statistics_groups"].get(statistics_group, 0) + 1
+        )
+        role_entry["statuses"][status] = role_entry["statuses"].get(status, 0) + 1
+
+        by_statistics_group[statistics_group] = (
+            by_statistics_group.get(statistics_group, 0) + 1
+        )
+        by_status[status] = by_status.get(status, 0) + 1
+
+        if statistics_group == "ordinary_recovery":
+            ordinary_ids.append(xsl_id)
+        else:
+            diagnostic_ids.append(xsl_id)
+        if status == "unsupported_physics":
+            unsupported_ids.append(xsl_id)
+
+    return {
+        "count": int(len(results)),
+        "ordinary_recovery_count": int(len(ordinary_ids)),
+        "diagnostic_or_stress_count": int(len(diagnostic_ids)),
+        "unsupported_physics_count": int(len(unsupported_ids)),
+        "by_validation_role": {
+            key: {
+                "count": int(value["count"]),
+                "statistics_groups": {
+                    subkey: int(count)
+                    for subkey, count in sorted(value["statistics_groups"].items())
+                },
+                "statuses": {
+                    subkey: int(count)
+                    for subkey, count in sorted(value["statuses"].items())
+                },
+            }
+            for key, value in sorted(by_role.items())
+        },
+        "by_statistics_group": {
+            key: int(value) for key, value in sorted(by_statistics_group.items())
+        },
+        "by_status": {key: int(value) for key, value in sorted(by_status.items())},
+        "ordinary_recovery_xsl_ids": sorted(ordinary_ids),
+        "diagnostic_or_stress_xsl_ids": sorted(diagnostic_ids),
+        "unsupported_physics_xsl_ids": sorted(unsupported_ids),
+        "statistics_policy": (
+            "Only status='ok' results with statistics_group='ordinary_recovery' "
+            "enter ordinary_recovery_statistics; stress, peculiar, diagnostic, "
+            "and unsupported targets are summarized here but excluded from "
+            "ordinary accuracy metrics."
+        ),
+    }
+
+
 def _validation_plot_payload(collection, fit_result, max_points_per_segment):
     """Return bounded observed/model samples for reproducible validation plots."""
     max_points_per_segment = int(max_points_per_segment)
@@ -565,7 +643,7 @@ def main(argv=None):
             }
         )
         payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "run_configuration": dict(run_configuration),
             "validation_provenance": dict(validation_provenance),
             "wave_medium_assumption": args.wave_medium,
@@ -577,6 +655,7 @@ def main(argv=None):
                 [9940.0, 11500.0],
             ],
             "ordinary_recovery_statistics": _ordinary_recovery_statistics(ordered),
+            "validation_role_summary": _validation_role_summary(ordered),
             "statistics_excluded_roles": excluded_roles,
             "results": ordered,
         }
@@ -754,6 +833,12 @@ def main(argv=None):
     if statistics["count"]:
         print("Ordinary standard targets:", statistics["count"])
         print("Median delta Teff [K]:", statistics["teff"]["median_delta"])
+    role_summary = payload.get("validation_role_summary", {})
+    if role_summary:
+        print(
+            "Diagnostic/stress targets:",
+            role_summary.get("diagnostic_or_stress_count", 0),
+        )
     print("Wrote:", args.output)
 
 

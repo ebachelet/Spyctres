@@ -138,6 +138,42 @@ def test_ordinary_statistics_exclude_stress_targets():
     assert statistics["teff"]["median_delta"] == 100.0
 
 
+def test_validation_role_summary_keeps_accuracy_and_stress_tiers_separate():
+    results = [
+        {
+            "xsl_id": "XSTD",
+            "validation_role": "standard",
+            "statistics_group": "ordinary_recovery",
+            "status": "ok",
+        },
+        {
+            "xsl_id": "XCARB",
+            "validation_role": "carbon_star",
+            "statistics_group": "diagnostic_only",
+            "status": "ok",
+        },
+        {
+            "xsl_id": "XHOT",
+            "validation_role": "unsupported_hot",
+            "statistics_group": "diagnostic_only",
+            "status": "unsupported_physics",
+        },
+    ]
+
+    summary = xsl_validation._validation_role_summary(results)
+
+    assert summary["count"] == 3
+    assert summary["ordinary_recovery_count"] == 1
+    assert summary["diagnostic_or_stress_count"] == 2
+    assert summary["unsupported_physics_count"] == 1
+    assert summary["by_validation_role"]["standard"]["count"] == 1
+    assert summary["by_validation_role"]["carbon_star"]["statuses"]["ok"] == 1
+    assert summary["by_status"]["unsupported_physics"] == 1
+    assert summary["ordinary_recovery_xsl_ids"] == ["XSTD"]
+    assert summary["diagnostic_or_stress_xsl_ids"] == ["XCARB", "XHOT"]
+    assert "Only status='ok'" in summary["statistics_policy"]
+
+
 def test_validation_plot_payload_is_bounded_and_uses_native_arrays():
     wave = np.linspace(4000.0, 5000.0, 11)
     segment = SpectrumSegment(
@@ -274,6 +310,7 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
     assert fit_calls[0]["p0"] == (5750.0, 0.0, 4.0, 0.0)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["run_configuration"]["mdeg"] == 2
+    assert payload["schema_version"] == 3
     assert payload["run_configuration"]["initialization"] == "blind_coarse"
     assert len(payload["validation_provenance"]["manifest_sha256"]) == 64
     assert (
@@ -281,6 +318,11 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
         == [[5450.0, 5900.0], [9940.0, 11500.0]]
     )
     assert payload["ordinary_recovery_statistics"]["count"] == 1
+    role_summary = payload["validation_role_summary"]
+    assert role_summary["ordinary_recovery_count"] == 1
+    assert role_summary["diagnostic_or_stress_count"] == 1
+    assert role_summary["by_validation_role"]["standard"]["count"] == 1
+    assert role_summary["by_validation_role"]["cool_stress"]["count"] == 1
     assert payload["results"][1]["statistics_group"] == "diagnostic_only"
     assert payload["results"][0]["initialization"]["mode"] == "blind_coarse"
     assert payload["results"][0]["initialization"]["reference_seeded"] is False
@@ -351,4 +393,5 @@ def test_runner_records_unsupported_zero_budget_without_fit(
     xsl_validation.main([str(manifest), "--output", str(output)])
 
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["validation_role_summary"]["unsupported_physics_count"] == 1
     assert payload["results"][0]["status"] == "unsupported_physics"
