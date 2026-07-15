@@ -8,8 +8,11 @@ python scripts/xsl_validation.py examples/xsl_validation_manifest.csv \
 
 import argparse
 import csv
+import hashlib
+import importlib.metadata
 import json
 import os
+import subprocess
 import tempfile
 
 import numpy as np
@@ -266,6 +269,77 @@ def _validate_resume_configuration(previous, current):
         )
 
 
+def _file_sha256(path, block_size=1024 * 1024):
+    """Return a SHA256 hash for a validation input file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(block_size), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _spyctres_version():
+    try:
+        return importlib.metadata.version("Spyctres")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _git_commit_for_path(path):
+    """Return the current git commit for path, or None outside a git checkout."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.abspath(os.path.dirname(path) or "."),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    commit = completed.stdout.strip()
+    return commit or None
+
+
+def _validation_provenance(args, manifest_path, run_configuration):
+    """Return reproducibility metadata for XSL validation checkpoints."""
+    manifest_path = os.path.abspath(os.path.expanduser(manifest_path))
+    return {
+        "schema_version": 1,
+        "manifest_path": manifest_path,
+        "manifest_sha256": _file_sha256(manifest_path),
+        "spyctres_version": _spyctres_version(),
+        "spyctres_git_commit": _git_commit_for_path(__file__),
+        "runner": "scripts/xsl_validation.py",
+        "forward_model_policy": {
+            "entry_point": "fit_phoenix_spectrum",
+            "forward_model": "fit_phoenix_spectrum_default",
+            "note": (
+                "The script intentionally delegates final forward-model "
+                "selection to the public fit_phoenix_spectrum defaults unless "
+                "that call is changed in the runner."
+            ),
+        },
+        "phoenix_identity": {
+            "phoenix_dir_argument": args.phoenix_dir,
+            "cache_dir_argument": args.cache_dir,
+        },
+        "mask_policy": {
+            "exclude_regions_A": [
+                [5450.0, 5900.0],
+                [9940.0, 11500.0],
+            ],
+            "xsl_arm_scaling_applied_by_spyctres": False,
+            "xsl_rv_correction_applied_by_spyctres": False,
+            "telluric_mask_applied": False,
+            "known_dib_mask_applied": False,
+        },
+        "run_configuration": dict(run_configuration),
+    }
+
+
 def _json_native(value):
     if isinstance(value, np.ndarray):
         return [_json_native(item) for item in value.tolist()]
@@ -420,6 +494,11 @@ def main(argv=None):
         raise ValueError("XSL validation manifest requires a path column.")
     _validate_manifest_rows(manifest_rows)
     run_configuration = _run_configuration(args)
+    validation_provenance = _validation_provenance(
+        args,
+        args.manifest,
+        run_configuration,
+    )
     manifest_order = [row.get("xsl_id", "") for row in manifest_rows]
     manifest_by_id = {row.get("xsl_id", ""): row for row in manifest_rows}
     rows = list(manifest_rows)
@@ -488,6 +567,7 @@ def main(argv=None):
         payload = {
             "schema_version": 2,
             "run_configuration": dict(run_configuration),
+            "validation_provenance": dict(validation_provenance),
             "wave_medium_assumption": args.wave_medium,
             "fit_wave_range_A": [args.wave_min, args.wave_max],
             "budget_mode": "manifest_role_aware",

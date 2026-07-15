@@ -50,6 +50,33 @@ def test_json_native_rejects_nonfinite_json_extensions():
     assert converted == {"array": [1.0, None], "scalar": 2.0}
 
 
+def test_validation_provenance_records_manifest_and_policy(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text("xsl_id,path\nX0001,one.fits\n", encoding="utf-8")
+    args = _arguments(
+        phoenix_dir="/models/phoenix",
+        cache_dir="/tmp/cache",
+    )
+    run_configuration = {"initialization": "blind_coarse", "mdeg": 2}
+    monkeypatch.setattr(xsl_validation, "_spyctres_version", lambda: "0.test")
+    monkeypatch.setattr(xsl_validation, "_git_commit_for_path", lambda path: "abc123")
+
+    provenance = xsl_validation._validation_provenance(
+        args,
+        str(manifest),
+        run_configuration,
+    )
+
+    assert provenance["manifest_sha256"] == xsl_validation._file_sha256(str(manifest))
+    assert provenance["spyctres_version"] == "0.test"
+    assert provenance["spyctres_git_commit"] == "abc123"
+    assert provenance["phoenix_identity"]["phoenix_dir_argument"] == "/models/phoenix"
+    assert provenance["phoenix_identity"]["cache_dir_argument"] == "/tmp/cache"
+    assert provenance["mask_policy"]["xsl_arm_scaling_applied_by_spyctres"] is False
+    assert provenance["mask_policy"]["xsl_rv_correction_applied_by_spyctres"] is False
+    assert provenance["run_configuration"] == run_configuration
+
+
 def test_xsl_initialization_configuration_defaults_to_blind_coarse():
     parser = xsl_validation.build_parser()
     args = parser.parse_args(["manifest.csv", "--output", "results.json"])
@@ -248,6 +275,11 @@ def test_runner_checkpoints_each_target_and_resume_skips_completed(
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["run_configuration"]["mdeg"] == 2
     assert payload["run_configuration"]["initialization"] == "blind_coarse"
+    assert len(payload["validation_provenance"]["manifest_sha256"]) == 64
+    assert (
+        payload["validation_provenance"]["mask_policy"]["exclude_regions_A"]
+        == [[5450.0, 5900.0], [9940.0, 11500.0]]
+    )
     assert payload["ordinary_recovery_statistics"]["count"] == 1
     assert payload["results"][1]["statistics_group"] == "diagnostic_only"
     assert payload["results"][0]["initialization"]["mode"] == "blind_coarse"
