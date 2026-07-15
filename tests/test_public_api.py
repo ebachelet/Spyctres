@@ -236,6 +236,7 @@ def test_quality_flag_descriptions_cover_static_and_grid_flags():
             "grid_edge_teff_high",
             "rv_interpretation_ambiguous",
             "low_sampling_warning",
+            "parameter_errors_local_linearized",
             "surprise_flag",
         ]
     )
@@ -244,6 +245,7 @@ def test_quality_flag_descriptions_cover_static_and_grid_flags():
     assert "high edge" in descriptions["grid_edge_teff_high"]
     assert "alignment" in descriptions["rv_interpretation_ambiguous"]
     assert "pixels" in descriptions["low_sampling_warning"]
+    assert "Jacobian" in descriptions["parameter_errors_local_linearized"]
     assert "No description" in descriptions["surprise_flag"]
 
 

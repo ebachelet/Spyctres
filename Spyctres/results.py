@@ -417,6 +417,30 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "A fractional uncertainty floor was added in quadrature for at least "
         "one segment; inspect raw and effective chi-square diagnostics."
     ),
+    "parameter_errors_local_linearized": (
+        "Reported parameter errors are local linearized diagnostics derived "
+        "from the optimizer Jacobian, not global posterior uncertainties."
+    ),
+    "parameter_errors_ignore_model_systematics": (
+        "Reported parameter errors do not include PHOENIX grid limitations, "
+        "continuum placement, LSF, wavelength-frame, or reduction systematics."
+    ),
+    "parameter_errors_unreliable_if_high_chi2": (
+        "The fit has high reduced chi-square, so local Jacobian-based parameter "
+        "errors are likely over-optimistic."
+    ),
+    "parameter_errors_unreliable_if_robust_loss": (
+        "A robust optimizer loss was used; local covariance/error estimates "
+        "should not be interpreted as ordinary Gaussian likelihood errors."
+    ),
+    "parameter_errors_unreliable_if_error_floor": (
+        "An uncertainty floor was applied, so reported parameter errors depend "
+        "on the adopted error-floor model."
+    ),
+    "parameter_errors_unreliable_if_segment_weights": (
+        "Non-unity segment weights were used, so reported parameter errors "
+        "depend on the adopted weighting scheme."
+    ),
     "nonstellar_feature_overlap": (
         "A known non-stellar feature, such as a diffuse interstellar band, "
         "overlaps the fitted wavelength range; PHOENIX is not expected to "
@@ -580,6 +604,9 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
         ),
         "optimizer_cost_twice": summary.get(
             "optimizer_cost_twice", diagnostics.get("optimizer_cost_twice")
+        ),
+        "parameter_uncertainty": summary.get(
+            "parameter_uncertainty", diagnostics.get("parameter_uncertainty")
         ),
         "n_points": summary.get("n_points", diagnostics.get("n_pixels")),
         "n_parameters": diagnostics.get("n_parameters"),

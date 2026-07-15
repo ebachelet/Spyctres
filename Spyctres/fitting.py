@@ -1245,6 +1245,55 @@ def _lsf_sampling_summary(segment_diagnostics):
     }
 
 
+def _parameter_uncertainty_summary(
+    *,
+    available,
+    chi2_red,
+    optimizer_loss,
+    error_floor_applied,
+    segment_diagnostics,
+    high_chi2_threshold=5.0,
+):
+    """Return caveats for covariance/Jacobian-style parameter errors."""
+    caveat_flags = []
+    if available:
+        caveat_flags.extend(
+            [
+                "parameter_errors_local_linearized",
+                "parameter_errors_ignore_model_systematics",
+            ]
+        )
+        if chi2_red is not None and float(chi2_red) > float(high_chi2_threshold):
+            caveat_flags.append("parameter_errors_unreliable_if_high_chi2")
+        if str(optimizer_loss) != "linear":
+            caveat_flags.append("parameter_errors_unreliable_if_robust_loss")
+        if bool(error_floor_applied):
+            caveat_flags.append("parameter_errors_unreliable_if_error_floor")
+        if any(
+            not np.isclose(float(segment.get("weight", 1.0)), 1.0)
+            for segment in segment_diagnostics
+        ):
+            caveat_flags.append("parameter_errors_unreliable_if_segment_weights")
+    return {
+        "available": bool(available),
+        "method": (
+            "jacobian_pseudoinverse_scaled_by_reduced_chi2"
+            if available
+            else None
+        ),
+        "assumes_independent_gaussian_pixel_errors": bool(available),
+        "includes_model_systematics": False,
+        "caveat_flags": sorted(set(caveat_flags)),
+        "note": (
+            "Parameter errors are local linearized diagnostics only; they do "
+            "not include PHOENIX/model-domain, continuum, LSF, wavelength-frame, "
+            "or reduction systematics."
+            if available
+            else "Parameter errors were not available from the optimizer Jacobian."
+        ),
+    }
+
+
 def _residual_shape_diagnostics(residuals):
     residuals = np.asarray(residuals, dtype=float)
     finite = residuals[np.isfinite(residuals)]
@@ -1302,6 +1351,7 @@ def _build_phoenix_fit_diagnostics(
     raw_chi2_red=None,
     error_model="nominal",
     error_floor_applied=False,
+    parameter_errors_available=None,
 ):
     """Build a compact, JSON-safe diagnostics block for PHOENIX fits."""
     retained_count = int(len(seg_meta))
@@ -1385,6 +1435,13 @@ def _build_phoenix_fit_diagnostics(
         rv_bary_kms=rv_bary_kms,
     )
     lsf_sampling_summary = _lsf_sampling_summary(segment_diagnostics)
+    parameter_uncertainty = _parameter_uncertainty_summary(
+        available=bool(parameter_errors_available),
+        chi2_red=chi2_red,
+        optimizer_loss=optimizer_loss,
+        error_floor_applied=error_floor_applied,
+        segment_diagnostics=segment_diagnostics,
+    )
 
     return {
         "schema_version": 1,
@@ -1404,6 +1461,7 @@ def _build_phoenix_fit_diagnostics(
         "raw_chi2_red": float(chi2_red if raw_chi2_red is None else raw_chi2_red),
         "error_model": str(error_model),
         "error_floor_applied": bool(error_floor_applied),
+        "parameter_uncertainty": parameter_uncertainty,
         "optimizer_loss": str(optimizer_loss),
         "optimizer_loss_f_scale": float(optimizer_loss_f_scale),
         "optimizer_cost": (
@@ -1463,6 +1521,12 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
         flags.append("robust_loss_active")
     if bool(diagnostics.get("error_floor_applied", False)):
         flags.append("error_floor_applied")
+    flags.extend(
+        str(flag)
+        for flag in diagnostics.get("parameter_uncertainty", {}).get(
+            "caveat_flags", []
+        )
+    )
     if diagnostics.get("residual_autocorrelation_flag"):
         flags.append("structured_residuals")
     slope = diagnostics.get("residual_slope")
@@ -3334,6 +3398,7 @@ def fit_phoenix_full_spectrum(
         raw_chi2_red=raw_chi2_red,
         error_model=error_model,
         error_floor_applied=error_floor_applied,
+        parameter_errors_available=parameter_errors is not None,
     )
     quality_flags = _phoenix_quality_flags(diagnostics, success=res.success)
     velocity_convention = diagnostics["velocity_convention"]
@@ -3389,6 +3454,7 @@ def fit_phoenix_full_spectrum(
         "n_free_parameters": int(k),
         "covariance": covariance,
         "parameter_errors": parameter_errors,
+        "parameter_uncertainty": diagnostics.get("parameter_uncertainty"),
         "seg_meta": seg_meta,
         "forward_model": str(forward_model),
         "model_margin_A": float(model_margin_A),

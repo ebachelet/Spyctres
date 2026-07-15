@@ -301,6 +301,12 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert result["error_model"] == "nominal"
     assert result["error_floor_applied"] is False
     assert "robust_loss_active" in result["quality_flags"]
+    assert result["parameter_uncertainty"]["available"] is True
+    assert "parameter_errors_local_linearized" in result["quality_flags"]
+    assert "parameter_errors_ignore_model_systematics" in result["quality_flags"]
+    assert "parameter_errors_unreliable_if_robust_loss" in result["quality_flags"]
+    assert "parameter_errors_unreliable_if_segment_weights" in result["quality_flags"]
+    assert result["quality_report"]["parameter_uncertainty"]["available"] is True
     assert result["quality_report"]["optimizer_loss"] == "soft_l1"
     assert result["quality_report"]["error_model"] == "nominal"
     assert result["segment_error_floor_fraction"] == [0.0, 0.0]
@@ -389,6 +395,8 @@ def test_full_spectrum_fit_reports_error_floor_error_model():
     assert result["quality_report"]["raw_chi2"] == pytest.approx(result["raw_chi2"])
     assert result["quality_report"]["effective_chi2"] == pytest.approx(result["chi2"])
     assert "error_floor_applied" in result["quality_flags"]
+    if result["parameter_uncertainty"]["available"]:
+        assert "parameter_errors_unreliable_if_error_floor" in result["quality_flags"]
 
 
 def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
@@ -536,6 +544,7 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
         coarse_initialization=None,
         rv_kms=12.0,
         rv_bary_kms=-3.0,
+        parameter_errors_available=True,
     )
     flags = _phoenix_quality_flags(diagnostics, success=True)
 
@@ -548,6 +557,18 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
     assert diagnostics["raw_chi2_red"] == pytest.approx(9.0)
     assert diagnostics["error_model"] == "nominal"
     assert diagnostics["error_floor_applied"] is False
+    assert diagnostics["parameter_uncertainty"]["available"] is True
+    assert (
+        diagnostics["parameter_uncertainty"]["method"]
+        == "jacobian_pseudoinverse_scaled_by_reduced_chi2"
+    )
+    assert (
+        diagnostics["parameter_uncertainty"][
+            "assumes_independent_gaussian_pixel_errors"
+        ]
+        is True
+    )
+    assert diagnostics["parameter_uncertainty"]["includes_model_systematics"] is False
     assert diagnostics["optimizer_loss"] == "linear"
     assert diagnostics["grid_edge_flags"]["teff"] is True
     assert diagnostics["grid_edge_flags"]["teff_low"] is True
@@ -581,6 +602,9 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
         == "fit selection"
     )
     assert "high_chi2" in flags
+    assert "parameter_errors_local_linearized" in flags
+    assert "parameter_errors_ignore_model_systematics" in flags
+    assert "parameter_errors_unreliable_if_high_chi2" in flags
     assert "grid_edge_teff" in flags
     assert "grid_edge_teff_low" in flags
     assert "fit_bound_hit" in flags
@@ -647,12 +671,22 @@ def test_quality_flags_include_robust_loss_and_error_floor_warnings():
         "segment_diagnostics": [{"n_fit": 100, "mask_fraction": 0.0}],
         "optimizer_loss": "soft_l1",
         "error_floor_applied": True,
+        "parameter_uncertainty": {
+            "caveat_flags": [
+                "parameter_errors_local_linearized",
+                "parameter_errors_unreliable_if_robust_loss",
+                "parameter_errors_unreliable_if_error_floor",
+            ],
+        },
     }
 
     flags = _phoenix_quality_flags(diagnostics, success=True)
 
     assert "robust_loss_active" in flags
     assert "error_floor_applied" in flags
+    assert "parameter_errors_local_linearized" in flags
+    assert "parameter_errors_unreliable_if_robust_loss" in flags
+    assert "parameter_errors_unreliable_if_error_floor" in flags
 
 
 def test_grid_edge_flags_report_low_and_high_boundaries():
