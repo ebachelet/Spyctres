@@ -28,6 +28,14 @@ cd Spyctres
 pip install -e .
 ```
 
+For a fresh Conda-based development environment:
+
+```bash
+conda create -n spyctres-dev-py312 python=3.12
+conda activate spyctres-dev-py312
+pip install -e .
+```
+
 Some legacy workflows use `pysynphot` and its successor package `stsynphot`:
 
 ```bash
@@ -85,33 +93,81 @@ python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
 
 ## Quick start
 
-First check that the local environment and optional PHOENIX configuration are
-visible to Spyctres:
+Use this checklist for a first local run from a source checkout.
 
-```bash
-python scripts/check_spyctres_setup.py \
-  --spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter
-```
+1. Activate the Python 3.12 environment and install Spyctres in editable mode:
 
-If PHOENIX is not configured yet, the checker reports the missing path as a
-warning unless `--require-phoenix` is supplied. Once `SPYCTRES_PHOENIX_DIR` or
-`~/.config/spyctres/config.toml` points to the local PHOENIX root, run the
-short command-line example:
+   ```bash
+   conda activate spyctres-dev-py312
+   pip install -e .
+   ```
 
-```bash
-python examples/simple_phoenix_fit.py \
-  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter
-```
+2. Configure the local PHOENIX path, preferably in
+   `~/.config/spyctres/config.toml`:
 
-This example reads the spectrum, suggests conservative first-pass fit defaults
-from the loaded wavelength coverage and metadata, runs the native-grid PHOENIX
-fit, prints a compact result and quality report, and opens a wide
-observed/model/residual diagnostic plot. It is a first-contact classification
-example, not a precision line-width or abundance analysis. Expert users can
-override the suggested values with flags such as `--wmin`, `--wmax`, `--teff`,
-`--teff-min`, or `--no-auto-defaults`.
+   ```toml
+   [paths]
+   phoenix_dir = "/path/to/PHOENIXv2"
+   ```
+
+3. Check that the environment, package import, PHOENIX path, and bundled
+   example spectrum are visible:
+
+   ```bash
+   python scripts/check_spyctres_setup.py \
+     --spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+     --instrument xshooter
+   ```
+
+   If PHOENIX is not configured yet, the checker reports the missing path as a
+   warning unless `--require-phoenix` is supplied. For a stricter setup check,
+   use:
+
+   ```bash
+   python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
+   ```
+
+4. Run the shortest command-line fitting example:
+
+   ```bash
+   python examples/simple_phoenix_fit.py \
+     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+     --instrument xshooter
+   ```
+
+   This example reads the spectrum, suggests conservative first-pass fit
+   defaults from the loaded wavelength coverage and metadata, runs the
+   native-grid PHOENIX fit, prints a compact result and quality report, and
+   opens a wide observed/model/residual diagnostic plot. It is a first-contact
+   classification example, not a precision line-width or abundance analysis.
+   Expert users can override the suggested values with flags such as `--wmin`,
+   `--wmax`, `--teff`, `--teff-min`, or `--no-auto-defaults`.
+
+5. For many spectra, first run a cheap quicklook batch to identify sensible
+   local parameter ranges:
+
+   ```bash
+   python examples/batch_quickscan_then_refine.py \
+     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+     --instrument xshooter \
+     --quicklook \
+     --output-json /tmp/spyctres_batch_quick.json \
+     --summary-csv /tmp/spyctres_batch_quick.csv \
+     --resume
+   ```
+
+6. Then rerun with focused refinement. The script reuses the quick-pass result
+   to build local Teff/[Fe/H]/logg/RV bounds, rather than blindly searching the
+   broad classification box for every spectrum:
+
+   ```bash
+   python examples/batch_quickscan_then_refine.py \
+     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+     --instrument xshooter \
+     --output-json /tmp/spyctres_batch_refined.json \
+     --summary-csv /tmp/spyctres_batch_refined.csv \
+     --resume
+   ```
 
 Recommended example order:
 
@@ -185,6 +241,8 @@ Current reader coverage includes:
 - PEPSI `.dxt.nor`
 - FLOYDS ASCII/CSV exports
 - Gemini/GMOS ASCII exports
+- UVES-POP ASCII spectra
+- SDSS/SEGUE `spec-PLATE-MJD-FIBER` FITS spectra
 
 Readers return a generic `SpectrumSegment` object so that fitting code can remain instrument-agnostic.
 
