@@ -399,6 +399,65 @@ def test_full_spectrum_fit_reports_error_floor_error_model():
         assert "parameter_errors_unreliable_if_error_floor" in result["quality_flags"]
 
 
+def test_build_data_vectors_records_fallback_error_model():
+    segment = SpectrumSegment(
+        wave=np.arange(5000.0, 5005.0),
+        flux=[1.0, 1.1, 0.9, 1.0, 1.05],
+        err=None,
+        mask=np.ones(5, dtype=bool),
+        name="no-errors",
+    )
+
+    vectors = _build_data_vectors([segment])
+    seg_meta = vectors[-1]
+
+    assert len(seg_meta) == 1
+    model = seg_meta[0]["input_error_model"]
+    assert model["input_errors_present"] is False
+    assert model["source"] == "fallback_robust_sigma"
+    assert model["fallback_reason"] == "segment.err is None"
+    assert model["fallback_sigma"] > 0.0
+    assert "Effective/relative" in model["chi2_interpretation"]
+
+
+def test_build_data_vectors_records_supplied_error_model():
+    segment = SpectrumSegment(
+        wave=np.arange(5000.0, 5005.0),
+        flux=np.ones(5),
+        err=np.full(5, 0.02),
+        mask=np.ones(5, dtype=bool),
+        name="has-errors",
+    )
+
+    vectors = _build_data_vectors([segment])
+    model = vectors[-1][0]["input_error_model"]
+
+    assert model["input_errors_present"] is True
+    assert model["source"] == "segment_err"
+    assert model["fallback_sigma"] is None
+    assert model["fallback_reason"] is None
+
+
+def test_quality_flags_mark_fallback_errors_as_effective_chi2():
+    flags = _phoenix_quality_flags(
+        {
+            "reduced_chi2": 1.0,
+            "optimizer_loss": "linear",
+            "error_floor_applied": False,
+            "fallback_errors_used": True,
+            "parameter_uncertainty": {"caveat_flags": []},
+            "grid_edge_flags": {},
+            "resolution_metadata_summary": {"missing_count": 0},
+            "wavelength_metadata_summary": {},
+            "segment_diagnostics": [{"n_fit": 100, "mask_summary": {}}],
+        },
+        success=True,
+    )
+
+    assert "fallback_errors_used" in flags
+    assert "chi2_effective_not_calibrated" in flags
+
+
 def test_full_spectrum_fit_rejects_invalid_optimizer_controls_early():
     segment = SpectrumSegment(
         [5000.0, 5001.0],

@@ -87,13 +87,10 @@ def build_parser():
             "range with a multiplicative polynomial continuum."
         ),
         epilog=(
-            "Examples:\n"
-            "  python scripts/gemini_fit_smoketest.py /path/to/gmos_ascii.dat\n\n"
-            "  python scripts/gemini_fit_smoketest.py \\\n"
-            "    --wave-medium air \\\n"
-            "    --forward-model native_interp \\\n"
-            "    --wmin 4700 --wmax 8800 \\\n"
-            "    /path/to/gmos_ascii.dat\n\n"
+            "No Gemini spectrum is currently bundled under examples/data/. "
+            "Use this smoke test with an explicitly supplied GMOS ASCII file, "
+            "for example with --wave-medium air --forward-model native_interp "
+            "--wmin 4700 --wmax 8800.\n\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
             "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"

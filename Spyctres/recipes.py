@@ -92,6 +92,30 @@ BALMER_LABEL_ALIASES = {
 }
 
 
+def sdss_quicklook_resolution_assumption(R=2000.0):
+    """Return an explicit SDSS quicklook resolving-power assumption.
+
+    SDSS spectra are ingested with ``resolution=None`` because precision use
+    should rely on validated wavelength-dependent LSF information. This helper
+    packages the common ``R≈2000`` quicklook approximation as provenance rather
+    than making it a silent reader default.
+    """
+    R = float(R)
+    if not np.isfinite(R) or R <= 0.0:
+        raise ValueError("R must be finite and > 0.")
+    return {
+        "quantity": "R",
+        "value": R,
+        "resolution_source": "user_override",
+        "assumed_resolution_R": R,
+        "assumption_warning": (
+            "approximate SDSS quicklook resolution; not precision SDSS LSF modelling"
+        ),
+        "reader_default_resolution": None,
+        "intended_use": "quicklook_classification",
+    }
+
+
 @dataclass(frozen=True)
 class XshooterBalmerCase:
     """Prepared X-SHOOTER/Balmer fitting inputs with provenance."""

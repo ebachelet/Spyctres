@@ -21,11 +21,15 @@ python examples/batch_quickscan_then_refine.py \
   --output /tmp/spyctres_batch_xshooter_uvb.json \
   --resume
 
-For a directory of spectra, pass all files explicitly or let your shell expand
-the pattern, for example:
+For a multi-file demonstration, pass bundled spectra explicitly:
 
-python examples/batch_quickscan_then_refine.py /path/to/xshooter/*.fits \
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_VIS_TELL_CORR.fits \
   --instrument xshooter --output /tmp/spyctres_batch.json --resume
+
+For heterogeneous batches, use --manifest with a CSV containing at least a
+path column and optional target_id, instrument, and R/resolution_R columns.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -51,6 +56,7 @@ from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
+from Spyctres.preprocessing import audit_spectrum_for_fit
 
 
 EXAMPLE_UVB = (
@@ -75,7 +81,14 @@ def build_parser():
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
             "--instrument xshooter "
             "--output-json /tmp/spyctres_batch_xshooter_uvb.json "
-            "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv --resume"
+            "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv --resume\n\n"
+            "Manifest example after saving a CSV with examples/data paths:\n"
+            "  python examples/batch_quickscan_then_refine.py "
+            "--manifest examples/my_batch_manifest.csv "
+            "--refine-quality-policy skip-risky "
+            "--output-json /tmp/spyctres_batch_manifest.json --resume\n\n"
+            "Manifest columns: path or spectrum; optional target_id, "
+            "instrument, R/resolution_R."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -84,7 +97,16 @@ def build_parser():
         nargs="*",
         help=(
             "Input spectrum files. If omitted, the bundled X-SHOOTER UVB "
-            "example spectrum is used."
+            "example spectrum is used. Ignored when --manifest is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help=(
+            "Optional CSV manifest for heterogeneous batches. Required column: "
+            "path or spectrum. Optional columns: target_id, instrument, R or "
+            "resolution_R. Relative paths are resolved beside the manifest."
         ),
     )
     parser.add_argument(
@@ -147,6 +169,18 @@ def build_parser():
         help=(
             "Use the quick-scan wavelength window for refinement, or keep the "
             "window suggested by --refine-defaults-mode."
+        ),
+    )
+    parser.add_argument(
+        "--refine-quality-policy",
+        choices=("always", "skip-risky"),
+        default="always",
+        help=(
+            "Refinement gate after the quick scan. 'always' preserves the old "
+            "throughput example behavior. 'skip-risky' records the quicklook "
+            "result but skips the expensive refinement when spectrum readiness "
+            "flags indicate missing frame/resolution assumptions, obvious "
+            "artifacts, no fitted pixels, or undersampled LSF."
         ),
     )
     parser.add_argument("--quick-max-nfev", type=int, default=45)
@@ -220,6 +254,18 @@ def _resolution_fit_kwargs(args):
     return {"R": payload["assumed_resolution_R"]}
 
 
+def _assumed_resolution_for_audit(args):
+    payload = _resolution_override_payload(args)
+    if payload is None:
+        return None
+    return {
+        "quantity": "R",
+        "value": payload["assumed_resolution_R"],
+        "source": payload["resolution_source"],
+        "assumption_warning": payload["assumption_warning"],
+    }
+
+
 def _atomic_write_json(path, payload):
     # Checkpoint through a temporary file and atomic replace so interrupted runs
     # do not leave behind half-written JSON.
@@ -260,6 +306,13 @@ def _atomic_write_summary_csv(path, payload):
         "target_id",
         "path",
         "status",
+        "fit_ready",
+        "readiness_flags",
+        "readiness_fit_pixels",
+        "outside_fit_window_fraction",
+        "rejected_inside_fit_window_fraction",
+        "resolution_source",
+        "assumed_resolution_R",
         "teff",
         "feh",
         "logg",
@@ -283,11 +336,31 @@ def _atomic_write_summary_csv(path, payload):
                 refined = item.get("refined_result") or {}
                 quick = item.get("quick_result") or {}
                 primary = refined if refined else quick
+                readiness = item.get("spectrum_readiness") or {}
+                resolution_assumption = item.get("resolution_assumption") or {}
                 writer.writerow(
                     {
                         "target_id": item.get("target_id"),
                         "path": item.get("path"),
                         "status": item.get("status"),
+                        "fit_ready": readiness.get("fit_ready"),
+                        "readiness_flags": ",".join(
+                            str(flag)
+                            for flag in (readiness.get("interpretation_flags") or [])
+                        ),
+                        "readiness_fit_pixels": readiness.get("n_fit_candidate"),
+                        "outside_fit_window_fraction": readiness.get(
+                            "outside_fit_window_fraction"
+                        ),
+                        "rejected_inside_fit_window_fraction": readiness.get(
+                            "rejected_inside_fit_window_fraction"
+                        ),
+                        "resolution_source": resolution_assumption.get(
+                            "resolution_source"
+                        ),
+                        "assumed_resolution_R": resolution_assumption.get(
+                            "assumed_resolution_R"
+                        ),
                         "teff": primary.get("teff"),
                         "feh": primary.get("feh"),
                         "logg": primary.get("logg"),
@@ -334,6 +407,96 @@ def _input_paths(paths):
     if paths:
         return [os.path.abspath(os.path.expanduser(os.fspath(path))) for path in paths]
     return [str(EXAMPLE_UVB)]
+
+
+def _manifest_value(row, *names, default=None):
+    for name in names:
+        if name in row and row[name] not in (None, ""):
+            return row[name]
+    return default
+
+
+def _resolve_manifest_path(value, base_dir):
+    path = Path(os.path.expanduser(os.fspath(value)))
+    if not path.is_absolute():
+        path = Path(base_dir) / path
+    return str(path.resolve())
+
+
+def _load_manifest_records(path, default_instrument="xshooter"):
+    """Load a lightweight heterogeneous-batch CSV manifest."""
+    manifest_path = Path(os.path.expanduser(os.fspath(path))).resolve()
+    records = []
+    with open(manifest_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError("Batch manifest must be a CSV file with a header row.")
+        for index, raw_row in enumerate(reader, start=1):
+            row = {
+                str(key).strip(): ("" if value is None else str(value).strip())
+                for key, value in raw_row.items()
+                if key is not None
+            }
+            path_value = _manifest_value(row, "path", "spectrum", "file")
+            if path_value is None:
+                raise ValueError(
+                    "Batch manifest row {0} is missing a path/spectrum/file column.".format(
+                        index
+                    )
+                )
+            resolution_value = _manifest_value(row, "resolution_R", "R")
+            if resolution_value in (None, ""):
+                resolution_R = None
+            else:
+                resolution_R = float(resolution_value)
+            record = {
+                "path": _resolve_manifest_path(path_value, manifest_path.parent),
+                "target_id": _manifest_value(row, "target_id", "id", default=None),
+                "instrument": _manifest_value(
+                    row,
+                    "instrument",
+                    default=default_instrument,
+                ),
+                "resolution_R": resolution_R,
+                "manifest_row": index,
+                "manifest_path": str(manifest_path),
+            }
+            if not record["target_id"]:
+                record["target_id"] = record["path"]
+            records.append(record)
+    if not records:
+        raise ValueError("Batch manifest did not contain any spectra.")
+    return records
+
+
+def _input_records(args):
+    if args.manifest:
+        return _load_manifest_records(args.manifest, default_instrument=args.instrument)
+    return [
+        {
+            "path": path,
+            "target_id": _target_id(path),
+            "instrument": args.instrument,
+            "resolution_R": args.resolution_R,
+        }
+        for path in _input_paths(args.spectra)
+    ]
+
+
+def _args_for_record(args, record):
+    values = vars(args).copy()
+    values["instrument"] = record.get("instrument") or args.instrument
+    record_resolution = record.get("resolution_R", None)
+    values["resolution_R"] = args.resolution_R if record_resolution is None else record_resolution
+    return SimpleNamespace(**values)
+
+
+def _record_path(record):
+    return os.path.abspath(os.path.expanduser(os.fspath(record["path"])))
+
+
+def _record_target_id(record):
+    return str(record.get("target_id") or _target_id(_record_path(record)))
 
 
 def _target_id(path):
@@ -452,16 +615,18 @@ def make_refine_fit_kwargs(spectrum, quick_result, quick_fit_kwargs, args):
     return fit_kwargs, suggestion, focus
 
 
-def _run_configuration(args, paths):
+def _run_configuration(args, records):
     # Record the strategy knobs in the JSON checkpoint. This makes resumed or
     # shared batch products auditable without requiring a separate lab notebook.
     return {
         "example": "examples/batch_quickscan_then_refine.py",
         "instrument": args.instrument,
-        "n_input_spectra": len(paths),
+        "manifest": None if args.manifest is None else os.path.abspath(args.manifest),
+        "n_input_spectra": len(records),
         "quick_defaults_mode": args.quick_defaults_mode,
         "refine_defaults_mode": args.refine_defaults_mode,
         "refine_window": args.refine_window,
+        "refine_quality_policy": args.refine_quality_policy,
         "quick_max_nfev": int(args.quick_max_nfev),
         "refine_max_nfev": int(args.refine_max_nfev),
         "quick_rv_grid_n": int(args.quick_rv_grid_n),
@@ -491,13 +656,84 @@ def _progress_callback(enabled, label):
     return callback
 
 
-def _fit_one(path, args, phoenix_lib):
+REFINE_READINESS_BLOCK_FLAGS = {
+    "no_fitted_pixels",
+    "resolution_assumption_required",
+    "wave_medium_unknown",
+    "observer_frame_unknown",
+    "stellar_rest_status_unknown",
+    "artifact_review_required",
+    "lsf_undersampled",
+}
+
+
+def should_refine_after_quicklook(readiness, quick_result, policy="always"):
+    """Return ``(should_refine, reasons)`` for the optional refinement gate."""
+    policy = str(policy).strip().lower()
+    if policy == "always":
+        return True, []
+    if policy != "skip-risky":
+        raise ValueError("policy must be 'always' or 'skip-risky'.")
+    flags = set(readiness.get("interpretation_flags") or [])
+    reasons = sorted(flags & REFINE_READINESS_BLOCK_FLAGS)
+    if not readiness.get("fit_ready", False):
+        reasons.append("readiness_fit_ready_false")
+    if not quick_result.get("success", False):
+        reasons.append("quick_fit_not_successful")
+    return len(reasons) == 0, sorted(set(reasons))
+
+
+def _fit_one(record, args, phoenix_lib):
     started = time.perf_counter()
+    input_record = dict(record)
+    path = _record_path(record)
+    local_args = _args_for_record(args, record)
 
     # Ingestion is intentionally separate from fitting: each reader normalizes
     # an instrument product into Spyctres' common spectrum container.
     print("Reading spectrum: {0}".format(path), flush=True)
-    spectrum = read_spectrum(path, instrument=args.instrument)
+    spectrum = read_spectrum(path, instrument=local_args.instrument)
+    quick_fit_kwargs, quick_suggestion = prepare_phoenix_fit_kwargs(
+        spectrum,
+        auto_defaults=True,
+        defaults_mode=local_args.quick_defaults_mode,
+        science_case="classification",
+        extra_kwargs={
+            "max_nfev": int(local_args.quick_max_nfev),
+            "rv_grid_n": int(local_args.quick_rv_grid_n),
+        },
+        resolution_R=local_args.resolution_R,
+    )
+    readiness = audit_spectrum_for_fit(
+        spectrum,
+        fit_windows=quick_fit_kwargs.get("regions"),
+        intended_use="batch_quick_scan_classification",
+        assumed_resolution=_assumed_resolution_for_audit(local_args),
+    )
+    print(
+        "  Readiness: fit_ready={0}, fitted_pixels={1}, flags={2}".format(
+            readiness["fit_ready"],
+            readiness["n_fit_candidate"],
+            ", ".join(readiness["interpretation_flags"]) or "none",
+        ),
+        flush=True,
+    )
+    for warning in readiness.get("warnings", []):
+        print("  Readiness WARNING: {0}".format(warning), flush=True)
+    quick_mode_policy = (
+        quick_suggestion.provenance.get("mode_policy", {})
+        if quick_suggestion is not None
+        else {}
+    )
+    if quick_mode_policy:
+        print(
+            "  Defaults mode: {0} ({1} budget; {2})".format(
+                quick_mode_policy.get("mode", local_args.quick_defaults_mode),
+                quick_mode_policy.get("search_budget", "unknown"),
+                quick_mode_policy.get("default_status", "first_pass"),
+            ),
+            flush=True,
+        )
 
     # Stage 1: a cheap classification-style search. Its job is to locate a
     # sensible region of parameter space, not to be the final scientific answer.
@@ -507,28 +743,33 @@ def _fit_one(path, args, phoenix_lib):
         spectrum,
         model="phoenix",
         phoenix_lib=phoenix_lib,
-        auto_defaults=True,
-        defaults_mode=args.quick_defaults_mode,
+        auto_defaults=False,
         reconstruct=False,
-        max_nfev=int(args.quick_max_nfev),
-        rv_grid_n=int(args.quick_rv_grid_n),
-        progress_callback=_progress_callback(args.verbose, "quick"),
-        **_resolution_fit_kwargs(args),
+        progress_callback=_progress_callback(local_args.verbose, "quick"),
+        **quick_fit_kwargs,
     )
+    if quick_suggestion is not None:
+        quick_result.summary["fit_default_suggestion"] = quick_suggestion.to_dict()
+    quick_result.summary["spectrum_readiness"] = readiness
+    quick_result.provenance["spectrum_readiness"] = readiness
     quick_seconds = time.perf_counter() - quick_start
-    quick_fit_kwargs = (
-        quick_result.summary.get("fit_default_suggestion", {}).get("fit_kwargs", {})
-    )
     record = {
-        "target_id": _target_id(path),
+        "target_id": _record_target_id(input_record),
         "path": path,
+        "instrument": local_args.instrument,
         "status": "quick_ok" if args.quick_only else "quick_complete",
+        "spectrum_readiness": readiness,
         "quick_seconds": float(quick_seconds),
         "quick_result": _brief_result(quick_result),
         "quick_result_full": _result_payload(quick_result),
     }
-    if _resolution_override_payload(args) is not None:
-        record["resolution_assumption"] = _resolution_override_payload(args)
+    if record["target_id"] != path:
+        record["target_label"] = record["target_id"]
+    if _resolution_override_payload(local_args) is not None:
+        record["resolution_assumption"] = _resolution_override_payload(local_args)
+    if args.manifest:
+        record["manifest_row"] = int(input_record.get("manifest_row", 0) or 0)
+        record["manifest_path"] = input_record.get("manifest_path")
     print(
         "  Quick result: Teff={teff} logg={logg} [Fe/H]={feh} RV={rv_kms} chi2={chi2_red}".format(
             **record["quick_result"]
@@ -542,13 +783,34 @@ def _fit_one(path, args, phoenix_lib):
         record["total_seconds"] = float(time.perf_counter() - started)
         return record
 
+    should_refine, skip_reasons = should_refine_after_quicklook(
+        readiness,
+        record["quick_result"],
+        policy=args.refine_quality_policy,
+    )
+    if not should_refine:
+        record.update(
+            {
+                "status": "refine_skipped",
+                "refinement_skipped_reason": skip_reasons,
+                "total_seconds": float(time.perf_counter() - started),
+            }
+        )
+        print(
+            "  Skipping focused refinement because: {0}".format(
+                ", ".join(skip_reasons)
+            ),
+            flush=True,
+        )
+        return record
+
     # Stage 2: reuse the quick result to build a focused local fit.
     print("  Focused refinement...", flush=True)
     refine_fit_kwargs, refine_suggestion, focus = make_refine_fit_kwargs(
         spectrum,
         quick_result,
         quick_fit_kwargs,
-        args,
+        local_args,
     )
     refine_start = time.perf_counter()
     refined_result = fit_stellar_spectrum(
@@ -556,8 +818,8 @@ def _fit_one(path, args, phoenix_lib):
         model="phoenix",
         phoenix_lib=phoenix_lib,
         auto_defaults=False,
-        reconstruct=bool(args.reconstruct_final),
-        progress_callback=_progress_callback(args.verbose, "refine"),
+        reconstruct=bool(local_args.reconstruct_final),
+        progress_callback=_progress_callback(local_args.verbose, "refine"),
         **refine_fit_kwargs,
     )
     refine_seconds = time.perf_counter() - refine_start
@@ -585,8 +847,8 @@ def _fit_one(path, args, phoenix_lib):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    paths = _input_paths(args.spectra)
-    run_configuration = _run_configuration(args, paths)
+    records = _input_records(args)
+    run_configuration = _run_configuration(args, records)
     if _resolution_override_payload(args) is not None:
         print(
             "Using user-supplied assumed resolution R={0:g} for this batch.".format(
@@ -609,9 +871,9 @@ def main(argv=None):
         # Preserve input order in the output JSON so batch tables are stable
         # across resumed runs.
         ordered = [
-            records_by_id[_target_id(path)]
-            for path in paths
-            if _target_id(path) in records_by_id
+            records_by_id[_record_target_id(record)]
+            for record in records
+            if _record_target_id(record) in records_by_id
         ]
         payload = {
             "schema_version": 1,
@@ -635,9 +897,10 @@ def main(argv=None):
     # pass the same object into every fit instead of reloading it per spectrum.
     phoenix_lib = PhoenixLibrary(resolved_phoenix_dir, verbose=bool(args.verbose))
 
-    completed_statuses = {"ok", "quick_ok", "fit_failed", "error"}
-    for index, path in enumerate(paths, start=1):
-        target_id = _target_id(path)
+    completed_statuses = {"ok", "quick_ok", "refine_skipped", "fit_failed", "error"}
+    for index, record in enumerate(records, start=1):
+        target_id = _record_target_id(record)
+        path = _record_path(record)
         # Resume skips terminal records unless --force is requested.
         if (
             args.resume
@@ -645,11 +908,11 @@ def main(argv=None):
             and target_id in records_by_id
             and records_by_id[target_id].get("status") in completed_statuses
         ):
-            print("Skipping completed {0}/{1}: {2}".format(index, len(paths), path), flush=True)
+            print("Skipping completed {0}/{1}: {2}".format(index, len(records), path), flush=True)
             continue
-        print("\nTarget {0}/{1}".format(index, len(paths)), flush=True)
+        print("\nTarget {0}/{1}".format(index, len(records)), flush=True)
         try:
-            records_by_id[target_id] = _fit_one(path, args, phoenix_lib)
+            records_by_id[target_id] = _fit_one(record, args, phoenix_lib)
         except Exception as exc:
             # Do not let one bad file kill an entire batch. Record the failure,
             # checkpoint it, and continue with the next spectrum.
@@ -670,11 +933,15 @@ def main(argv=None):
     # Detailed quality flags live in JSON; the terminal gets a compact summary.
     n_ok = sum(1 for item in payload["results"] if item.get("status") == "ok")
     n_quick = sum(1 for item in payload["results"] if item.get("status") == "quick_ok")
+    n_skipped = sum(
+        1 for item in payload["results"] if item.get("status") == "refine_skipped"
+    )
     n_error = sum(1 for item in payload["results"] if item.get("status") == "error")
     print(
-        "\nDone. ok={0}, quick_only={1}, errors={2}, output={3}".format(
+        "\nDone. ok={0}, quick_only={1}, refine_skipped={2}, errors={3}, output={4}".format(
             n_ok,
             n_quick,
+            n_skipped,
             n_error,
             args.output,
         ),

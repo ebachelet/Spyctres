@@ -685,11 +685,31 @@ def _build_data_vectors(
         support_ok = _segment_support_ok(seg)
 
         if seg.err is None:
-            e_full = np.ones_like(f_full) * _estimate_sigma(
+            fallback_sigma = float(_estimate_sigma(
                 f_full[support_ok] if np.any(support_ok) else f_full
-            )
+            ))
+            e_full = np.ones_like(f_full, dtype=float) * fallback_sigma
+            input_error_model = {
+                "input_errors_present": False,
+                "source": "fallback_robust_sigma",
+                "fallback_sigma": fallback_sigma,
+                "fallback_reason": "segment.err is None",
+                "chi2_interpretation": (
+                    "Effective/relative chi-square only; no calibrated "
+                    "per-pixel uncertainty array was supplied."
+                ),
+            }
         else:
             e_full = np.asarray(seg.err, dtype=float)
+            input_error_model = {
+                "input_errors_present": True,
+                "source": "segment_err",
+                "fallback_sigma": None,
+                "fallback_reason": None,
+                "chi2_interpretation": (
+                    "Uses the uncertainty array supplied with the segment."
+                ),
+            }
 
         reg = _select_segment_option(regions, i, seg)
         ex = _select_segment_option(exclude_regions, i, seg)
@@ -739,6 +759,7 @@ def _build_data_vectors(
             "wave_max": float(w_support.max()),
             "n_support": n_support,
             "n_fit": n_fit,
+            "input_error_model": input_error_model,
             "error_floor": error_floor_meta,
             "mask_provenance": mask_result.to_metadata(label="fit selection"),
             "mask_summary": mask_result.to_summary(),
@@ -1270,6 +1291,16 @@ def _parameter_uncertainty_summary(
         if bool(error_floor_applied):
             caveat_flags.append("parameter_errors_unreliable_if_error_floor")
         if any(
+            not bool(
+                segment.get("input_error_model", {}).get(
+                    "input_errors_present",
+                    True,
+                )
+            )
+            for segment in segment_diagnostics
+        ):
+            caveat_flags.append("parameter_errors_unreliable_if_fallback_errors")
+        if any(
             not np.isclose(float(segment.get("weight", 1.0)), 1.0)
             for segment in segment_diagnostics
         ):
@@ -1411,6 +1442,7 @@ def _build_phoenix_fit_diagnostics(
         n_fit = int(meta.get("n_fit", 0))
         mask_summary = dict(meta.get("mask_summary", {}))
         mask_provenance = dict(meta.get("mask_provenance", {}))
+        input_error_model = dict(meta.get("input_error_model", {}))
         error_floor = dict(meta.get("error_floor", {}))
         seg_fwhm = segment_fwhm_kms[index]
         lsf_sampling = _segment_lsf_sampling_diagnostics(
@@ -1435,6 +1467,7 @@ def _build_phoenix_fit_diagnostics(
                 ),
                 "wave_min": meta.get("wave_min"),
                 "wave_max": meta.get("wave_max"),
+                "input_error_model": input_error_model,
                 "error_floor": error_floor,
                 "mask_summary": mask_summary,
                 "mask_provenance": mask_provenance,
@@ -1489,6 +1522,41 @@ def _build_phoenix_fit_diagnostics(
         error_floor_applied=error_floor_applied,
         segment_diagnostics=segment_diagnostics,
     )
+    fallback_error_segments = []
+    for segment in segment_diagnostics:
+        if bool(
+            segment.get("input_error_model", {}).get("input_errors_present", True)
+        ):
+            continue
+        name = segment.get("name")
+        if name is None:
+            name = "segment_{0}".format(segment.get("input_index", 0))
+        fallback_error_segments.append(str(name))
+    fallback_errors_used = bool(fallback_error_segments)
+    chi2_calibrated = bool(
+        not fallback_errors_used
+        and str(optimizer_loss) == "linear"
+        and not bool(error_floor_applied)
+    )
+    if str(optimizer_loss) != "linear":
+        chi2_interpretation = (
+            "Ordinary chi-square interpretation is modified because a robust "
+            "least-squares loss was used."
+        )
+    elif fallback_errors_used:
+        chi2_interpretation = (
+            "Reduced chi-square is effective/relative because one or more "
+            "segments used fallback robust-sigma uncertainties."
+        )
+    elif bool(error_floor_applied):
+        chi2_interpretation = (
+            "Reduced chi-square uses uncertainties after an added fractional "
+            "error floor; compare raw and effective diagnostics."
+        )
+    else:
+        chi2_interpretation = (
+            "Ordinary least-squares objective with sigma-normalized residuals."
+        )
 
     return {
         "schema_version": 1,
@@ -1508,6 +1576,9 @@ def _build_phoenix_fit_diagnostics(
         "raw_chi2_red": float(chi2_red if raw_chi2_red is None else raw_chi2_red),
         "error_model": str(error_model),
         "error_floor_applied": bool(error_floor_applied),
+        "fallback_errors_used": fallback_errors_used,
+        "fallback_error_segments": fallback_error_segments,
+        "chi2_calibrated": chi2_calibrated,
         "parameter_uncertainty": parameter_uncertainty,
         "optimizer_loss": str(optimizer_loss),
         "optimizer_loss_f_scale": float(optimizer_loss_f_scale),
@@ -1517,12 +1588,7 @@ def _build_phoenix_fit_diagnostics(
         "optimizer_cost_twice": (
             None if optimizer_cost_twice is None else float(optimizer_cost_twice)
         ),
-        "chi2_interpretation": (
-            "Ordinary chi-square interpretation is modified because a robust "
-            "least-squares loss was used."
-            if str(optimizer_loss) != "linear"
-            else "Ordinary least-squares objective with sigma-normalized residuals."
-        ),
+        "chi2_interpretation": chi2_interpretation,
         "segment_diagnostics": segment_diagnostics,
         "grid_summary": grid_summary,
         "grid_edge_flags": edge_flags,
@@ -1570,6 +1636,9 @@ def _phoenix_quality_flags(diagnostics, success=True, high_chi2_threshold=5.0):
         flags.append("robust_loss_active")
     if bool(diagnostics.get("error_floor_applied", False)):
         flags.append("error_floor_applied")
+    if bool(diagnostics.get("fallback_errors_used", False)):
+        flags.append("fallback_errors_used")
+        flags.append("chi2_effective_not_calibrated")
     flags.extend(
         str(flag)
         for flag in diagnostics.get("parameter_uncertainty", {}).get(
@@ -3418,7 +3487,22 @@ def fit_phoenix_full_spectrum(
             for m in seg_meta
         )
     )
-    error_model = "floor_inflated" if error_floor_applied else "nominal"
+    fallback_errors_used = bool(
+        any(
+            not bool(
+                m.get("input_error_model", {}).get("input_errors_present", True)
+            )
+            for m in seg_meta
+        )
+    )
+    if fallback_errors_used and error_floor_applied:
+        error_model = "fallback_robust_sigma_plus_floor"
+    elif fallback_errors_used:
+        error_model = "fallback_robust_sigma"
+    elif error_floor_applied:
+        error_model = "floor_inflated"
+    else:
+        error_model = "nominal"
     optimizer_cost = float(res.cost)
     optimizer_cost_twice = float(2.0 * res.cost)
 
@@ -3494,6 +3578,10 @@ def fit_phoenix_full_spectrum(
         "raw_chi2_red": raw_chi2_red,
         "error_model": error_model,
         "error_floor_applied": error_floor_applied,
+        "fallback_errors_used": diagnostics.get("fallback_errors_used"),
+        "fallback_error_segments": diagnostics.get("fallback_error_segments", []),
+        "chi2_calibrated": diagnostics.get("chi2_calibrated"),
+        "chi2_interpretation": diagnostics.get("chi2_interpretation"),
         "n_points": n,
         "status": int(res.status),
         "nfev": int(res.nfev),

@@ -3,6 +3,12 @@
 This directory contains user-facing examples and validation notebooks for
 PHOENIX-based spectral fitting in Spyctres.
 
+All runnable commands in this document use spectra bundled under
+`examples/data/`. If you want to use SDSS, UVES-POP, or another external
+archive product, first download/copy that file yourself and replace the input
+path explicitly; those archive files are not treated as reproducible packaged
+examples unless they are present in `examples/data/`.
+
 ## Recommended order
 
 Start with the public examples, then move into advanced and validation
@@ -11,12 +17,14 @@ workflows:
 1. `simple_phoenix_fit.py` — shortest command-line path using the public API.
 2. `batch_quickscan_then_refine.py` — batch-oriented quick scan followed by
    focused refinement; useful when fitting many spectra.
-3. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
-4. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
+3. `high_resolution_sideband_normalization.py` — local line-window sideband
+   normalization for UVES/PEPSI-like high-resolution diagnostics.
+4. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
+5. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
    diagnostic workflow.
-5. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
+6. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
    useful after the basic workflow is familiar.
-6. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
+7. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
    PEPSI legacy line-window path, not the generic public classification path.
 
 The examples are ordered by how much Spyctres-specific context they assume.
@@ -54,20 +62,18 @@ the loaded spectrum metadata. Expert users can still override those choices
 with flags such as `--wmin`, `--wmax`, `--teff`, `--teff-min`, or
 `--no-auto-defaults`.
 
-For SDSS spectra, the reader deliberately leaves `resolution=None` because a
-validated SDSS LSF conversion is not yet implemented. For a quick visual
-classification pass you may supply an explicit approximate resolution, for
-example:
-
-```bash
-python examples/simple_phoenix_fit.py spec-1660-53230-0023.fits \
-  --instrument sdss \
-  --R 2000
-```
-
-Treat this as a quicklook approximation only. It is not precision SDSS LSF
-modelling, and the fitted line widths should not be interpreted as calibrated
-instrumental-broadening measurements.
+For SDSS spectra supplied by a user, the reader deliberately leaves
+`resolution=None` by default. It preserves `wdisp` LSF provenance when
+available, but the PHOENIX fitter still uses only constant Gaussian broadening
+unless the user supplies one explicitly. Saved metadata records this as
+`lsf_source="sdss_wdisp_not_applied"`, and the readiness audit warns when the
+fit proceeds with an explicit constant-R quicklook assumption instead. For a
+quick visual classification pass on your own SDSS file, `--R 2000` is a
+reasonable explicit approximation to try, but it is not precision SDSS LSF
+modelling and fitted line widths should not be interpreted as calibrated
+instrumental-broadening measurements. No SDSS spectra are currently bundled in
+`examples/data/`, so the reproducible examples below use the packaged
+X-SHOOTER, FLOYDS, PEPSI, and XSL files.
 
 ## Example 2: batch quick scan, then focused refinement
 
@@ -86,10 +92,12 @@ python examples/batch_quickscan_then_refine.py \
   --resume
 ```
 
-For a real batch, pass a list of files:
+For a multi-file batch using bundled spectra, pass several packaged files:
 
 ```bash
-python examples/batch_quickscan_then_refine.py /path/to/xshooter/*.fits \
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_VIS_TELL_CORR.fits \
   --instrument xshooter \
   --output-json /tmp/spyctres_batch.json \
   --summary-csv /tmp/spyctres_batch.csv \
@@ -122,27 +130,45 @@ python examples/batch_quickscan_then_refine.py \
 python -m json.tool /tmp/spyctres_batch_refined.json
 ```
 
-For SDSS or any other product without validated LSF metadata, keep resolution
-explicit rather than changing reader defaults. For example, `--R 2000` is a
-quicklook approximation only:
+For products without validated LSF metadata, keep resolution explicit rather
+than changing reader defaults. For example, user-supplied SDSS quicklook runs
+should use an explicit approximate `--R 2000` only when that approximation is
+scientifically acceptable for the inspection being done.
+
+For mixed batches of bundled spectra, prefer a CSV manifest so each target can
+carry its own reader and optional quicklook resolution assumption:
+
+```csv
+target_id,path,instrument,R
+xshooter_uvb,examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits,xshooter,
+floyds_blue,examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv,floyds,500
+```
+
+Save that CSV, for example as `examples/my_batch_manifest.csv`, then run:
 
 ```bash
-python examples/batch_quickscan_then_refine.py /path/to/sdss/spec-*.fits \
-  --instrument sdss \
-  --quicklook \
-  --R 2000 \
-  --output-json /tmp/spyctres_sdss_quick.json \
-  --summary-csv /tmp/spyctres_sdss_quick.csv \
+python examples/batch_quickscan_then_refine.py \
+  --manifest examples/my_batch_manifest.csv \
+  --output-json /tmp/spyctres_manifest_batch.json \
+  --summary-csv /tmp/spyctres_manifest_batch.csv \
   --resume
 ```
+
+Add `--refine-quality-policy skip-risky` when you want the example to stop
+after the quicklook pass for targets whose pre-fit readiness audit flags
+missing frame/resolution assumptions, obvious artifact signatures, no fitted
+pixels, or undersampled LSF. The default is still `always`, which preserves the
+original throughput demonstration.
 
 The script loads the PHOENIX library once, then for each spectrum:
 
 1. reads the spectrum through the normal Spyctres reader;
-2. runs a cheap quicklook fit;
-3. builds a narrower Teff, [Fe/H], logg, and RV box around that result;
-4. runs a focused second fit in that local box;
-5. writes an atomic JSON checkpoint after the target finishes.
+2. runs a spectrum-readiness audit over the suggested fit window;
+3. runs a cheap quicklook fit;
+4. builds a narrower Teff, [Fe/H], logg, and RV box around that result;
+5. optionally skips or runs a focused second fit depending on
+   `--refine-quality-policy`;
+6. writes an atomic JSON checkpoint after the target finishes.
 
 This is a throughput example, not a replacement for final scientific review.
 Inspect the saved quality flags and residual diagnostics before interpreting a
@@ -152,7 +178,56 @@ large batch. Use `--quick-only` if you only want the first-pass scan, and tune
 introduced after the UVB workflow is understood, because the VIS/NIR arms bring
 additional telluric, arm-scaling, and wavelength-coverage choices.
 
-## Example 5: XSL real-spectrum validation
+For high-resolution line-window work, do not rely on the broad full-spectrum
+continuum alone. Use the sideband/local normalization helpers in
+`Spyctres.recipes` for UVES-like or PEPSI-like line diagnostics, and keep the
+PHOENIX full-spectrum multiplicative continuum for low/medium-resolution
+classification or broad-window fitting. These are complementary workflows, not
+competing defaults.
+
+## Example 3: high-resolution local sideband normalization
+
+Use `high_resolution_sideband_normalization.py` when you want to inspect a
+UVES-like, PEPSI-like, or other high-resolution line window with a local
+continuum defined from sidebands. This is a preprocessing/diagnostic example,
+not a PHOENIX atmospheric-parameter fit:
+
+```bash
+python examples/high_resolution_sideband_normalization.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --line-label Hbeta \
+  --line-center 4861.33 \
+  --wmin 4830 --wmax 4895 \
+  --sideband-left -55 -30 \
+  --sideband-right 35 60
+```
+
+The script reads a single segment, windows it locally, stores explicit
+sideband provenance, normalizes with `normalize_segment_sidebands()`, and plots
+the original and normalized line window. Use this pattern before local
+equivalent-width or line-profile diagnostics where broad full-spectrum
+polynomials would be the wrong mental model.
+
+## Example 4: first worked notebook
+
+The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
+example of the generic PHOENIX fitting workflow. It is not intended to be the
+final precision analysis for this spectrum, and it is not the full
+benchmark-validation path used for development testing.
+
+## Example 5: advanced X-SHOOTER multi-arm notebook
+
+The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
+windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
+after the UVB-only notebook because it introduces arm-balanced weights,
+sideband-normalized UVB windows, per-segment resolution metadata, and
+arm-by-arm residual interpretation. It runs several PHOENIX fits and may take
+several minutes on a normal workstation; progress messages are printed during
+cache construction, RV scanning, and local optimization so users can tell it is
+still working.
+
+## Example 6: XSL real-spectrum validation
 
 The Figure 1 validation sample from Verro et al. (2022) is listed in
 `xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
@@ -313,25 +388,7 @@ by itself prove that the DIB identification is correct or that masking is the
 final scientific choice. Inspect the residuals, other Balmer lines, continuum
 placement, and LSF assumptions before drawing that conclusion.
 
-## Example 3: first worked notebook
-
-The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
-example of the generic PHOENIX fitting workflow. It is not intended to be the
-final precision analysis for this spectrum, and it is not the full
-benchmark-validation path used for development testing.
-
-## Example 3: advanced X-SHOOTER multi-arm notebook
-
-The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
-windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
-after the UVB-only notebook because it introduces arm-balanced weights,
-sideband-normalized UVB windows, per-segment resolution metadata, and
-arm-by-arm residual interpretation. It runs several PHOENIX fits and may take
-several minutes on a normal workstation; progress messages are printed during
-cache construction, RV scanning, and local optimization so users can tell it is
-still working.
-
-## Example 5: PEPSI legacy line-window validation
+## Example 7: PEPSI legacy line-window validation
 
 The `pepsi_legacy_linefit_validation.ipynb` notebook is a developer validation
 example for the PEPSI legacy line-window workflow. Use it to understand and

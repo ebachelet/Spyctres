@@ -24,11 +24,18 @@ from .diagnostics import (
     annotate_nonstellar_features,
     diagnose_known_residual_windows,
 )
+from .recipes import (
+    normalize_segment_sidebands,
+    normalize_segments_sidebands,
+    sdss_quicklook_resolution_assumption,
+)
 from .preprocessing import (
     NONSTELLAR_FEATURES,
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
     OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
     ExclusionMaskSpec,
+    artifact_exclusion_mask_from_segment,
+    audit_spectrum_for_fit,
     combine_exclusion_masks,
     dilate_boolean_mask,
     exclusion_mask,
@@ -49,11 +56,13 @@ from .io import (
     read_sdss_spec,
     read_spectrum,
     read_uves_pop_ascii,
+    sdss_wdisp_to_resolution_descriptor,
 )
 
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
     "read_spectrum", "read_uves_pop_ascii", "read_sdss_spec",
+    "sdss_wdisp_to_resolution_descriptor",
     "SpectrumSegment", "SpectrumCollection",
     "ensure_matplotlib_config_dir",
     "PhoenixFitDiagnostics", "PhoenixFitResult",
@@ -66,7 +75,11 @@ __all__ = [
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
     "KNOWN_RESIDUAL_WINDOWS", "annotate_nonstellar_features",
     "diagnose_known_residual_windows",
-    "ExclusionMaskSpec", "combine_exclusion_masks", "dilate_boolean_mask",
+    "normalize_segment_sidebands", "normalize_segments_sidebands",
+    "sdss_quicklook_resolution_assumption",
+    "ExclusionMaskSpec", "artifact_exclusion_mask_from_segment",
+    "audit_spectrum_for_fit",
+    "combine_exclusion_masks", "dilate_boolean_mask",
     "exclusion_mask",
     "NONSTELLAR_FEATURES", "OPTICAL_DIB_DIAGNOSTIC_FEATURES",
     "OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES",

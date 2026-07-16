@@ -55,6 +55,80 @@ def test_parser_accepts_quicklook_output_json_and_resolution_aliases():
     }
 
 
+def test_manifest_records_support_per_target_instrument_and_resolution(tmp_path):
+    module = _load_example_module()
+    spec_path = tmp_path / "spec.fits"
+    spec_path.write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "batch.csv"
+    manifest.write_text(
+        "target_id,path,instrument,R\n"
+        "star_a,spec.fits,sdss,2000\n",
+        encoding="utf-8",
+    )
+    args = module.build_parser().parse_args(
+        ["--manifest", str(manifest), "--instrument", "xshooter"]
+    )
+
+    records = module._input_records(args)
+    local_args = module._args_for_record(args, records[0])
+
+    assert len(records) == 1
+    assert records[0]["target_id"] == "star_a"
+    assert records[0]["path"] == str(spec_path.resolve())
+    assert records[0]["instrument"] == "sdss"
+    assert records[0]["resolution_R"] == pytest.approx(2000.0)
+    assert local_args.instrument == "sdss"
+    assert local_args.resolution_R == pytest.approx(2000.0)
+
+
+def test_manifest_record_uses_global_resolution_when_row_is_blank(tmp_path):
+    module = _load_example_module()
+    spec_path = tmp_path / "spec.fits"
+    spec_path.write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "batch.csv"
+    manifest.write_text("path,instrument\nspec.fits,sdss\n", encoding="utf-8")
+    args = module.build_parser().parse_args(
+        ["--manifest", str(manifest), "--R", "1800"]
+    )
+
+    records = module._input_records(args)
+    local_args = module._args_for_record(args, records[0])
+
+    assert local_args.resolution_R == pytest.approx(1800.0)
+
+
+def test_skip_risky_refinement_gate_uses_readiness_flags():
+    module = _load_example_module()
+    readiness = {
+        "fit_ready": False,
+        "interpretation_flags": ["resolution_assumption_required"],
+    }
+    quick = {"success": True}
+
+    should_refine, reasons = module.should_refine_after_quicklook(
+        readiness,
+        quick,
+        policy="skip-risky",
+    )
+
+    assert should_refine is False
+    assert "resolution_assumption_required" in reasons
+    assert "readiness_fit_ready_false" in reasons
+
+
+def test_always_refinement_gate_preserves_legacy_behavior():
+    module = _load_example_module()
+
+    should_refine, reasons = module.should_refine_after_quicklook(
+        {"fit_ready": False, "interpretation_flags": ["no_fitted_pixels"]},
+        {"success": False},
+        policy="always",
+    )
+
+    assert should_refine is True
+    assert reasons == []
+
+
 def test_focused_bounds_from_quick_result_clip_to_base_bounds():
     module = _load_example_module()
     quick = {

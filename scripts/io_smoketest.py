@@ -68,12 +68,17 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
-            "  python scripts/io_smoketest.py --instrument xshooter path/to/xshooter_1d.fits\n"
-            "  python scripts/io_smoketest.py --instrument pepsi path/to/seg1.dxt.nor path/to/seg2.dxt.nor path/to/seg3.dxt.nor --join\n"
-            "  python scripts/io_smoketest.py --instrument floyds path/to/FLOYDS.csv\n"
-            "  python scripts/io_smoketest.py --instrument gemini path/to/gmos_ascii.dat\n"
-            "  python scripts/io_smoketest.py --instrument uves_pop ~/Data/Spectra/spectra_test_set/UVES-POP/hd22049.dat --no-show --plot-dir io_plots\n"
-            "  python scripts/io_smoketest.py --instrument sdss ~/Data/Spectra/spectra_test_set/SDSS/spec-1660-53230-0023.fits --no-show --plot-dir io_plots\n"
+            "  python scripts/io_smoketest.py --instrument xshooter "
+            "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits\n"
+            "  python scripts/io_smoketest.py --instrument pepsi "
+            "examples/data/pepsir.20230603.009.dxt.nor "
+            "examples/data/pepsir.20230603.010.dxt.nor --join\n"
+            "  python scripts/io_smoketest.py --instrument floyds "
+            "examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv "
+            "--no-show --plot-dir io_plots\n\n"
+            "UVES-POP, SDSS, Gemini, and other readers are supported for "
+            "user-supplied files, but no runnable example command is shown "
+            "unless that spectrum is bundled under examples/data/."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -140,6 +140,11 @@ Use this checklist for a first local run from a source checkout.
    native-grid PHOENIX fit, prints a compact result and quality report, and
    opens a wide observed/model/residual diagnostic plot. It is a first-contact
    classification example, not a precision line-width or abundance analysis.
+   It also prints a pre-fit spectrum-readiness audit: missing wavelength-frame
+   metadata, missing uncertainty or resolution assumptions, obvious artifact
+   signatures, and the number of pixels actually entering the chosen fit
+   window. This audit does not repair the spectrum; it tells you whether the
+   result should be treated as a normal first-pass fit or as quicklook triage.
    Expert users can override the suggested values with flags such as `--wmin`,
    `--wmax`, `--teff`, `--teff-min`, or `--no-auto-defaults`.
 
@@ -169,18 +174,47 @@ Use this checklist for a first local run from a source checkout.
      --resume
    ```
 
+   For heterogeneous folders, use a CSV manifest instead of relying on one
+   global instrument/resolution assumption. This example uses only spectra
+   bundled under `examples/data/`; replace the paths only when you intentionally
+   supply your own external spectra:
+
+   ```csv
+   target_id,path,instrument,R
+   xshooter_uvb,examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits,xshooter,
+   floyds_blue,examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv,floyds,500
+   ```
+
+   Save that CSV, for example as `examples/my_batch_manifest.csv`, then run:
+
+   ```bash
+   python examples/batch_quickscan_then_refine.py \
+     --manifest examples/my_batch_manifest.csv \
+     --output-json /tmp/spyctres_batch_manifest.json \
+     --summary-csv /tmp/spyctres_batch_manifest.csv \
+     --resume
+   ```
+
+   Add `--refine-quality-policy skip-risky` if you want the batch example to
+   skip the expensive focused-refine stage for spectra whose readiness audit
+   says the wavelength frame, resolution assumption, artifacts, or LSF sampling
+   require human review first. The default remains `always` to preserve the
+   older throughput-demo behavior.
+
 Recommended example order:
 
 1. `examples/simple_phoenix_fit.py` for the shortest command-line public-API
    path.
 2. `examples/batch_quickscan_then_refine.py` for fitting many spectra with a
    cheap quick scan followed by focused local refinement.
-3. `examples/full_spectrum_classification.ipynb` for the first worked
+3. `examples/high_resolution_sideband_normalization.py` for local
+   sideband-normalized line-window diagnostics.
+4. `examples/full_spectrum_classification.ipynb` for the first worked
    PHOENIX classification notebook.
-4. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
+5. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
    fitting diagnostics.
-5. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
-6. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
+6. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
+7. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
    line-window validation path.
 
 Other useful entry points include `quick_example.py` for the legacy fitting
@@ -258,6 +292,43 @@ leaves its medium and frame unknown. An explicit
 already barycentric or stellar-rest corrected.
 
 All `read_spectrum()` results pass through a versioned common-format boundary.
+
+Reader support means "Spyctres can ingest the product into a common
+`SpectrumSegment`/`SpectrumCollection` shape." It does not always mean the file
+is immediately ready for a precision PHOENIX fit. Use:
+
+```python
+from Spyctres import audit_spectrum_for_fit, read_spectrum
+
+spec = read_spectrum("my_spectrum.fits", instrument="sdss")
+audit = audit_spectrum_for_fit(
+    spec,
+    fit_windows=[(3800.0, 5200.0)],
+    assumed_resolution={"quantity": "R", "value": 2000, "source": "quicklook"},
+)
+```
+
+The audit records whether wavelength medium, observer frame, stellar-rest
+status, uncertainties, resolution, sampling, and obvious artifact signatures are
+adequate for the intended fit. Native data-quality masks supplied by a reader
+are preferred. For products without such flags, Spyctres also provides an
+explicit same-grid fallback artifact mask, but it is opt-in and recorded as a
+quicklook/product assumption rather than applied silently.
+
+UVES-POP and SDSS are currently best treated as ingestion plus quicklook
+classification inputs unless the user supplies or validates the missing fit
+assumptions. In particular, SDSS spectra are read as vacuum/heliocentric with
+`resolution=None`; `--R 2000` is only an explicit quicklook approximation, not
+precision SDSS LSF modelling. Programmatic workflows can use
+`sdss_quicklook_resolution_assumption()` to package that approximation as
+provenance. If a standard SDSS `wdisp` column is present, Spyctres preserves it
+with `lsf_source="sdss_wdisp_not_applied"` and can attach an opt-in tabulated
+`sigma_kms` descriptor via `read_sdss_spec(..., attach_wdisp_resolution=True)`.
+The current PHOENIX fitter still requires constant LSF broadening, so the
+readiness audit warns when SDSS tabulated LSF is present but the likelihood is
+using a constant-R assumption. UVES-POP spectra carry a nominal `R=80000`
+descriptor with cautionary metadata; wavelength medium and frame remain
+unknown unless supplied by the user or external provenance.
 Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
 deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion
 frame and stellar-rest correction status are tracked independently. Instrumental

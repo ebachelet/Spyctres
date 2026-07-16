@@ -33,6 +33,12 @@ def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     assert interpretation["rv_role"] == "candidate_stellar_rv"
     assert interpretation["risk_flags"] == []
     assert interpretation["automatic_choices_are_overridable"] is True
+    assert interpretation["final_science_ready_by_default"] is False
+    assert interpretation["mode_policy"]["fit_stage"] == "triage_first_pass"
+    assert interpretation["mode_policy"]["search_budget"] == "light"
+    assert suggestion.provenance["mode_policy"]["multistart"] == 1
+    assert suggestion.provenance["mode_policy"]["rv_grid_n"] == 41
+    assert any("quicklook defaults mode" in item for item in suggestion.reasons)
 
 
 def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():
@@ -97,6 +103,9 @@ def test_suggest_phoenix_fit_defaults_uses_shorter_rv_scan_for_stellar_rest_coll
     assert suggestion.fit_kwargs["regions"] == [(3800.0, 7000.0)]
     assert suggestion.fit_kwargs["multistart"] == 2
     assert suggestion.fit_kwargs["rv_grid_n"] == 21
+    assert suggestion.provenance["mode_policy"]["mode"] == "standard"
+    assert suggestion.provenance["mode_policy"]["search_budget"] == "moderate"
+    assert suggestion.provenance["mode_policy"]["rv_grid_n"] == 21
     assert suggestion.provenance["coverage"]["stellar_rest_status"] == ["corrected"]
     assert (
         suggestion.provenance["interpretation"]["rv_role"]

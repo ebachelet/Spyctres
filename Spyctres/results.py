@@ -418,6 +418,14 @@ QUALITY_FLAG_DESCRIPTIONS = {
         "A fractional uncertainty floor was added in quadrature for at least "
         "one segment; inspect raw and effective chi-square diagnostics."
     ),
+    "fallback_errors_used": (
+        "At least one fitted segment lacked a per-pixel uncertainty array, so "
+        "Spyctres used a robust fallback sigma to scale residuals."
+    ),
+    "chi2_effective_not_calibrated": (
+        "The reported reduced chi-square is an effective relative diagnostic, "
+        "not a calibrated Gaussian-likelihood goodness-of-fit statistic."
+    ),
     "parameter_errors_local_linearized": (
         "Reported parameter errors are local linearized diagnostics derived "
         "from the optimizer Jacobian, not global posterior uncertainties."
@@ -437,6 +445,10 @@ QUALITY_FLAG_DESCRIPTIONS = {
     "parameter_errors_unreliable_if_error_floor": (
         "An uncertainty floor was applied, so reported parameter errors depend "
         "on the adopted error-floor model."
+    ),
+    "parameter_errors_unreliable_if_fallback_errors": (
+        "One or more segments used fallback robust-sigma uncertainties, so "
+        "reported parameter errors inherit that approximate error model."
     ),
     "parameter_errors_unreliable_if_segment_weights": (
         "Non-unity segment weights were used, so reported parameter errors "
@@ -579,6 +591,7 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
                 "multiple_rejection_fraction": mask_summary.get(
                     "multiple_rejection_fraction"
                 ),
+                "input_error_model": segment.get("input_error_model"),
                 "lsf_fwhm_kms": segment.get("lsf_fwhm_kms"),
                 "resolution_R_effective": segment.get("resolution_R_effective"),
             }
@@ -601,6 +614,18 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
         "error_model": summary.get("error_model", diagnostics.get("error_model")),
         "error_floor_applied": summary.get(
             "error_floor_applied", diagnostics.get("error_floor_applied")
+        ),
+        "fallback_errors_used": summary.get(
+            "fallback_errors_used", diagnostics.get("fallback_errors_used")
+        ),
+        "fallback_error_segments": summary.get(
+            "fallback_error_segments", diagnostics.get("fallback_error_segments")
+        ),
+        "chi2_calibrated": summary.get(
+            "chi2_calibrated", diagnostics.get("chi2_calibrated")
+        ),
+        "chi2_interpretation": summary.get(
+            "chi2_interpretation", diagnostics.get("chi2_interpretation")
         ),
         "optimizer_loss": summary.get(
             "optimizer_loss", diagnostics.get("optimizer_loss")

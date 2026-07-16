@@ -9,6 +9,7 @@ from astropy.io import fits
 
 
 COMMON_SPECTRUM_SCHEMA_VERSION = 1
+C_KMS = 299792.458
 
 
 XSL_DR3_PROVENANCE_HEADER_KEYS = (
@@ -335,11 +336,26 @@ class SpectrumSegment(object):
 
     def sorted(self):
         idx = np.argsort(self.wave)
+        resolution = self.resolution
+        if (
+            resolution is not None
+            and getattr(resolution, "mode", None) == "tabulated"
+            and np.asarray(resolution.wave_A).shape == self.wave.shape
+            and np.asarray(resolution.values).shape == self.wave.shape
+        ):
+            resolution = ResolutionDescriptor(
+                quantity=resolution.quantity,
+                mode="tabulated",
+                wave_A=np.asarray(resolution.wave_A)[idx],
+                values=np.asarray(resolution.values)[idx],
+                source=resolution.source,
+            )
         return self.copy(
             wave=self.wave[idx],
             flux=self.flux[idx],
             err=None if self.err is None else self.err[idx],
             mask=self.mask[idx],
+            resolution=resolution,
         )
 
     def subset(self, selector, name=None, name_suffix=None):
@@ -2029,6 +2045,66 @@ def _sdss_get_table_column(data, required_name, required=True):
     return np.asarray(data[names[key]])
 
 
+def _infer_log10_pixel_step(wave_A):
+    wave_A = np.asarray(wave_A, dtype=float)
+    good = np.isfinite(wave_A) & (wave_A > 0)
+    if np.sum(good) < 2:
+        raise ValueError("Cannot infer log10 pixel step from fewer than two wavelengths.")
+    loglam = np.log10(wave_A[good])
+    diffs = np.diff(np.sort(loglam))
+    diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+    if diffs.size == 0:
+        raise ValueError("Cannot infer positive log10 pixel step from wavelengths.")
+    step = float(np.nanmedian(diffs))
+    if not np.isfinite(step) or step <= 0:
+        raise ValueError("Inferred log10 pixel step must be finite and > 0.")
+    return step
+
+
+def sdss_wdisp_to_resolution_descriptor(
+    wave_A,
+    wdisp_pixels,
+    *,
+    log10_pixel_step=None,
+    source="SDSS wdisp column interpreted as Gaussian sigma in pixels",
+):
+    """Convert an SDSS ``wdisp`` array into a tabulated sigma-km/s descriptor.
+
+    SDSS/BOSS ``spec`` files commonly store a per-pixel dispersion-like
+    ``wdisp`` column on the logarithmic wavelength grid. Spyctres keeps this
+    conversion opt-in because different SDSS-family products should be checked
+    before treating the result as a precision LSF. The conversion assumes
+    ``wdisp`` is a Gaussian sigma in log-lambda pixels, so
+    ``sigma_v = c ln(10) Δlog10(lambda) wdisp``.
+    """
+    wave_A = np.asarray(wave_A, dtype=float)
+    wdisp = np.asarray(wdisp_pixels, dtype=float)
+    if wave_A.shape != wdisp.shape:
+        raise ValueError("wave_A and wdisp_pixels must have matching shape.")
+    if log10_pixel_step is None:
+        log10_pixel_step = _infer_log10_pixel_step(wave_A)
+    log10_pixel_step = float(log10_pixel_step)
+    if not np.isfinite(log10_pixel_step) or log10_pixel_step <= 0:
+        raise ValueError("log10_pixel_step must be finite and > 0.")
+    good = np.isfinite(wave_A) & (wave_A > 0) & np.isfinite(wdisp) & (wdisp > 0)
+    if np.sum(good) < 2:
+        raise ValueError("Need at least two positive finite SDSS wdisp samples.")
+    wave_good = wave_A[good]
+    sigma_kms = C_KMS * np.log(10.0) * log10_pixel_step * wdisp[good]
+    order = np.argsort(wave_good)
+    wave_good = wave_good[order]
+    sigma_kms = sigma_kms[order]
+    if np.any(np.diff(wave_good) <= 0):
+        raise ValueError("Valid SDSS wdisp wavelengths must be unique.")
+    return ResolutionDescriptor(
+        quantity="sigma_kms",
+        mode="tabulated",
+        wave_A=wave_good,
+        values=sigma_kms,
+        source=source,
+    )
+
+
 def _first_header_value(headers, keys, default=None):
     for key in keys:
         for header in headers:
@@ -2042,6 +2118,7 @@ def read_sdss_spec(
     name=None,
     ext=1,
     use_and_mask=True,
+    attach_wdisp_resolution=False,
 ):
     """
     Read a standard SDSS/SEGUE ``spec-PLATE-MJD-FIBER`` FITS spectrum.
@@ -2052,8 +2129,11 @@ def read_sdss_spec(
     variance pixels and masks non-positive-ivar pixels. If ``and_mask`` is
     present, pixels with non-zero AND mask are rejected by default.
 
-    Resolution/LSF metadata are deliberately left unset until SDSS-specific
-    LSF conversion has been validated for the product being read.
+    Resolution/LSF metadata are deliberately left unset by default. If
+    ``attach_wdisp_resolution=True`` and a ``wdisp`` column is present, Spyctres
+    attaches an opt-in tabulated ``sigma_kms`` descriptor using the standard
+    log-lambda-pixel interpretation. The current PHOENIX fitter records such
+    descriptors but still requires a constant LSF for convolution.
     """
     path = os.path.abspath(os.path.expanduser(path))
     with fits.open(path, memmap=False) as hdul:
@@ -2096,6 +2176,41 @@ def read_sdss_spec(
             mask &= positive_ivar & np.isfinite(err) & (err > 0)
         if use_and_mask:
             mask &= clean_and_mask
+
+        wdisp = _sdss_get_table_column(data, "wdisp", required=False)
+        if wdisp is not None:
+            wdisp = wdisp.astype(float)
+            if wdisp.shape != flux.shape:
+                raise ValueError("SDSS wdisp column must match flux shape.")
+            wdisp_valid = np.isfinite(wdisp) & (wdisp > 0)
+            lsf_source = (
+                "sdss_wdisp_attached_as_tabulated_sigma_kms"
+                if attach_wdisp_resolution
+                else "sdss_wdisp_not_applied"
+            )
+            wdisp_meta = {
+                "column": "wdisp",
+                "present": True,
+                "lsf_source": lsf_source,
+                "assumed_quantity": "gaussian_sigma_pixels_on_log10_wavelength_grid",
+                "positive_finite_fraction": float(np.sum(wdisp_valid)) / float(wdisp.size),
+                "note": (
+                    "Preserved for opt-in LSF work. The reader does not use "
+                    "wdisp for PHOENIX broadening unless attach_wdisp_resolution=True."
+                ),
+            }
+        else:
+            wdisp_valid = None
+            wdisp_meta = {"present": False, "lsf_source": None}
+
+        if attach_wdisp_resolution:
+            if wdisp is None:
+                raise ValueError(
+                    "attach_wdisp_resolution=True requires an SDSS wdisp column."
+                )
+            resolution = sdss_wdisp_to_resolution_descriptor(wave_A, wdisp)
+        else:
+            resolution = None
 
         primary_header = hdul[0].header if len(hdul) else fits.Header()
         table_header = hdul[ext].header
@@ -2152,9 +2267,20 @@ def read_sdss_spec(
                 "ivar_positive_required": bool(ivar is not None),
                 "and_mask_zero_required": bool(use_and_mask and and_mask is not None),
             },
+            "sdss_lsf": {
+                **wdisp_meta,
+                "attach_wdisp_resolution": bool(attach_wdisp_resolution),
+                "reader_default_resolution": None,
+                "active_lsf_convolution": False,
+                "fitter_note": (
+                    "Tabulated SDSS wdisp-derived descriptors are provenance "
+                    "unless a workflow explicitly supports wavelength-dependent LSF."
+                ),
+            },
             "resolution_note": (
-                "SDSS resolution is not attached here; per-pixel/per-fiber LSF "
-                "conversion should be validated separately before use."
+                "SDSS resolution is not attached by default; use "
+                "attach_wdisp_resolution=True only for opt-in tabulated LSF "
+                "provenance after validating the product."
             ),
         }
 
@@ -2169,7 +2295,7 @@ def read_sdss_spec(
         name=name or os.path.basename(path),
         observer_frame="heliocentric",
         stellar_rest_status="observed",
-        resolution=None,
+        resolution=resolution,
     ).sorted()
     
 

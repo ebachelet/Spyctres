@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+C_KMS = 299792.458
+
 
 @dataclass(frozen=True)
 class NonStellarFeature:
@@ -1164,3 +1166,544 @@ def apply_fit_mask(
     history.append(result.to_metadata(label=label))
     meta["preprocessing"] = history
     return seg.copy(mask=result.effective_mask, meta=meta), result
+
+
+def _json_safe_scalar(value):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _json_safe(value):
+    if isinstance(value, np.ndarray):
+        return [_json_safe(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return _json_safe_scalar(value)
+
+
+def _audit_segments(spectrum):
+    if hasattr(spectrum, "segments"):
+        return list(spectrum.segments)
+    if (
+        isinstance(spectrum, (list, tuple))
+        and not hasattr(spectrum, "wave")
+        and not hasattr(spectrum, "flux")
+    ):
+        return list(spectrum)
+    return [spectrum]
+
+
+def _regions_mask(wave, regions):
+    wave = np.asarray(wave, dtype=float)
+    if regions is None:
+        return np.ones(wave.shape, dtype=bool)
+    return _inside_regions(wave, regions)
+
+
+def _resolution_metadata(seg, assumed_resolution=None):
+    resolution = getattr(seg, "resolution", None)
+    if assumed_resolution is not None:
+        if isinstance(assumed_resolution, dict):
+            quantity = str(assumed_resolution.get("quantity", "R"))
+            value = assumed_resolution.get("value", assumed_resolution.get("R"))
+            source = assumed_resolution.get("source", "user_override")
+            warning = assumed_resolution.get(
+                "assumption_warning",
+                "approximate quicklook resolution",
+            )
+        else:
+            quantity = "R"
+            value = assumed_resolution
+            source = "user_override"
+            warning = "approximate quicklook resolution"
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            value = None
+        return {
+            "present": value is not None and np.isfinite(value) and value > 0,
+            "quantity": quantity,
+            "mode": "constant",
+            "value": None if value is None else float(value),
+            "source": str(source),
+            "assumption_warning": str(warning),
+            "assumed": True,
+        }
+    if resolution is None:
+        return {
+            "present": False,
+            "quantity": None,
+            "mode": None,
+            "value": None,
+            "source": None,
+            "assumed": False,
+        }
+    if hasattr(resolution, "to_metadata"):
+        meta = dict(resolution.to_metadata())
+    elif isinstance(resolution, dict):
+        meta = dict(resolution)
+    else:
+        meta = {"quantity": "R", "mode": "constant", "value": resolution}
+    return {
+        "present": True,
+        "quantity": meta.get("quantity"),
+        "mode": meta.get("mode", "constant"),
+        "value": _json_safe_scalar(meta.get("value")),
+        "source": meta.get("source"),
+        "assumed": False,
+        "metadata": _json_safe(meta),
+    }
+
+
+def _resolution_fwhm_A(wave, resolution_meta):
+    if not resolution_meta.get("present"):
+        return None
+    if str(resolution_meta.get("mode", "constant")).lower() != "constant":
+        return None
+    value = resolution_meta.get("value")
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value) or value <= 0:
+        return None
+    quantity = str(resolution_meta.get("quantity"))
+    wave = np.asarray(wave, dtype=float)
+    if quantity == "R":
+        return wave / value
+    if quantity == "fwhm_kms":
+        return wave * value / C_KMS
+    if quantity == "sigma_kms":
+        return wave * (2.354820045 * value) / C_KMS
+    return None
+
+
+def _lsf_provenance_metadata(seg, resolution_meta, assumed_resolution=None):
+    meta = getattr(seg, "meta", {}) or {}
+    sdss_lsf = dict(meta.get("sdss_lsf", {}) or {})
+    warnings = []
+    if sdss_lsf.get("present"):
+        attached = bool(sdss_lsf.get("attach_wdisp_resolution", False))
+        if attached:
+            lsf_source = sdss_lsf.get(
+                "lsf_source",
+                "sdss_wdisp_attached_as_tabulated_sigma_kms",
+            )
+            warnings.append(
+                "SDSS tabulated LSF present as provenance; current PHOENIX "
+                "fitter does not apply wavelength-dependent LSF convolution."
+            )
+        else:
+            lsf_source = sdss_lsf.get("lsf_source", "sdss_wdisp_not_applied")
+            if assumed_resolution is not None or resolution_meta.get("present"):
+                warnings.append(
+                    "SDSS tabulated LSF present but not applied; using explicit "
+                    "constant-R assumption."
+                )
+            else:
+                warnings.append(
+                    "SDSS tabulated LSF present but not applied; no active LSF "
+                    "broadening assumption supplied."
+                )
+        return {
+            "lsf_source": lsf_source,
+            "sdss_wdisp_present": True,
+            "sdss_wdisp_attached": attached,
+            "active_lsf_convolution": False,
+            "warning": warnings[0],
+            "warnings": warnings,
+        }
+
+    source = resolution_meta.get("source")
+    if resolution_meta.get("present"):
+        source = source or "segment_or_user_constant_lsf"
+    return {
+        "lsf_source": source,
+        "sdss_wdisp_present": False,
+        "sdss_wdisp_attached": False,
+        "active_lsf_convolution": bool(resolution_meta.get("present")),
+        "warning": None,
+        "warnings": [],
+    }
+
+
+def _count_true_blocks(mask, min_length):
+    mask = np.asarray(mask, dtype=bool)
+    if mask.size == 0:
+        return 0
+    count = 0
+    run = 0
+    for value in mask:
+        if value:
+            run += 1
+        else:
+            if run >= min_length:
+                count += 1
+            run = 0
+    if run >= min_length:
+        count += 1
+    return int(count)
+
+
+def _fraction(numerator, denominator):
+    denominator = int(denominator)
+    if denominator <= 0:
+        return 0.0
+    return float(numerator) / float(denominator)
+
+
+def _segment_readiness(
+    seg,
+    regions=None,
+    assumed_resolution=None,
+    spike_sigma=10.0,
+    flat_block_min=5,
+    gap_factor=5.0,
+):
+    wave = np.asarray(getattr(seg, "wave"), dtype=float)
+    flux = np.asarray(getattr(seg, "flux"), dtype=float)
+    if wave.shape != flux.shape:
+        raise ValueError("readiness audit requires matching wave/flux shapes.")
+    n_total = int(wave.size)
+    input_mask = np.asarray(
+        getattr(seg, "mask", np.ones(wave.shape, dtype=bool)),
+        dtype=bool,
+    )
+    if input_mask.shape != wave.shape:
+        raise ValueError("readiness audit requires mask shape to match wave.")
+    err = getattr(seg, "err", None)
+    if err is None:
+        err_good = np.ones(wave.shape, dtype=bool)
+        errors_present = False
+    else:
+        err = np.asarray(err, dtype=float)
+        if err.shape != wave.shape:
+            raise ValueError("readiness audit requires err shape to match wave.")
+        err_good = np.isfinite(err) & (err > 0)
+        errors_present = True
+
+    finite_wave = np.isfinite(wave) & (wave > 0)
+    finite_flux = np.isfinite(flux)
+    finite = finite_wave & finite_flux
+    inside = _regions_mask(wave, regions)
+    candidate = input_mask & finite & err_good
+    fit_candidate = candidate & inside
+
+    finite_good_flux = flux[finite & input_mask]
+    if finite_good_flux.size:
+        scale = float(np.nanmedian(np.abs(finite_good_flux)))
+        if not np.isfinite(scale) or scale <= 0:
+            scale = 1.0
+    else:
+        scale = 1.0
+    near_zero_threshold = max(1.0e-30, 1.0e-6 * scale)
+    near_zero = finite_flux & (np.abs(flux) <= near_zero_threshold)
+    negative_flux = finite_flux & (flux < 0.0)
+
+    spike = np.zeros(wave.shape, dtype=bool)
+    robust_pool = flux[fit_candidate]
+    if robust_pool.size >= 10:
+        median = float(np.nanmedian(robust_pool))
+        mad = float(np.nanmedian(np.abs(robust_pool - median)))
+        robust_sigma = 1.4826 * mad
+        if np.isfinite(robust_sigma) and robust_sigma > 0:
+            spike = (
+                fit_candidate
+                & np.isfinite(flux)
+                & (np.abs(flux - median) > float(spike_sigma) * robust_sigma)
+            )
+
+    finite_sorted_wave = np.sort(wave[finite_wave])
+    spacing_median = None
+    max_gap_A = None
+    large_gap_count = 0
+    if finite_sorted_wave.size >= 3:
+        spacing = np.diff(finite_sorted_wave)
+        spacing = spacing[np.isfinite(spacing) & (spacing > 0)]
+        if spacing.size:
+            spacing_median = float(np.nanmedian(spacing))
+            max_gap_A = float(np.nanmax(spacing))
+            large_gap_count = int(np.sum(spacing > float(gap_factor) * spacing_median))
+
+    resolution_meta = _resolution_metadata(seg, assumed_resolution=assumed_resolution)
+    pixels_per_fwhm_median = None
+    lsf_undersampled = None
+    fwhm_A = _resolution_fwhm_A(wave, resolution_meta)
+    if fwhm_A is not None and spacing_median is not None and spacing_median > 0:
+        sampled = fwhm_A[finite_wave & np.isfinite(fwhm_A) & (fwhm_A > 0)]
+        if sampled.size:
+            pixels_per_fwhm_median = float(np.nanmedian(sampled) / spacing_median)
+            lsf_undersampled = bool(pixels_per_fwhm_median < 2.0)
+
+    bad_error = ~err_good if errors_present else np.zeros(wave.shape, dtype=bool)
+    artifact_mask = (~finite) | near_zero | negative_flux | spike | (~input_mask) | bad_error
+    artifact_inside = artifact_mask & inside
+    flat_block_count = _count_true_blocks(near_zero & inside, flat_block_min)
+    n_inside = int(np.sum(inside))
+    n_fit = int(np.sum(fit_candidate))
+    rejected_inside = int(np.sum(inside & ~fit_candidate))
+    lsf_provenance = _lsf_provenance_metadata(
+        seg,
+        resolution_meta,
+        assumed_resolution=assumed_resolution,
+    )
+    metadata = {
+        "wave_medium": getattr(seg, "wave_medium", "unknown"),
+        "observer_frame": getattr(seg, "observer_frame", "unknown"),
+        "stellar_rest_status": getattr(seg, "stellar_rest_status", "unknown"),
+        "errors_present": bool(errors_present),
+        "resolution": resolution_meta,
+        "lsf_provenance": lsf_provenance,
+    }
+    flags = []
+    if not errors_present:
+        flags.append("missing_uncertainties")
+    for key in ("wave_medium", "observer_frame", "stellar_rest_status"):
+        if str(metadata.get(key, "unknown")).lower() in {"", "none", "unknown"}:
+            flags.append("{0}_unknown".format(key))
+    if not resolution_meta.get("present"):
+        flags.append("resolution_assumption_required")
+    if lsf_provenance.get("lsf_source") == "sdss_wdisp_not_applied":
+        flags.append("sdss_wdisp_lsf_not_applied")
+    if lsf_undersampled:
+        flags.append("lsf_undersampled")
+    if _fraction(np.sum(artifact_inside), max(n_inside, 1)) > 0.02:
+        flags.append("artifact_review_required")
+    if flat_block_count > 0:
+        flags.append("flat_zero_block_detected")
+    if large_gap_count > 0:
+        flags.append("large_wavelength_gap_detected")
+    if n_fit <= 0:
+        flags.append("no_fitted_pixels")
+
+    return {
+        "name": str(getattr(seg, "name", "segment")),
+        "n_total": n_total,
+        "n_inside_fit_window": n_inside,
+        "n_fit_candidate": n_fit,
+        "outside_fit_window_fraction": _fraction(n_total - n_inside, n_total),
+        "rejected_inside_fit_window_fraction": _fraction(rejected_inside, n_inside),
+        "mask_true_means": "use",
+        "metadata": _json_safe(metadata),
+        "artifact_metrics": {
+            "nonfinite_fraction": _fraction(np.sum(~finite), n_total),
+            "near_zero_fraction": _fraction(np.sum(near_zero & inside), n_inside),
+            "negative_flux_fraction": _fraction(
+                np.sum(negative_flux & inside),
+                n_inside,
+            ),
+            "extreme_spike_fraction": _fraction(np.sum(spike), n_inside),
+            "artifact_fraction_inside_fit_window": _fraction(
+                np.sum(artifact_inside),
+                n_inside,
+            ),
+            "flat_zero_block_count": flat_block_count,
+            "large_gap_count": large_gap_count,
+            "max_gap_A": max_gap_A,
+        },
+        "sampling_metrics": {
+            "pixel_spacing_median_A": spacing_median,
+            "pixels_per_fwhm_median": pixels_per_fwhm_median,
+            "lsf_undersampled": lsf_undersampled,
+        },
+        "warnings": list(lsf_provenance.get("warnings") or []),
+        "interpretation_flags": sorted(set(flags)),
+    }
+
+
+def audit_spectrum_for_fit(
+    spectrum,
+    regions=None,
+    fit_windows=None,
+    intended_use="classification",
+    assumed_resolution=None,
+    spike_sigma=10.0,
+    flat_block_min=5,
+    gap_factor=5.0,
+):
+    """Return a JSON-safe pre-fit readiness audit for a spectrum.
+
+    This helper intentionally does not repair or reject a spectrum. Readers are
+    allowed to ingest heterogeneous products, while fitting workflows can call
+    this lightweight audit to record whether wavelength-frame metadata,
+    uncertainties, instrumental resolution, sampling, and obvious artifacts are
+    sufficient for the intended PHOENIX use case.
+
+    ``mask`` follows the Spyctres container convention: ``True`` means a pixel is
+    valid/usable. The returned ``interpretation_flags`` are warnings for the
+    caller or user interface; they are not automatic exclusions.
+    """
+    if fit_windows is not None:
+        if regions is not None:
+            raise ValueError("Pass either regions or fit_windows, not both.")
+        regions = fit_windows
+    segments = _audit_segments(spectrum)
+    per_segment = [
+        _segment_readiness(
+            seg,
+            regions=regions,
+            assumed_resolution=assumed_resolution,
+            spike_sigma=spike_sigma,
+            flat_block_min=flat_block_min,
+            gap_factor=gap_factor,
+        )
+        for seg in segments
+    ]
+    n_total = int(sum(item["n_total"] for item in per_segment))
+    n_inside = int(sum(item["n_inside_fit_window"] for item in per_segment))
+    n_fit = int(sum(item["n_fit_candidate"] for item in per_segment))
+    rejected_inside = int(n_inside - n_fit)
+    flags = sorted(
+        {
+            flag
+            for item in per_segment
+            for flag in item.get("interpretation_flags", [])
+        }
+    )
+    warnings = sorted(
+        {
+            warning
+            for item in per_segment
+            for warning in item.get("warnings", [])
+            if warning
+        }
+    )
+    hard_flags = {
+        "no_fitted_pixels",
+        "resolution_assumption_required",
+        "wave_medium_unknown",
+        "observer_frame_unknown",
+        "stellar_rest_status_unknown",
+        "artifact_review_required",
+        "lsf_undersampled",
+    }
+    fit_ready = bool(n_fit > 0 and not (set(flags) & hard_flags))
+    return _json_safe(
+        {
+            "schema_version": 1,
+            "intended_use": str(intended_use),
+            "fit_ready": fit_ready,
+            "quicklook_only": not fit_ready,
+            "mask_true_means": "use",
+            "n_segments": len(per_segment),
+            "n_total": n_total,
+            "n_inside_fit_window": n_inside,
+            "n_fit_candidate": n_fit,
+            "outside_fit_window_fraction": _fraction(n_total - n_inside, n_total),
+            "rejected_inside_fit_window_fraction": _fraction(
+                rejected_inside,
+                n_inside,
+            ),
+            "warnings": warnings,
+            "interpretation_flags": flags,
+            "segments": per_segment,
+        }
+    )
+
+
+def artifact_exclusion_mask_from_segment(
+    seg,
+    *,
+    name="artifact:fallback_same_grid",
+    include_nonfinite=True,
+    include_bad_input_mask=True,
+    include_bad_errors=True,
+    include_near_zero=True,
+    include_negative_flux=False,
+    include_spikes=False,
+    spike_sigma=10.0,
+):
+    """Return an opt-in fallback bad-pixel mask for one observed segment.
+
+    This helper is intentionally conservative and same-grid only. It is useful
+    for quicklook products that lack native data-quality flags, but it should
+    not replace instrument-supplied bitmasks when those are available. Boolean
+    ``True`` in the returned callable means reject/exclude.
+    """
+    wave0 = np.asarray(getattr(seg, "wave"), dtype=float)
+    flux = np.asarray(getattr(seg, "flux"), dtype=float)
+    if wave0.shape != flux.shape:
+        raise ValueError("artifact mask requires matching wave/flux shapes.")
+    mask = np.zeros(wave0.shape, dtype=bool)
+    finite = np.isfinite(wave0) & (wave0 > 0.0) & np.isfinite(flux)
+    if include_nonfinite:
+        mask |= ~finite
+    if include_bad_input_mask:
+        input_mask = np.asarray(
+            getattr(seg, "mask", np.ones(wave0.shape, dtype=bool)),
+            dtype=bool,
+        )
+        if input_mask.shape != wave0.shape:
+            raise ValueError("artifact mask requires segment mask shape to match wave.")
+        mask |= ~input_mask
+    err = getattr(seg, "err", None)
+    if include_bad_errors and err is not None:
+        err = np.asarray(err, dtype=float)
+        if err.shape != wave0.shape:
+            raise ValueError("artifact mask requires err shape to match wave.")
+        mask |= ~(np.isfinite(err) & (err > 0.0))
+    if include_near_zero and np.any(finite):
+        scale = float(np.nanmedian(np.abs(flux[finite])))
+        if not np.isfinite(scale) or scale <= 0.0:
+            scale = 1.0
+        mask |= finite & (np.abs(flux) <= max(1.0e-30, 1.0e-6 * scale))
+    if include_negative_flux:
+        mask |= np.isfinite(flux) & (flux < 0.0)
+    if include_spikes:
+        pool = flux[finite & ~mask]
+        if pool.size >= 10:
+            median = float(np.nanmedian(pool))
+            mad = float(np.nanmedian(np.abs(pool - median)))
+            robust_sigma = 1.4826 * mad
+            if np.isfinite(robust_sigma) and robust_sigma > 0.0:
+                mask |= (
+                    finite
+                    & (np.abs(flux - median) > float(spike_sigma) * robust_sigma)
+                )
+    mask.setflags(write=False)
+    wave0_copy = wave0.copy()
+    wave0_copy.setflags(write=False)
+
+    def _mask(wave):
+        wave = np.asarray(wave, dtype=float)
+        if wave.shape != wave0_copy.shape or not np.allclose(
+            wave,
+            wave0_copy,
+            rtol=0.0,
+            atol=1.0e-8,
+            equal_nan=True,
+        ):
+            raise ValueError(
+                "artifact_exclusion_mask_from_segment is same-grid only; "
+                "build a new mask for this wavelength grid."
+            )
+        return np.array(mask, dtype=bool)
+
+    return exclusion_mask(
+        name,
+        _mask,
+        metadata={
+            "method": "fallback_artifact_same_grid",
+            "mask_type": "artifact",
+            "preferred_source": "native_reader_data_quality_mask",
+            "same_grid_required": True,
+            "include_nonfinite": bool(include_nonfinite),
+            "include_bad_input_mask": bool(include_bad_input_mask),
+            "include_bad_errors": bool(include_bad_errors),
+            "include_near_zero": bool(include_near_zero),
+            "include_negative_flux": bool(include_negative_flux),
+            "include_spikes": bool(include_spikes),
+            "spike_sigma": float(spike_sigma),
+            "n_rejected": int(np.sum(mask)),
+            "fraction_rejected": _fraction(np.sum(mask), mask.size),
+        },
+    )

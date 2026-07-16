@@ -356,6 +356,60 @@ def _telluric_catalog_overlaps(regions):
     return overlaps
 
 
+def _mode_policy(mode):
+    """Return the user-facing contract for a first-pass defaults mode."""
+    mode = str(mode)
+    if mode == "quicklook":
+        return {
+            "mode": "quicklook",
+            "fit_stage": "triage_first_pass",
+            "search_budget": "light",
+            "default_status": "quicklook_only_until_quality_review",
+            "final_science_ready_by_default": False,
+            "description": (
+                "Fast conservative first-pass settings intended to locate a "
+                "reasonable parameter region, not to exhaustively validate the "
+                "stellar classification."
+            ),
+            "recommended_followup": (
+                "Inspect the quality report and plots; for important targets, "
+                "rerun with standard settings or explicit expert bounds."
+            ),
+        }
+    if mode == "standard":
+        return {
+            "mode": "standard",
+            "fit_stage": "ordinary_first_pass",
+            "search_budget": "moderate",
+            "default_status": "first_pass_classification",
+            "final_science_ready_by_default": False,
+            "description": (
+                "Moderate first-pass settings for ordinary classification "
+                "after metadata, masks, and resolution assumptions have been "
+                "reviewed."
+            ),
+            "recommended_followup": (
+                "Inspect quality flags, residuals, and model-domain warnings "
+                "before treating parameters as science-ready."
+            ),
+        }
+    return {
+        "mode": "diagnostic",
+        "fit_stage": "stress_or_debug_run",
+        "search_budget": "wider",
+        "default_status": "diagnostic_not_for_ordinary_statistics",
+        "final_science_ready_by_default": False,
+        "description": (
+            "Wider diagnostic settings for stress tests or suspicious spectra; "
+            "results should be interpreted as debugging evidence."
+        ),
+        "recommended_followup": (
+            "Use this to understand failures or edge cases; do not fold it "
+            "into ordinary validation statistics without explicit review."
+        ),
+    }
+
+
 def _interpretation_policy(summary, window, mode, science_case, telluric_overlaps):
     """Return a compact, machine-readable interpretation of the defaults.
 
@@ -410,6 +464,7 @@ def _interpretation_policy(summary, window, mode, science_case, telluric_overlap
             "semantics are verified."
         )
 
+    mode_policy = _mode_policy(mode)
     if mode == "quicklook":
         recommended_next_step = (
             "Inspect the quality report and diagnostic plots; rerun with "
@@ -438,6 +493,10 @@ def _interpretation_policy(summary, window, mode, science_case, telluric_overlap
         "rv_role": rv_role,
         "rv_note": rv_note,
         "automatic_choices_are_overridable": True,
+        "mode_policy": mode_policy,
+        "final_science_ready_by_default": mode_policy[
+            "final_science_ready_by_default"
+        ],
         "risk_flags": sorted(set(risk_flags)),
         "recommended_next_step": recommended_next_step,
     }
@@ -490,12 +549,19 @@ def suggest_phoenix_fit_defaults(
     rv_grid_n = 41 if mode == "quicklook" else 61
     if set(summary["stellar_rest_status"]) == {"corrected"}:
         rv_grid_n = min(rv_grid_n, 21)
+    mode_policy = dict(interpretation["mode_policy"])
+    mode_policy["multistart"] = int(multistart)
+    mode_policy["rv_grid_n"] = int(rv_grid_n)
 
     reasons = [
         "selected {0} window {1} because it overlaps the loaded wavelength coverage by {2:.1f} A".format(
             window["label"],
             window["regions"],
             window["overlap_A"],
+        ),
+        "using {0} defaults mode with {1} search budget".format(
+            mode,
+            mode_policy["search_budget"],
         ),
         "using broad PHOENIX classification bounds rather than the full grid",
         "using native_interp so RV shifting and LSF convolution happen before final resampling",
@@ -564,6 +630,7 @@ def suggest_phoenix_fit_defaults(
             "overlaps": telluric_overlaps,
         },
         "interpretation": interpretation,
+        "mode_policy": mode_policy,
         "assumption_policy": "metadata-backed where available; otherwise conservative and provenance-recorded",
     }
     return PhoenixFitDefaults(

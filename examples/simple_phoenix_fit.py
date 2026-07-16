@@ -53,6 +53,7 @@ from Spyctres.io import read_spectrum
 from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
 from Spyctres.preprocessing import (
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
+    audit_spectrum_for_fit,
     nonstellar_feature_mask,
     nonstellar_feature_masks,
     nonstellar_feature_metadata,
@@ -283,6 +284,17 @@ def _resolution_override_summary(args):
     return {
         "resolution_source": "user_override",
         "assumed_resolution_R": float(args.resolution_R),
+        "assumption_warning": "approximate quicklook resolution",
+    }
+
+
+def _assumed_resolution_for_audit(args):
+    if args.resolution_R is None:
+        return None
+    return {
+        "quantity": "R",
+        "value": float(args.resolution_R),
+        "source": "user_override",
         "assumption_warning": "approximate quicklook resolution",
     }
 
@@ -609,6 +621,23 @@ def main(argv=None):
     spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, spectrum)
     resolution_override = _resolution_override_summary(args)
+    readiness = audit_spectrum_for_fit(
+        spectrum,
+        fit_windows=fit_kwargs.get("regions"),
+        intended_use="first_pass_classification",
+        assumed_resolution=_assumed_resolution_for_audit(args),
+    )
+    print(
+        "Spectrum readiness: fit_ready={0}, quicklook_only={1}, fitted_pixels={2}, flags={3}".format(
+            readiness["fit_ready"],
+            readiness["quicklook_only"],
+            readiness["n_fit_candidate"],
+            ", ".join(readiness["interpretation_flags"]) or "none",
+        ),
+        flush=True,
+    )
+    for warning in readiness.get("warnings", []):
+        print("Spectrum readiness WARNING: {0}".format(warning), flush=True)
     if suggestion is not None:
         print("Suggested first-pass fit defaults:", flush=True)
         for reason in suggestion.reasons:
@@ -629,6 +658,16 @@ def main(argv=None):
                 ),
                 flush=True,
             )
+            mode_policy = interpretation.get("mode_policy", {})
+            if mode_policy:
+                print(
+                    "  - defaults mode: {0} ({1} budget; {2})".format(
+                        mode_policy.get("mode", args.defaults_mode),
+                        mode_policy.get("search_budget", "unknown"),
+                        mode_policy.get("default_status", "first_pass"),
+                    ),
+                    flush=True,
+                )
             print(
                 "  - RV role: {0}".format(
                     interpretation.get("rv_role", "alignment_parameter")
@@ -650,6 +689,9 @@ def main(argv=None):
                     ),
                     flush=True,
                 )
+            next_step = interpretation.get("recommended_next_step")
+            if next_step:
+                print("  - next step: {0}".format(next_step), flush=True)
         for warning in _display_warnings(args, suggestion.warnings):
             print("  WARNING: {0}".format(warning), flush=True)
     elif resolution_override is not None:
@@ -671,6 +713,8 @@ def main(argv=None):
     )
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
+    result.summary["spectrum_readiness"] = readiness
+    result.provenance["spectrum_readiness"] = readiness
     if resolution_override is not None:
         result.summary.update(resolution_override)
         result.provenance["resolution_override"] = dict(resolution_override)
