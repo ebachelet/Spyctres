@@ -26,6 +26,11 @@ import traceback
 import warnings
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+
 REQUIRED_MODULES = (
     "numpy",
     "scipy",

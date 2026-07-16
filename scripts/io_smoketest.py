@@ -72,7 +72,7 @@ def build_parser():
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits\n"
             "  python scripts/io_smoketest.py --instrument pepsi "
             "examples/data/pepsir.20230603.009.dxt.nor "
-            "examples/data/pepsir.20230603.010.dxt.nor --join\n"
+            "examples/data/pepsir.20230603.010.dxt.nor\n"
             "  python scripts/io_smoketest.py --instrument floyds "
             "examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv "
             "--no-show --plot-dir io_plots\n\n"
