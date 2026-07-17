@@ -315,6 +315,11 @@ spyctres inspect-spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.
   --instrument xshooter
 ```
 
+If `spyctres` is not found after pulling a newer checkout, rerun
+`pip install -e .` inside the active environment so the console script is
+refreshed. The same read-only commands can always be run as
+`python -m Spyctres.cli ...` from a source checkout.
+
 There is intentionally no general `spyctres fit` command yet. Fitting remains
 Python-first until the public batch defaults and reporting are stable enough
 for a command-line fitting interface.

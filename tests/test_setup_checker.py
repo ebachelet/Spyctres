@@ -25,4 +25,5 @@ def test_setup_checker_runs_without_phoenix_scan():
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "Spyctres setup check passed." in completed.stdout
+    assert "Spyctres CLI entry point" in completed.stdout
     assert "Example spectrum ingestion" in completed.stdout

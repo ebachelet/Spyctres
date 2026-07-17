@@ -20,6 +20,7 @@ import argparse
 import importlib
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import traceback
@@ -119,6 +120,23 @@ def check_imports():
         return False
     _status(True, "Spyctres import", getattr(Spyctres, "__file__", "unknown"))
     return ok
+
+
+def check_cli_entrypoint():
+    """Warn if the optional console script has not been installed yet."""
+    executable = shutil.which("spyctres")
+    if executable is not None:
+        _status(True, "Spyctres CLI entry point", executable)
+        return True
+
+    _warn(
+        "Spyctres CLI entry point",
+        (
+            "not found on PATH; run 'pip install -e .' again after updating "
+            "the checkout, or use 'python -m Spyctres.cli ...'"
+        ),
+    )
+    return True
 
 
 def check_phoenix(args):
@@ -274,6 +292,7 @@ def main(argv=None):
     try:
         checks.append(check_python())
         checks.append(check_imports())
+        checks.append(check_cli_entrypoint())
         checks.append(check_phoenix(args))
         checks.append(check_spectrum(args))
     except KeyboardInterrupt:
