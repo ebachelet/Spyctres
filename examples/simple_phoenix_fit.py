@@ -53,6 +53,7 @@ from Spyctres.io import read_spectrum
 from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
 from Spyctres.preprocessing import (
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
+    archive_exclusion_masks_for_segment,
     audit_spectrum_for_fit,
     nonstellar_feature_mask,
     nonstellar_feature_masks,
@@ -79,7 +80,7 @@ def build_parser():
             "--output-plot /tmp/spyctres_fit.png\n\n"
             "Approximate SDSS quicklook example:\n"
             "  python examples/simple_phoenix_fit.py spec-PLATE-MJD-FIBER.fits "
-            "--instrument sdss --R 2000\n"
+            "--instrument sdss --R 2000 --sdss-mask-policy stellar_strict\n"
             "  SDSS reader metadata intentionally keeps resolution=None; "
             "--R 2000 is an explicit quicklook approximation, not precision "
             "SDSS LSF modelling."
@@ -88,6 +89,15 @@ def build_parser():
     )
     parser.add_argument("spectrum", help="Reduced one-dimensional spectrum file.")
     parser.add_argument("--instrument", required=True, help="Registered reader name.")
+    parser.add_argument(
+        "--sdss-mask-policy",
+        choices=("auto", "ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
+        default="auto",
+        help=(
+            "SDSS reader bitmask policy. 'auto' uses stellar_strict for this "
+            "PHOENIX fitting example; other instruments ignore this option."
+        ),
+    )
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
         "--auto-defaults",
@@ -154,6 +164,18 @@ def build_parser():
         type=float,
         default=0.0,
         help="Extra Angstrom half-width padding for DIB annotations/masks.",
+    )
+    parser.add_argument(
+        "--archive-mask-policy",
+        choices=("apply", "warn", "ignore"),
+        default="apply",
+        help=(
+            "How to handle recognized archive/product bad-region catalogs. "
+            "'apply' excludes them as named fit masks and records provenance; "
+            "'warn' leaves them fitted but raises readiness/quality warnings; "
+            "'ignore' leaves them fitted and records that the user explicitly "
+            "ignored archive mask advice."
+        ),
     )
     parser.add_argument(
         "--known-residual-diagnostics",
@@ -275,6 +297,12 @@ def _fit_kwargs_from_args(args, spectrum):
             padding_A=args.dib_padding,
         ):
             _append_exclusion_mask(fit_kwargs, mask_spec)
+    if args.archive_mask_policy == "apply":
+        fit_kwargs = _fit_kwargs_with_archive_policy(
+            fit_kwargs,
+            _archive_masks_by_segment(spectrum),
+            args.archive_mask_policy,
+        )
     return fit_kwargs, suggestion
 
 
@@ -325,12 +353,58 @@ def _append_exclusion_mask(fit_kwargs, mask_spec):
     fit_kwargs["exclude_masks"] = masks
 
 
+def _reader_kwargs_from_args(args):
+    instrument = str(args.instrument).strip().lower()
+    if instrument not in {"sdss", "sdss_spec", "segue"}:
+        return {}
+    policy = args.sdss_mask_policy
+    if policy == "auto":
+        policy = "stellar_strict"
+    return {"sdss_mask_policy": policy}
+
+
 def _coerce_segments(spectrum):
     if hasattr(spectrum, "segments"):
         return list(spectrum.segments)
     if isinstance(spectrum, (list, tuple)):
         return list(spectrum)
     return [spectrum]
+
+
+def _archive_masks_by_segment(spectrum):
+    out = {}
+    for index, segment in enumerate(_coerce_segments(spectrum)):
+        masks = archive_exclusion_masks_for_segment(segment)
+        if masks:
+            out[index] = masks
+    return out
+
+
+def _archive_mask_count(archive_masks):
+    return int(sum(len(value) for value in archive_masks.values()))
+
+
+def _fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy):
+    fit_kwargs = dict(fit_kwargs)
+    if policy != "apply" or not archive_masks:
+        return fit_kwargs
+    existing = fit_kwargs.get("exclude_masks")
+    if existing is None:
+        fit_kwargs["exclude_masks"] = dict(archive_masks)
+        return fit_kwargs
+    merged = dict(archive_masks)
+    if isinstance(existing, dict):
+        for key, value in existing.items():
+            current = list(merged.get(key, []) or [])
+            current.extend(list(value if isinstance(value, (list, tuple)) else [value]))
+            merged[key] = current
+    else:
+        for key in list(merged):
+            current = list(merged[key])
+            current.extend(list(existing if isinstance(existing, (list, tuple)) else [existing]))
+            merged[key] = current
+    fit_kwargs["exclude_masks"] = merged
+    return fit_kwargs
 
 
 def _parse_line_groups(value, result=None, hot_teff_threshold=10500.0):
@@ -618,12 +692,35 @@ def _build_line_diagnostic_plots(args, spectrum, result):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     print("Reading spectrum...", flush=True)
-    spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
+    reader_kwargs = _reader_kwargs_from_args(args)
+    if reader_kwargs:
+        print(
+            "Using reader options: {0}".format(
+                ", ".join("{0}={1}".format(k, v) for k, v in reader_kwargs.items())
+            ),
+            flush=True,
+        )
+    spectrum = read_spectrum(
+        args.spectrum,
+        instrument=args.instrument,
+        **reader_kwargs,
+    )
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, spectrum)
+    archive_masks = _archive_masks_by_segment(spectrum)
+    archive_mask_count = _archive_mask_count(archive_masks)
+    if archive_masks:
+        print(
+            "Archive mask policy: {0} ({1} recognized archive mask region(s)).".format(
+                args.archive_mask_policy,
+                archive_mask_count,
+            ),
+            flush=True,
+        )
     resolution_override = _resolution_override_summary(args)
     readiness = audit_spectrum_for_fit(
         spectrum,
         fit_windows=fit_kwargs.get("regions"),
+        exclude_masks=fit_kwargs.get("exclude_masks"),
         intended_use="first_pass_classification",
         assumed_resolution=_assumed_resolution_for_audit(args),
     )
@@ -714,7 +811,13 @@ def main(argv=None):
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
     result.summary["spectrum_readiness"] = readiness
+    result.summary["archive_mask_policy"] = {
+        "policy": args.archive_mask_policy,
+        "recognized_mask_count": archive_mask_count,
+        "applied": bool(args.archive_mask_policy == "apply"),
+    }
     result.provenance["spectrum_readiness"] = readiness
+    result.provenance["archive_mask_policy"] = dict(result.summary["archive_mask_policy"])
     if resolution_override is not None:
         result.summary.update(resolution_override)
         result.provenance["resolution_override"] = dict(resolution_override)

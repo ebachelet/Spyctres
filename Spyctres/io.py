@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 from astropy.io import fits
 
+from .preprocessing import archive_mask_catalog
+
 
 COMMON_SPECTRUM_SCHEMA_VERSION = 1
 C_KMS = 299792.458
@@ -1991,19 +1993,42 @@ def read_uves_pop_ascii(
     if err is not None:
         mask &= np.isfinite(err) & (err > 0)
 
+    archive_catalog = archive_mask_catalog("uves_pop")
+    readiness_role = (
+        "quicklook_only_without_formal_errors"
+        if err is None
+        else "fit_candidate_if_archive_metadata_verified"
+    )
     meta = {
         "path": path,
         "instrument": "UVES-POP",
+        "archive": "ESO UVES-POP",
+        "archive_product_profile": "uves_pop_ascii_quicklook",
+        "fit_readiness_role": readiness_role,
         "wave_unit_input": unit_input,
         "wave_medium": "unknown",
-        "wave_frame": "unknown",
-        "observer_frame": "unknown",
+        "wave_frame": "heliocentric",
+        "observer_frame": "heliocentric",
         "stellar_rest_status": "unknown",
         "resolution_R": 80000.0,
         "resolution_note": (
             "Nominal UVES-POP resolving power only; verify product-specific "
             "resolution/LSF metadata before precision fitting."
         ),
+        "archive_mask_catalog": archive_catalog,
+        "archive_mask_summary": {
+            "masks_available": True,
+            "masks_applied": [],
+            "masks_not_applied": [item["id"] for item in archive_catalog],
+            "source_urls": sorted(
+                {item["source_url"] for item in archive_catalog if item.get("source_url")}
+            ),
+            "note": (
+                "Known UVES-POP archive/product bad regions are recorded but "
+                "not applied automatically. Use explicit archive masks before "
+                "precision fitting if the target wavelength window overlaps them."
+            ),
+        },
         "uves_pop_reader": {
             "numeric_rows": int(n_numeric_rows),
             "err_column": None if err_column is None else int(err_column),
@@ -2018,9 +2043,9 @@ def read_uves_pop_ascii(
         mask=mask,
         meta=meta,
         wave_medium="unknown",
-        wave_frame="unknown",
+        wave_frame="heliocentric",
         name=name or os.path.basename(path),
-        observer_frame="unknown",
+        observer_frame="heliocentric",
         stellar_rest_status="unknown",
         resolution=ResolutionDescriptor(
             quantity="R",
@@ -2118,6 +2143,7 @@ def read_sdss_spec(
     name=None,
     ext=1,
     use_and_mask=True,
+    sdss_mask_policy=None,
     attach_wdisp_resolution=False,
 ):
     """
@@ -2126,8 +2152,12 @@ def read_sdss_spec(
     The SDSS spectrum table stores logarithmic vacuum wavelengths in ``loglam``
     and flux in ``flux``. If ``ivar`` is present, Spyctres converts it to
     1-sigma uncertainty as ``err = 1/sqrt(ivar)`` for positive inverse
-    variance pixels and masks non-positive-ivar pixels. If ``and_mask`` is
-    present, pixels with non-zero AND mask are rejected by default.
+    variance pixels and masks non-positive-ivar pixels. By default, the reader
+    uses the named ``and_mask_conservative`` policy, rejecting non-zero
+    ``and_mask`` pixels when that column is present. ``sdss_mask_policy`` may
+    be set to ``ivar_only``, ``and_mask_conservative``, ``stellar_strict``, or
+    ``sky_strict``; the strict policies also reject non-zero ``or_mask`` when
+    that column is present.
 
     Resolution/LSF metadata are deliberately left unset by default. If
     ``attach_wdisp_resolution=True`` and a ``wdisp`` column is present, Spyctres
@@ -2163,6 +2193,26 @@ def read_sdss_spec(
             positive_ivar = np.ones(flux.shape, dtype=bool)
             err = None
 
+        policy = (
+            "and_mask_conservative"
+            if sdss_mask_policy is None and use_and_mask
+            else "ivar_only"
+            if sdss_mask_policy is None
+            else str(sdss_mask_policy).strip().lower()
+        )
+        valid_policies = {
+            "ivar_only",
+            "and_mask_conservative",
+            "stellar_strict",
+            "sky_strict",
+        }
+        if policy not in valid_policies:
+            raise ValueError(
+                "sdss_mask_policy must be one of: {0}.".format(
+                    ", ".join(sorted(valid_policies))
+                )
+            )
+
         and_mask = _sdss_get_table_column(data, "and_mask", required=False)
         if and_mask is not None:
             if and_mask.shape != flux.shape:
@@ -2171,11 +2221,67 @@ def read_sdss_spec(
         else:
             clean_and_mask = np.ones(flux.shape, dtype=bool)
 
-        mask = np.isfinite(wave_A) & (wave_A > 0) & np.isfinite(flux)
+        or_mask = _sdss_get_table_column(data, "or_mask", required=False)
+        if or_mask is not None:
+            if or_mask.shape != flux.shape:
+                raise ValueError("SDSS or_mask column must match flux shape.")
+            clean_or_mask = np.asarray(or_mask) == 0
+        else:
+            clean_or_mask = np.ones(flux.shape, dtype=bool)
+
+        finite_wave_flux = np.isfinite(wave_A) & (wave_A > 0) & np.isfinite(flux)
+        and_required = bool(policy in {"and_mask_conservative", "stellar_strict", "sky_strict"})
+        or_required = bool(policy in {"stellar_strict", "sky_strict"})
+        mask = finite_wave_flux.copy()
         if err is not None:
             mask &= positive_ivar & np.isfinite(err) & (err > 0)
-        if use_and_mask:
+        if and_required and and_mask is not None:
             mask &= clean_and_mask
+        if or_required and or_mask is not None:
+            mask &= clean_or_mask
+
+        sdss_rejection_counts = {
+            "n_total": int(mask.size),
+            "n_rejected_nonfinite_wave_flux": int(
+                np.count_nonzero(~finite_wave_flux)
+            ),
+            "n_rejected_ivar_nonpositive": int(
+                np.count_nonzero(~positive_ivar) if ivar is not None else 0
+            ),
+            "n_rejected_and_mask_nonzero": int(
+                np.count_nonzero(~clean_and_mask)
+                if and_required and and_mask is not None
+                else 0
+            ),
+            "n_rejected_or_mask_nonzero": int(
+                np.count_nonzero(~clean_or_mask)
+                if or_required and or_mask is not None
+                else 0
+            ),
+            "n_used": int(np.count_nonzero(mask)),
+        }
+        applied_archive_masks = [
+            "finite_wave_flux",
+            "ivar_positive" if ivar is not None else None,
+            "and_mask_zero" if and_required and and_mask is not None else None,
+            "or_mask_zero" if or_required and or_mask is not None else None,
+        ]
+        applied_archive_masks = [item for item in applied_archive_masks if item]
+        not_applied_archive_masks = [
+            "and_mask_zero"
+            if and_mask is not None and not (and_required and and_mask is not None)
+            else None,
+            "or_mask_zero"
+            if or_mask is not None and not (or_required and or_mask is not None)
+            else None,
+            "wdisp_lsf"
+            if _sdss_get_table_column(data, "wdisp", required=False) is not None
+            and not attach_wdisp_resolution
+            else None,
+        ]
+        not_applied_archive_masks = [
+            item for item in not_applied_archive_masks if item
+        ]
 
         wdisp = _sdss_get_table_column(data, "wdisp", required=False)
         if wdisp is not None:
@@ -2263,9 +2369,39 @@ def read_sdss_spec(
             "stellar_rest_status": "observed",
             "mask_true_means": "use",
             "sdss_mask_policy": {
+                "name": policy,
+                "source": "SDSS spec table bitmask columns",
+                "source_url": "https://www.sdss4.org/dr17/spectro/quality/",
                 "finite_wave_flux": True,
                 "ivar_positive_required": bool(ivar is not None),
-                "and_mask_zero_required": bool(use_and_mask and and_mask is not None),
+                "and_mask_zero_required": bool(
+                    and_required and and_mask is not None
+                ),
+                "or_mask_zero_required": bool(
+                    or_required and or_mask is not None
+                ),
+                "columns_present": {
+                    "ivar": bool(ivar is not None),
+                    "and_mask": bool(and_mask is not None),
+                    "or_mask": bool(or_mask is not None),
+                    "wdisp": bool(wdisp is not None),
+                },
+                "rejection_counts": sdss_rejection_counts,
+                "legacy_use_and_mask_argument": bool(use_and_mask),
+            },
+            "archive_mask_summary": {
+                "archive": "SDSS",
+                "product_profile": "sdss_spec",
+                "mask_policy": policy,
+                "masks_applied": applied_archive_masks,
+                "masks_not_applied": not_applied_archive_masks,
+                "source_url": "https://www.sdss4.org/dr17/spectro/quality/",
+                "note": (
+                    "SDSS inverse-variance and bitmask columns are interpreted "
+                    "as product masks at ingestion. Wavelength-dependent wdisp "
+                    "LSF information is kept as provenance unless explicitly "
+                    "attached for experimental use."
+                ),
             },
             "sdss_lsf": {
                 **wdisp_meta,

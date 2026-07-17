@@ -83,6 +83,27 @@ def test_annotate_nonstellar_features_accepts_assumed_ism_velocity():
     assert "nonstellar_feature_frame_ambiguous" not in result.quality_flags
 
 
+def test_annotate_nonstellar_features_uses_fitted_pixel_overlap_when_available():
+    wave = np.linspace(4400.0, 4450.0, 100)
+    segment = SpectrumSegment(wave, np.ones_like(wave), err=np.ones_like(wave))
+    used = np.ones_like(wave, dtype=bool)
+    used[(wave >= 4416.8) & (wave <= 4440.8)] = False
+    result = SimpleNamespace(summary={}, used_masks=(used,), quality_flags=())
+
+    payload = annotate_nonstellar_features(
+        segment,
+        result,
+        feature_names=("dib_4428",),
+        policy="warn",
+    )
+
+    assert payload["overlap_basis"] == "fitted_pixels"
+    assert payload["features"][0]["overlap_pixels"] > 0
+    assert payload["features"][0]["fitted_pixel_overlap"] is False
+    assert payload["features"][0]["fitted_pixel_overlap_pixels"] == 0
+    assert "nonstellar_feature_overlap" not in result.quality_flags
+
+
 def test_diagnose_known_residual_windows_is_json_safe_and_conservative():
     wave = np.linspace(4800.0, 4930.0, 400)
     model = np.ones_like(wave)

@@ -48,6 +48,7 @@ def test_parser_accepts_quicklook_output_json_and_resolution_aliases():
     assert args.output == "/tmp/out.json"
     assert args.summary_csv == "/tmp/out.csv"
     assert args.resolution_R == pytest.approx(2000.0)
+    assert args.refine_quality_policy == "skip-risky"
     assert module._resolution_override_payload(args) == {
         "resolution_source": "user_override",
         "assumed_resolution_R": 2000.0,
@@ -114,6 +115,48 @@ def test_skip_risky_refinement_gate_uses_readiness_flags():
     assert should_refine is False
     assert "resolution_assumption_required" in reasons
     assert "readiness_fit_ready_false" in reasons
+
+
+def test_skip_risky_refinement_gate_can_ignore_archive_only_flags():
+    module = _load_example_module()
+    readiness = {
+        "fit_ready": True,
+        "interpretation_flags": ["archive_mask_overlap_inside_fit_window"],
+    }
+    quick = {"success": True, "quality_flags": []}
+
+    should_refine_warn, reasons_warn = module.should_refine_after_quicklook(
+        readiness,
+        quick,
+        policy="skip-risky",
+        archive_mask_policy="warn",
+    )
+    should_refine_ignore, reasons_ignore = module.should_refine_after_quicklook(
+        readiness,
+        quick,
+        policy="skip-risky",
+        archive_mask_policy="ignore",
+    )
+
+    assert should_refine_warn is False
+    assert reasons_warn == ["archive_mask_overlap_inside_fit_window"]
+    assert should_refine_ignore is True
+    assert reasons_ignore == []
+
+
+def test_skip_risky_refinement_gate_uses_quick_quality_flags():
+    module = _load_example_module()
+    readiness = {"fit_ready": True, "interpretation_flags": []}
+    quick = {"success": True, "quality_flags": ["high_chi2", "ok_to_ignore"]}
+
+    should_refine, reasons = module.should_refine_after_quicklook(
+        readiness,
+        quick,
+        policy="skip-risky",
+    )
+
+    assert should_refine is False
+    assert reasons == ["quick_result:high_chi2"]
 
 
 def test_always_refinement_gate_preserves_legacy_behavior():

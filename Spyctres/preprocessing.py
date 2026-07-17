@@ -223,6 +223,267 @@ OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES = (
 )
 
 
+UVES_POP_ARCHIVE_MASK_CATALOG = (
+    {
+        "id": "uves_pop_chip_gap_5770_5840",
+        "name": "UVES-POP red-chip gap 5770-5840 A",
+        "region_A": (5770.0, 5840.0),
+        "mask_type": "archive_product_bad_region",
+        "source": "ESO UVES-POP product documentation",
+        "source_url": "https://www.eso.org/sci/observing/tools/uvespop.html",
+        "default_action": "warn",
+        "description": (
+            "Documented wavelength gap in UVES-POP products; record overlap "
+            "before treating a fit as science-ready."
+        ),
+    },
+    {
+        "id": "uves_pop_chip_gap_8540_8660",
+        "name": "UVES-POP red-chip gap 8540-8660 A",
+        "region_A": (8540.0, 8660.0),
+        "mask_type": "archive_product_bad_region",
+        "source": "ESO UVES-POP product documentation",
+        "source_url": "https://www.eso.org/sci/observing/tools/uvespop.html",
+        "default_action": "warn",
+        "description": (
+            "Documented wavelength gap in UVES-POP products; record overlap "
+            "before treating a fit as science-ready."
+        ),
+    },
+    {
+        "id": "uves_pop_flag_flattening_3060_3080",
+        "name": "UVES-POP archive flag 3060-3080 A",
+        "region_A": (3060.0, 3080.0),
+        "mask_type": "archive_product_flag",
+        "source": "ESO UVES-POP flag list",
+        "source_url": "https://www.eso.org/observing/dfo/quality/UVES/txt/flag.txt",
+        "default_action": "warn",
+        "description": "Archive-listed flattening artifact interval.",
+    },
+    {
+        "id": "uves_pop_flag_flattening_5760_5840",
+        "name": "UVES-POP archive flag 5760-5840 A",
+        "region_A": (5760.0, 5840.0),
+        "mask_type": "archive_product_flag",
+        "source": "ESO UVES-POP flag list",
+        "source_url": "https://www.eso.org/observing/dfo/quality/UVES/txt/flag.txt",
+        "default_action": "warn",
+        "description": "Archive-listed flattening artifact interval.",
+    },
+    {
+        "id": "uves_pop_flag_flattening_8540_8660",
+        "name": "UVES-POP archive flag 8540-8660 A",
+        "region_A": (8540.0, 8660.0),
+        "mask_type": "archive_product_flag",
+        "source": "ESO UVES-POP flag list",
+        "source_url": "https://www.eso.org/observing/dfo/quality/UVES/txt/flag.txt",
+        "default_action": "warn",
+        "description": "Archive-listed flattening artifact interval.",
+    },
+    {
+        "id": "uves_pop_flag_flattening_9760_9880",
+        "name": "UVES-POP archive flag 9760-9880 A",
+        "region_A": (9760.0, 9880.0),
+        "mask_type": "archive_product_flag",
+        "source": "ESO UVES-POP flag list",
+        "source_url": "https://www.eso.org/observing/dfo/quality/UVES/txt/flag.txt",
+        "default_action": "warn",
+        "description": "Archive-listed flattening artifact interval.",
+    },
+    {
+        "id": "uves_pop_flag_flattening_10240_10260",
+        "name": "UVES-POP archive flag 10240-10260 A",
+        "region_A": (10240.0, 10260.0),
+        "mask_type": "archive_product_flag",
+        "source": "ESO UVES-POP flag list",
+        "source_url": "https://www.eso.org/observing/dfo/quality/UVES/txt/flag.txt",
+        "default_action": "warn",
+        "description": "Archive-listed flattening artifact interval.",
+    },
+    {
+        "id": "uves_pop_flag_flattening_10560_10640",
+        "name": "UVES-POP archive flag 10560-10640 A",
+        "region_A": (10560.0, 10640.0),
+        "mask_type": "archive_product_flag",
+        "source": "ESO UVES-POP flag list",
+        "source_url": "https://www.eso.org/observing/dfo/quality/UVES/txt/flag.txt",
+        "default_action": "warn",
+        "description": "Archive-listed flattening artifact interval.",
+    },
+)
+
+
+def archive_mask_catalog(profile="uves_pop"):
+    """Return JSON-safe archive/product mask regions for a known profile.
+
+    These catalog regions are provenance and readiness aids. They are not
+    applied automatically by readers or fitters because archive products differ
+    and a hidden mask can be worse than an explicit quicklook warning.
+    """
+    key = str(profile or "").strip().lower().replace("-", "_")
+    if key in {"uves_pop", "uvespop", "uves_pop_ascii", "uves_pop_ascii_quicklook"}:
+        return [_json_safe(dict(item)) for item in UVES_POP_ARCHIVE_MASK_CATALOG]
+    return []
+
+
+def archive_exclusion_masks(profile="uves_pop", *, only_ids=None):
+    """Return opt-in exclusion masks for archive/product bad-region catalogs."""
+    catalog = archive_mask_catalog(profile)
+    if only_ids is not None:
+        wanted = {str(item).strip().lower() for item in only_ids}
+        catalog = [
+            item for item in catalog if str(item.get("id", "")).strip().lower() in wanted
+        ]
+    masks = []
+    for item in catalog:
+        wmin, wmax = item["region_A"]
+        metadata = dict(item)
+        metadata.update(
+            {
+                "method": "archive_catalog_region",
+                "mask_type": "archive_product_bad_region",
+                "action": "masked",
+                "automatic_reader_default": False,
+            }
+        )
+        masks.append(
+            exclusion_mask(
+                "archive:{0}".format(item["id"]),
+                lambda wave, lo=float(wmin), hi=float(wmax): (
+                    (np.asarray(wave, dtype=float) >= lo)
+                    & (np.asarray(wave, dtype=float) <= hi)
+                ),
+                metadata=metadata,
+            )
+        )
+    return masks
+
+
+def archive_exclusion_masks_for_segment(seg, *, only_ids=None):
+    """Return opt-in archive/product exclusion masks for one spectrum segment."""
+    meta = getattr(seg, "meta", {}) or {}
+    catalog = meta.get("archive_mask_catalog")
+    if catalog is None:
+        profile = meta.get("archive_product_profile") or meta.get("product_profile")
+        return archive_exclusion_masks(profile, only_ids=only_ids) if profile else []
+
+    if only_ids is not None:
+        wanted = {str(item).strip().lower() for item in only_ids}
+        catalog = [
+            item
+            for item in catalog
+            if str(item.get("id", "")).strip().lower() in wanted
+        ]
+    masks = []
+    for item in catalog:
+        wmin, wmax = item["region_A"]
+        metadata = dict(item)
+        metadata.update(
+            {
+                "method": "archive_catalog_region",
+                "mask_type": "archive_product_bad_region",
+                "action": "masked",
+                "automatic_reader_default": False,
+            }
+        )
+        masks.append(
+            exclusion_mask(
+                "archive:{0}".format(item["id"]),
+                lambda wave, lo=float(wmin), hi=float(wmax): (
+                    (np.asarray(wave, dtype=float) >= lo)
+                    & (np.asarray(wave, dtype=float) <= hi)
+                ),
+                metadata=metadata,
+            )
+        )
+    return masks
+
+
+def archive_mask_summary_for_segment(seg, *, regions=None, fit_candidate_mask=None):
+    """Summarize archive/product bad-region overlap for one segment.
+
+    ``fit_candidate_mask`` should use the normal Spyctres polarity:
+    ``True`` means the pixel would be used by the fit before any optional
+    archive mask is applied.
+    """
+    meta = getattr(seg, "meta", {}) or {}
+    catalog = meta.get("archive_mask_catalog")
+    if catalog is None:
+        profile = meta.get("archive_product_profile") or meta.get("product_profile")
+        catalog = archive_mask_catalog(profile) if profile else []
+    catalog = [dict(item) for item in (catalog or [])]
+
+    wave = np.asarray(getattr(seg, "wave"), dtype=float)
+    if wave.size == 0 or not catalog:
+        return {
+            "masks_available": bool(catalog),
+            "catalog_ids": [item.get("id") for item in catalog],
+            "masks_applied": [],
+            "masks_not_applied": [item.get("id") for item in catalog],
+            "n_pixels_inside_catalog_regions": 0,
+            "n_fit_candidate_pixels_inside_catalog_regions": 0,
+            "overlap_fraction_inside_fit_window": 0.0,
+            "overlaps": [],
+        }
+
+    inside = _regions_mask(wave, regions)
+    if fit_candidate_mask is None:
+        fit_candidate = np.asarray(
+            getattr(seg, "mask", np.ones(wave.shape, dtype=bool)),
+            dtype=bool,
+        ) & np.isfinite(wave)
+    else:
+        fit_candidate = np.asarray(fit_candidate_mask, dtype=bool)
+        if fit_candidate.shape != wave.shape:
+            raise ValueError("fit_candidate_mask must match segment wavelength shape.")
+    n_inside = int(np.count_nonzero(inside))
+    union_inside = np.zeros(wave.shape, dtype=bool)
+    union_fit = np.zeros(wave.shape, dtype=bool)
+    overlaps = []
+    for item in catalog:
+        wmin, wmax = item["region_A"]
+        in_region = (
+            np.isfinite(wave)
+            & (wave >= float(wmin))
+            & (wave <= float(wmax))
+        )
+        n_region_inside = int(np.count_nonzero(in_region & inside))
+        n_region_fit = int(np.count_nonzero(in_region & fit_candidate))
+        if n_region_inside or n_region_fit:
+            overlaps.append(
+                {
+                    "id": item.get("id"),
+                    "name": item.get("name"),
+                    "region_A": [float(wmin), float(wmax)],
+                    "mask_type": item.get("mask_type"),
+                    "source": item.get("source"),
+                    "source_url": item.get("source_url"),
+                    "n_pixels_inside_fit_window": n_region_inside,
+                    "n_fit_candidate_pixels": n_region_fit,
+                    "action": "not_applied",
+                }
+            )
+        union_inside |= in_region & inside
+        union_fit |= in_region & fit_candidate
+    n_catalog_inside = int(np.count_nonzero(union_inside))
+    n_catalog_fit = int(np.count_nonzero(union_fit))
+    return {
+        "masks_available": True,
+        "catalog_ids": [item.get("id") for item in catalog],
+        "masks_applied": [],
+        "masks_not_applied": [item.get("id") for item in catalog],
+        "n_pixels_inside_catalog_regions": n_catalog_inside,
+        "n_fit_candidate_pixels_inside_catalog_regions": n_catalog_fit,
+        "overlap_fraction_inside_fit_window": _fraction(n_catalog_inside, n_inside),
+        "overlaps": overlaps,
+        "note": (
+            "Archive/product bad-region catalog is recorded for readiness. "
+            "Use archive_exclusion_masks() explicitly if these regions should "
+            "be excluded from a fit."
+        ),
+    }
+
+
 def nonstellar_feature_regions(names=("dib_4428",), padding_A=0.0):
     """Return wavelength regions for known non-stellar features.
 
@@ -1202,6 +1463,60 @@ def _audit_segments(spectrum):
     return [spectrum]
 
 
+def _is_global_mask_option(option):
+    return (
+        callable(option)
+        or isinstance(option, ExclusionMaskSpec)
+        or _is_named_mask_tuple(option)
+        or (
+            isinstance(option, dict)
+            and ("callable" in option or "func" in option)
+        )
+    )
+
+
+def _resolve_audit_mask_options(segments, option, label):
+    if option is None:
+        return [None] * len(segments)
+    if _is_global_mask_option(option) or not isinstance(option, dict):
+        return [option] * len(segments)
+
+    resolved = [None] * len(segments)
+    names = [getattr(seg, "name", None) for seg in segments]
+    for key, value in option.items():
+        if isinstance(key, int):
+            index = int(key)
+            if index < 0 or index >= len(segments):
+                raise ValueError(
+                    "{0} index key {1} is out of range for {2} segments.".format(
+                        label,
+                        key,
+                        len(segments),
+                    )
+                )
+        elif isinstance(key, str):
+            matches = [idx for idx, name in enumerate(names) if name == key]
+            if len(matches) != 1:
+                raise ValueError(
+                    "{0} segment-name key {1!r} matched {2} segments.".format(
+                        label,
+                        key,
+                        len(matches),
+                    )
+                )
+            index = matches[0]
+        else:
+            raise TypeError(
+                "{0} keys must be integer segment indices or string segment names.".format(
+                    label
+                )
+            )
+        if resolved[index] is not None:
+            raise ValueError("{0} assigns segment {1} more than once.".format(label, index))
+        resolved[index] = value
+    return resolved
+
+
 def _regions_mask(wave, regions):
     wave = np.asarray(wave, dtype=float)
     if regions is None:
@@ -1364,6 +1679,9 @@ def _fraction(numerator, denominator):
 def _segment_readiness(
     seg,
     regions=None,
+    exclude_mask=None,
+    exclude_masks=None,
+    mask_threshold=0.5,
     assumed_resolution=None,
     spike_sigma=10.0,
     flat_block_min=5,
@@ -1396,7 +1714,28 @@ def _segment_readiness(
     finite = finite_wave & finite_flux
     inside = _regions_mask(wave, regions)
     candidate = input_mask & finite & err_good
-    fit_candidate = candidate & inside
+    if exclude_mask is not None or exclude_masks is not None:
+        mask_result = compose_fit_mask(
+            seg,
+            regions=regions,
+            exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
+            mask_threshold=mask_threshold,
+        )
+        fit_candidate = np.asarray(mask_result.effective_mask, dtype=bool)
+        if fit_candidate.shape != wave.shape:
+            raise ValueError("readiness audit mask result shape must match wave.")
+        inside = ~np.asarray(
+            mask_result.rejection_masks.get(
+                "outside_regions",
+                np.zeros(wave.shape, dtype=bool),
+            ),
+            dtype=bool,
+        )
+        mask_provenance = mask_result.to_metadata(label="readiness fit selection")
+    else:
+        fit_candidate = candidate & inside
+        mask_provenance = None
 
     finite_good_flux = flux[finite & input_mask]
     if finite_good_flux.size:
@@ -1456,6 +1795,11 @@ def _segment_readiness(
         resolution_meta,
         assumed_resolution=assumed_resolution,
     )
+    archive_summary = archive_mask_summary_for_segment(
+        seg,
+        regions=regions,
+        fit_candidate_mask=fit_candidate,
+    )
     metadata = {
         "wave_medium": getattr(seg, "wave_medium", "unknown"),
         "observer_frame": getattr(seg, "observer_frame", "unknown"),
@@ -1463,7 +1807,10 @@ def _segment_readiness(
         "errors_present": bool(errors_present),
         "resolution": resolution_meta,
         "lsf_provenance": lsf_provenance,
+        "archive_mask_summary": archive_summary,
     }
+    if mask_provenance is not None:
+        metadata["mask_provenance"] = mask_provenance
     flags = []
     if not errors_present:
         flags.append("missing_uncertainties")
@@ -1478,6 +1825,17 @@ def _segment_readiness(
         flags.append("lsf_undersampled")
     if _fraction(np.sum(artifact_inside), max(n_inside, 1)) > 0.02:
         flags.append("artifact_review_required")
+    archive_overlap = archive_summary.get("n_pixels_inside_catalog_regions", 0) > 0
+    archive_fit_overlap = (
+        archive_summary.get("n_fit_candidate_pixels_inside_catalog_regions", 0) > 0
+    )
+    if archive_overlap and archive_fit_overlap:
+        flags.append("archive_mask_overlap_inside_fit_window")
+    if archive_fit_overlap and archive_summary.get(
+        "overlap_fraction_inside_fit_window",
+        0.0,
+    ) > 0.02:
+        flags.append("archive_mask_fraction_high")
     if flat_block_count > 0:
         flags.append("flat_zero_block_detected")
     if large_gap_count > 0:
@@ -1510,6 +1868,7 @@ def _segment_readiness(
             "large_gap_count": large_gap_count,
             "max_gap_A": max_gap_A,
         },
+        "archive_mask_summary": _json_safe(archive_summary),
         "sampling_metrics": {
             "pixel_spacing_median_A": spacing_median,
             "pixels_per_fwhm_median": pixels_per_fwhm_median,
@@ -1524,6 +1883,9 @@ def audit_spectrum_for_fit(
     spectrum,
     regions=None,
     fit_windows=None,
+    exclude_mask=None,
+    exclude_masks=None,
+    mask_threshold=0.5,
     intended_use="classification",
     assumed_resolution=None,
     spike_sigma=10.0,
@@ -1547,16 +1909,29 @@ def audit_spectrum_for_fit(
             raise ValueError("Pass either regions or fit_windows, not both.")
         regions = fit_windows
     segments = _audit_segments(spectrum)
+    exclude_mask_by_segment = _resolve_audit_mask_options(
+        segments,
+        exclude_mask,
+        "exclude_mask",
+    )
+    exclude_masks_by_segment = _resolve_audit_mask_options(
+        segments,
+        exclude_masks,
+        "exclude_masks",
+    )
     per_segment = [
         _segment_readiness(
             seg,
             regions=regions,
+            exclude_mask=exclude_mask_by_segment[index],
+            exclude_masks=exclude_masks_by_segment[index],
+            mask_threshold=mask_threshold,
             assumed_resolution=assumed_resolution,
             spike_sigma=spike_sigma,
             flat_block_min=flat_block_min,
             gap_factor=gap_factor,
         )
-        for seg in segments
+        for index, seg in enumerate(segments)
     ]
     n_total = int(sum(item["n_total"] for item in per_segment))
     n_inside = int(sum(item["n_inside_fit_window"] for item in per_segment))
@@ -1577,6 +1952,40 @@ def audit_spectrum_for_fit(
             if warning
         }
     )
+    archive_summary = {
+        "masks_available": any(
+            item.get("archive_mask_summary", {}).get("masks_available")
+            for item in per_segment
+        ),
+        "n_pixels_inside_catalog_regions": int(
+            sum(
+                item.get("archive_mask_summary", {}).get(
+                    "n_pixels_inside_catalog_regions",
+                    0,
+                )
+                for item in per_segment
+            )
+        ),
+        "n_fit_candidate_pixels_inside_catalog_regions": int(
+            sum(
+                item.get("archive_mask_summary", {}).get(
+                    "n_fit_candidate_pixels_inside_catalog_regions",
+                    0,
+                )
+                for item in per_segment
+            )
+        ),
+        "segment_overlap_count": int(
+            sum(
+                1
+                for item in per_segment
+                if item.get("archive_mask_summary", {}).get(
+                    "n_pixels_inside_catalog_regions",
+                    0,
+                )
+            )
+        ),
+    }
     hard_flags = {
         "no_fitted_pixels",
         "resolution_assumption_required",
@@ -1585,6 +1994,7 @@ def audit_spectrum_for_fit(
         "stellar_rest_status_unknown",
         "artifact_review_required",
         "lsf_undersampled",
+        "archive_mask_fraction_high",
     }
     fit_ready = bool(n_fit > 0 and not (set(flags) & hard_flags))
     return _json_safe(
@@ -1605,6 +2015,7 @@ def audit_spectrum_for_fit(
             ),
             "warnings": warnings,
             "interpretation_flags": flags,
+            "archive_mask_summary": archive_summary,
             "segments": per_segment,
         }
     )

@@ -125,6 +125,18 @@ def test_append_exclusion_mask_preserves_existing_masks():
     assert names == ["existing", "nonstellar:dib_4428"]
 
 
+def test_reader_kwargs_use_stellar_strict_for_sdss_auto_policy():
+    module = _load_example_module()
+    args = SimpleNamespace(instrument="sdss", sdss_mask_policy="auto")
+
+    assert module._reader_kwargs_from_args(args) == {
+        "sdss_mask_policy": "stellar_strict"
+    }
+
+    args.instrument = "xshooter"
+    assert module._reader_kwargs_from_args(args) == {}
+
+
 def test_resolution_override_filters_missing_resolution_display():
     module = _load_example_module()
     args = SimpleNamespace(resolution_R=2000.0)

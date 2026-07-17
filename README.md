@@ -195,11 +195,14 @@ Use this checklist for a first local run from a source checkout.
      --resume
    ```
 
-   Add `--refine-quality-policy skip-risky` if you want the batch example to
-   skip the expensive focused-refine stage for spectra whose readiness audit
-   says the wavelength frame, resolution assumption, artifacts, or LSF sampling
-   require human review first. The default remains `always` to preserve the
-   older throughput-demo behavior.
+   The batch example defaults to `--archive-mask-policy apply` and
+   `--refine-quality-policy skip-risky`: recognized archive/product bad regions
+   are applied as named masks with provenance, and the expensive focused-refine
+   stage is skipped when readiness or quick-result quality flags still require
+   human review. Use `--archive-mask-policy warn` to leave archive regions
+   fitted but flagged, `--archive-mask-policy ignore` only as an explicit expert
+   override, and `--refine-quality-policy always` only for developer-style
+   stress testing.
 
 Recommended example order:
 
@@ -319,7 +322,9 @@ UVES-POP and SDSS are currently best treated as ingestion plus quicklook
 classification inputs unless the user supplies or validates the missing fit
 assumptions. In particular, SDSS spectra are read as vacuum/heliocentric with
 `resolution=None`; `--R 2000` is only an explicit quicklook approximation, not
-precision SDSS LSF modelling. Programmatic workflows can use
+precision SDSS LSF modelling. PHOENIX fitting examples recommend
+`--sdss-mask-policy stellar_strict`, while the generic reader default remains
+`and_mask_conservative`. Programmatic workflows can use
 `sdss_quicklook_resolution_assumption()` to package that approximation as
 provenance. If a standard SDSS `wdisp` column is present, Spyctres preserves it
 with `lsf_source="sdss_wdisp_not_applied"` and can attach an opt-in tabulated

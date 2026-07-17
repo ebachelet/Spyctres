@@ -95,6 +95,17 @@ def annotate_nonstellar_features(
         names=feature_names,
         padding_A=padding_A,
     )
+    overlaps, fitted_overlap_available = _attach_fitted_pixel_overlap(
+        spectrum,
+        result,
+        overlaps,
+    )
+    active_overlaps = [
+        item
+        for item in overlaps
+        if item.get("fitted_pixel_overlap", True)
+        or not item.get("fitted_pixel_overlap_available", False)
+    ]
     action = (
         "masked"
         if policy == "mask_known"
@@ -107,10 +118,10 @@ def annotate_nonstellar_features(
         feature["mask_applied"] = bool(policy == "mask_known")
         feature.setdefault("residual_detection", None)
 
-    overlap_diagnostics = _nonstellar_overlap_diagnostics(overlaps)
+    overlap_diagnostics = _nonstellar_overlap_diagnostics(active_overlaps)
     frame_warnings = _nonstellar_frame_warnings(
         spectrum,
-        overlaps,
+        active_overlaps,
         assumed_ism_rv_kms=assumed_ism_rv_kms,
     )
     payload = {
@@ -128,12 +139,17 @@ def annotate_nonstellar_features(
             "data wavelength grid; no observer/barycentric/stellar-rest frame "
             "transformation is applied implicitly."
         ),
+        "overlap_basis": (
+            "fitted_pixels"
+            if fitted_overlap_available
+            else "loaded_valid_segment_pixels"
+        ),
         "features": overlaps,
         "overlap_diagnostics": overlap_diagnostics,
         "frame_warnings": frame_warnings,
     }
     result.summary["nonstellar_features"] = payload
-    if overlaps and policy != "ignore":
+    if active_overlaps and policy != "ignore":
         add_quality_flag(result, "nonstellar_feature_overlap")
         if policy == "mask_known":
             add_quality_flag(result, "nonstellar_mask_applied")
@@ -145,7 +161,7 @@ def annotate_nonstellar_features(
                 if item.get("flag") == "dib_overlap_balmer_wing":
                     add_quality_flag(result, "dib_overlap_balmer_wing")
         if verbose:
-            names = ", ".join(item["name"] for item in overlaps)
+            names = ", ".join(item["name"] for item in active_overlaps)
             user_action = (
                 "masked" if policy == "mask_known" else "shown but not masked"
             )
@@ -174,12 +190,72 @@ def annotate_nonstellar_features(
         names = ", ".join(item["name"] for item in overlaps)
         print(
             "\nNote: non-stellar feature overlap was detected but ignored by "
-            "policy: {0}. Provenance is still recorded in the result JSON.".format(
-                names
-            ),
+            "policy or falls outside fitted pixels: {0}. Provenance is still "
+            "recorded in the result JSON.".format(names),
             flush=True,
         )
     return payload
+
+
+def _attach_fitted_pixel_overlap(spectrum, result, overlaps):
+    segments = _coerce_segments(spectrum)
+    used_masks = tuple(getattr(result, "used_masks", ()) or ())
+    fitted_overlap_available = len(used_masks) == len(segments) and len(segments) > 0
+    if not fitted_overlap_available:
+        for feature in overlaps:
+            feature["fitted_pixel_overlap_available"] = False
+        return overlaps, False
+
+    out = []
+    for feature in overlaps:
+        wmin, wmax = feature.get("region_A", (None, None))
+        if wmin is None or wmax is None:
+            item = dict(feature)
+            item["fitted_pixel_overlap_available"] = True
+            item["fitted_pixel_overlap"] = False
+            item["fitted_pixel_overlap_pixels"] = 0
+            item["fitted_segment_overlaps"] = []
+            out.append(item)
+            continue
+        fitted_pixels = 0
+        fitted_segment_overlaps = []
+        for index, (segment, used_mask) in enumerate(zip(segments, used_masks)):
+            wave = np.asarray(segment.wave, dtype=float)
+            used = np.asarray(used_mask, dtype=bool)
+            if used.shape != wave.shape:
+                fitted_overlap_available = False
+                break
+            in_feature = (
+                used
+                & np.isfinite(wave)
+                & (wave >= float(wmin))
+                & (wave <= float(wmax))
+            )
+            n = int(np.count_nonzero(in_feature))
+            if n:
+                fitted_segment_overlaps.append(
+                    {
+                        "segment": getattr(segment, "name", None),
+                        "segment_index": int(index),
+                        "fitted_pixel_overlap_pixels": n,
+                    }
+                )
+            fitted_pixels += n
+        item = dict(feature)
+        item["fitted_pixel_overlap_available"] = fitted_overlap_available
+        item["fitted_pixel_overlap"] = bool(
+            fitted_overlap_available and fitted_pixels > 0
+        )
+        item["fitted_pixel_overlap_pixels"] = int(fitted_pixels)
+        item["fitted_segment_overlaps"] = fitted_segment_overlaps
+        out.append(item)
+    if not fitted_overlap_available:
+        for item in out:
+            item["fitted_pixel_overlap_available"] = False
+            item.pop("fitted_pixel_overlap", None)
+            item.pop("fitted_pixel_overlap_pixels", None)
+            item.pop("fitted_segment_overlaps", None)
+    return out, fitted_overlap_available
 
 
 def _nonstellar_overlap_diagnostics(overlaps):

@@ -3,6 +3,8 @@ import numpy as np
 from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegment
 from Spyctres.recipes import sdss_quicklook_resolution_assumption
 from Spyctres.preprocessing import (
+    archive_exclusion_masks,
+    archive_mask_catalog,
     artifact_exclusion_mask_from_segment,
     audit_spectrum_for_fit,
 )
@@ -211,3 +213,65 @@ def test_audit_warns_when_sdss_wdisp_is_present_but_constant_r_is_used():
     lsf = audit["segments"][0]["metadata"]["lsf_provenance"]
     assert lsf["lsf_source"] == "sdss_wdisp_not_applied"
     assert lsf["active_lsf_convolution"] is False
+
+
+def test_archive_mask_catalog_is_explicit_and_opt_in():
+    catalog = archive_mask_catalog("uves_pop")
+    masks = archive_exclusion_masks("uves_pop")
+
+    assert any(item["id"] == "uves_pop_flag_flattening_5760_5840" for item in catalog)
+    assert len(masks) == len(catalog)
+    assert masks[0].metadata["automatic_reader_default"] is False
+
+
+def test_audit_records_archive_mask_overlap_without_applying_it():
+    segment = SpectrumSegment(
+        wave=[5750.0, 5775.0, 5800.0, 5850.0],
+        flux=[1.0, 1.1, 1.2, 1.3],
+        err=[0.1, 0.1, 0.1, 0.1],
+        wave_medium="air",
+        observer_frame="heliocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=80000.0),
+        meta={"archive_mask_catalog": archive_mask_catalog("uves_pop")},
+    )
+
+    audit = audit_spectrum_for_fit(segment, fit_windows=[(5700.0, 5900.0)])
+
+    assert "archive_mask_overlap_inside_fit_window" in audit["interpretation_flags"]
+    assert "archive_mask_fraction_high" in audit["interpretation_flags"]
+    summary = audit["segments"][0]["archive_mask_summary"]
+    assert summary["n_pixels_inside_catalog_regions"] >= 2
+    assert summary["masks_applied"] == []
+    assert "uves_pop_flag_flattening_5760_5840" in summary["masks_not_applied"]
+
+
+def test_audit_archive_mask_application_removes_fit_overlap_blocking_flags():
+    segment = SpectrumSegment(
+        wave=[5750.0, 5775.0, 5800.0, 5850.0],
+        flux=[1.0, 1.1, 1.2, 1.3],
+        err=[0.1, 0.1, 0.1, 0.1],
+        wave_medium="air",
+        observer_frame="heliocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=80000.0),
+        meta={"archive_mask_catalog": archive_mask_catalog("uves_pop")},
+    )
+    masks = archive_exclusion_masks("uves_pop")
+
+    audit = audit_spectrum_for_fit(
+        segment,
+        fit_windows=[(5700.0, 5900.0)],
+        exclude_masks=masks,
+    )
+
+    assert "archive_mask_overlap_inside_fit_window" not in audit["interpretation_flags"]
+    assert "archive_mask_fraction_high" not in audit["interpretation_flags"]
+    assert audit["n_fit_candidate"] < audit["n_inside_fit_window"]
+    summary = audit["segments"][0]["archive_mask_summary"]
+    assert summary["n_pixels_inside_catalog_regions"] >= 2
+    assert summary["n_fit_candidate_pixels_inside_catalog_regions"] == 0
+    mask_provenance = audit["segments"][0]["metadata"]["mask_provenance"]
+    assert "archive:uves_pop_flag_flattening_5760_5840" in mask_provenance[
+        "settings"
+    ]["exclude_masks"]

@@ -56,7 +56,10 @@ from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
-from Spyctres.preprocessing import audit_spectrum_for_fit
+from Spyctres.preprocessing import (
+    archive_exclusion_masks_for_segment,
+    audit_spectrum_for_fit,
+)
 
 
 EXAMPLE_UVB = (
@@ -113,6 +116,26 @@ def build_parser():
         "--instrument",
         default="xshooter",
         help="Registered Spyctres reader name. Default: xshooter.",
+    )
+    parser.add_argument(
+        "--sdss-mask-policy",
+        choices=("auto", "ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
+        default="auto",
+        help=(
+            "SDSS reader bitmask policy. 'auto' uses stellar_strict for this "
+            "PHOENIX fitting example; non-SDSS instruments ignore this option."
+        ),
+    )
+    parser.add_argument(
+        "--archive-mask-policy",
+        choices=("apply", "warn", "ignore"),
+        default="apply",
+        help=(
+            "How to handle recognized archive/product bad-region catalogs. "
+            "'apply' excludes them as named fit masks and records provenance; "
+            "'warn' leaves them fitted but skip-risky refinement will block; "
+            "'ignore' leaves them fitted and records an explicit override."
+        ),
     )
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
@@ -174,13 +197,15 @@ def build_parser():
     parser.add_argument(
         "--refine-quality-policy",
         choices=("always", "skip-risky"),
-        default="always",
+        default="skip-risky",
         help=(
-            "Refinement gate after the quick scan. 'always' preserves the old "
-            "throughput example behavior. 'skip-risky' records the quicklook "
-            "result but skips the expensive refinement when spectrum readiness "
-            "flags indicate missing frame/resolution assumptions, obvious "
-            "artifacts, no fitted pixels, or undersampled LSF."
+            "Refinement gate after the quick scan. Default: skip-risky. "
+            "'skip-risky' records the quicklook result but skips the expensive "
+            "refinement when spectrum readiness or quick-result quality flags "
+            "indicate missing frame/resolution assumptions, obvious artifacts, "
+            "archive bad-region overlap, no fitted pixels, undersampled LSF, "
+            "or poor preliminary fit quality. Use 'always' to force the older "
+            "throughput-oriented behavior."
         ),
     )
     parser.add_argument("--quick-max-nfev", type=int, default=45)
@@ -306,13 +331,18 @@ def _atomic_write_summary_csv(path, payload):
         "target_id",
         "path",
         "status",
+        "refinement_skipped_reason",
         "fit_ready",
+        "quicklook_only",
         "readiness_flags",
         "readiness_fit_pixels",
         "outside_fit_window_fraction",
         "rejected_inside_fit_window_fraction",
         "resolution_source",
         "assumed_resolution_R",
+        "archive_mask_policy",
+        "archive_masks_applied",
+        "archive_mask_count",
         "teff",
         "feh",
         "logg",
@@ -343,7 +373,14 @@ def _atomic_write_summary_csv(path, payload):
                         "target_id": item.get("target_id"),
                         "path": item.get("path"),
                         "status": item.get("status"),
+                        "refinement_skipped_reason": ",".join(
+                            str(reason)
+                            for reason in (
+                                item.get("refinement_skipped_reason") or []
+                            )
+                        ),
                         "fit_ready": readiness.get("fit_ready"),
+                        "quicklook_only": readiness.get("quicklook_only"),
                         "readiness_flags": ",".join(
                             str(flag)
                             for flag in (readiness.get("interpretation_flags") or [])
@@ -361,6 +398,15 @@ def _atomic_write_summary_csv(path, payload):
                         "assumed_resolution_R": resolution_assumption.get(
                             "assumed_resolution_R"
                         ),
+                        "archive_mask_policy": (
+                            item.get("archive_mask_policy") or {}
+                        ).get("policy"),
+                        "archive_masks_applied": (
+                            item.get("archive_mask_policy") or {}
+                        ).get("applied"),
+                        "archive_mask_count": (
+                            item.get("archive_mask_policy") or {}
+                        ).get("recognized_mask_count"),
                         "teff": primary.get("teff"),
                         "feh": primary.get("feh"),
                         "logg": primary.get("logg"),
@@ -483,6 +529,16 @@ def _input_records(args):
     ]
 
 
+def _reader_kwargs_for_instrument(instrument, args):
+    instrument = str(instrument or "").strip().lower()
+    if instrument not in {"sdss", "sdss_spec", "segue"}:
+        return {}
+    policy = args.sdss_mask_policy
+    if policy == "auto":
+        policy = "stellar_strict"
+    return {"sdss_mask_policy": policy}
+
+
 def _args_for_record(args, record):
     values = vars(args).copy()
     values["instrument"] = record.get("instrument") or args.instrument
@@ -502,6 +558,46 @@ def _record_target_id(record):
 def _target_id(path):
     """Stable checkpoint identifier for local batch processing."""
     return os.path.abspath(os.path.expanduser(os.fspath(path)))
+
+
+def _coerce_segments(spectrum):
+    if hasattr(spectrum, "segments"):
+        return list(spectrum.segments)
+    if isinstance(spectrum, (list, tuple)):
+        return list(spectrum)
+    return [spectrum]
+
+
+def _archive_masks_by_segment(spectrum):
+    out = {}
+    for index, segment in enumerate(_coerce_segments(spectrum)):
+        masks = archive_exclusion_masks_for_segment(segment)
+        if masks:
+            out[index] = masks
+    return out
+
+
+def _fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy):
+    fit_kwargs = dict(fit_kwargs)
+    if policy != "apply" or not archive_masks:
+        return fit_kwargs
+    existing = fit_kwargs.get("exclude_masks")
+    if existing is None:
+        fit_kwargs["exclude_masks"] = dict(archive_masks)
+        return fit_kwargs
+    merged = dict(archive_masks)
+    if isinstance(existing, dict):
+        for key, value in existing.items():
+            current = list(merged.get(key, []) or [])
+            current.extend(list(value if isinstance(value, (list, tuple)) else [value]))
+            merged[key] = current
+    else:
+        for key in list(merged):
+            current = list(merged[key])
+            current.extend(list(existing if isinstance(existing, (list, tuple)) else [existing]))
+            merged[key] = current
+    fit_kwargs["exclude_masks"] = merged
+    return fit_kwargs
 
 
 def _result_payload(result):
@@ -627,6 +723,8 @@ def _run_configuration(args, records):
         "refine_defaults_mode": args.refine_defaults_mode,
         "refine_window": args.refine_window,
         "refine_quality_policy": args.refine_quality_policy,
+        "archive_mask_policy": args.archive_mask_policy,
+        "sdss_mask_policy": args.sdss_mask_policy,
         "quick_max_nfev": int(args.quick_max_nfev),
         "refine_max_nfev": int(args.refine_max_nfev),
         "quick_rv_grid_n": int(args.quick_rv_grid_n),
@@ -664,10 +762,36 @@ REFINE_READINESS_BLOCK_FLAGS = {
     "stellar_rest_status_unknown",
     "artifact_review_required",
     "lsf_undersampled",
+    "archive_mask_fraction_high",
+    "archive_mask_overlap_inside_fit_window",
 }
 
 
-def should_refine_after_quicklook(readiness, quick_result, policy="always"):
+REFINE_RESULT_BLOCK_FLAGS = {
+    "high_chi2",
+    "structured_residuals",
+    "fit_bound_hit",
+    "grid_edge_teff",
+    "grid_edge_logg",
+    "grid_edge_feh",
+    "metadata_incomplete",
+    "resolution_missing",
+    "fallback_errors_used",
+    "rv_interpretation_ambiguous",
+    "continuum_mismatch",
+    "artifact_fraction_high",
+    "archive_mask_fraction_high",
+    "too_few_fit_pixels",
+    "known_line_region_residual",
+}
+
+
+def should_refine_after_quicklook(
+    readiness,
+    quick_result,
+    policy="always",
+    archive_mask_policy="apply",
+):
     """Return ``(should_refine, reasons)`` for the optional refinement gate."""
     policy = str(policy).strip().lower()
     if policy == "always":
@@ -675,11 +799,21 @@ def should_refine_after_quicklook(readiness, quick_result, policy="always"):
     if policy != "skip-risky":
         raise ValueError("policy must be 'always' or 'skip-risky'.")
     flags = set(readiness.get("interpretation_flags") or [])
+    if str(archive_mask_policy).strip().lower() == "ignore":
+        flags -= {
+            "archive_mask_fraction_high",
+            "archive_mask_overlap_inside_fit_window",
+        }
     reasons = sorted(flags & REFINE_READINESS_BLOCK_FLAGS)
     if not readiness.get("fit_ready", False):
         reasons.append("readiness_fit_ready_false")
     if not quick_result.get("success", False):
         reasons.append("quick_fit_not_successful")
+    result_flags = set(quick_result.get("quality_flags") or [])
+    reasons.extend(
+        "quick_result:{0}".format(flag)
+        for flag in sorted(result_flags & REFINE_RESULT_BLOCK_FLAGS)
+    )
     return len(reasons) == 0, sorted(set(reasons))
 
 
@@ -692,7 +826,29 @@ def _fit_one(record, args, phoenix_lib):
     # Ingestion is intentionally separate from fitting: each reader normalizes
     # an instrument product into Spyctres' common spectrum container.
     print("Reading spectrum: {0}".format(path), flush=True)
-    spectrum = read_spectrum(path, instrument=local_args.instrument)
+    reader_kwargs = _reader_kwargs_for_instrument(local_args.instrument, local_args)
+    if reader_kwargs:
+        print(
+            "  Reader options: {0}".format(
+                ", ".join("{0}={1}".format(k, v) for k, v in reader_kwargs.items())
+            ),
+            flush=True,
+        )
+    spectrum = read_spectrum(
+        path,
+        instrument=local_args.instrument,
+        **reader_kwargs,
+    )
+    archive_masks = _archive_masks_by_segment(spectrum)
+    if archive_masks:
+        n_archive_masks = sum(len(value) for value in archive_masks.values())
+        print(
+            "  Archive mask policy: {0} ({1} recognized archive mask region(s)).".format(
+                local_args.archive_mask_policy,
+                n_archive_masks,
+            ),
+            flush=True,
+        )
     quick_fit_kwargs, quick_suggestion = prepare_phoenix_fit_kwargs(
         spectrum,
         auto_defaults=True,
@@ -704,9 +860,15 @@ def _fit_one(record, args, phoenix_lib):
         },
         resolution_R=local_args.resolution_R,
     )
+    quick_fit_kwargs = _fit_kwargs_with_archive_policy(
+        quick_fit_kwargs,
+        archive_masks,
+        local_args.archive_mask_policy,
+    )
     readiness = audit_spectrum_for_fit(
         spectrum,
         fit_windows=quick_fit_kwargs.get("regions"),
+        exclude_masks=quick_fit_kwargs.get("exclude_masks"),
         intended_use="batch_quick_scan_classification",
         assumed_resolution=_assumed_resolution_for_audit(local_args),
     )
@@ -759,6 +921,14 @@ def _fit_one(record, args, phoenix_lib):
         "instrument": local_args.instrument,
         "status": "quick_ok" if args.quick_only else "quick_complete",
         "spectrum_readiness": readiness,
+        "archive_mask_policy": {
+            "policy": local_args.archive_mask_policy,
+            "recognized_mask_count": int(
+                sum(len(value) for value in archive_masks.values())
+            ),
+            "applied": bool(local_args.archive_mask_policy == "apply"),
+        },
+        "reader_options": reader_kwargs,
         "quick_seconds": float(quick_seconds),
         "quick_result": _brief_result(quick_result),
         "quick_result_full": _result_payload(quick_result),
@@ -787,6 +957,7 @@ def _fit_one(record, args, phoenix_lib):
         readiness,
         record["quick_result"],
         policy=args.refine_quality_policy,
+        archive_mask_policy=local_args.archive_mask_policy,
     )
     if not should_refine:
         record.update(
@@ -811,6 +982,11 @@ def _fit_one(record, args, phoenix_lib):
         quick_result,
         quick_fit_kwargs,
         local_args,
+    )
+    refine_fit_kwargs = _fit_kwargs_with_archive_policy(
+        refine_fit_kwargs,
+        archive_masks,
+        local_args.archive_mask_policy,
     )
     refine_start = time.perf_counter()
     refined_result = fit_stellar_spectrum(

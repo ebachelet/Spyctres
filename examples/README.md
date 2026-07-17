@@ -71,9 +71,11 @@ fit proceeds with an explicit constant-R quicklook assumption instead. For a
 quick visual classification pass on your own SDSS file, `--R 2000` is a
 reasonable explicit approximation to try, but it is not precision SDSS LSF
 modelling and fitted line widths should not be interpreted as calibrated
-instrumental-broadening measurements. No SDSS spectra are currently bundled in
-`examples/data/`, so the reproducible examples below use the packaged
-X-SHOOTER, FLOYDS, PEPSI, and XSL files.
+instrumental-broadening measurements. The fitting examples use
+`--sdss-mask-policy stellar_strict` when `--sdss-mask-policy auto` is left in
+place, while the generic SDSS reader default remains `and_mask_conservative`.
+No SDSS spectra are currently bundled in `examples/data/`, so the reproducible
+examples below use the packaged X-SHOOTER, FLOYDS, PEPSI, and XSL files.
 
 ## Example 2: batch quick scan, then focused refinement
 
@@ -154,11 +156,17 @@ python examples/batch_quickscan_then_refine.py \
   --resume
 ```
 
-Add `--refine-quality-policy skip-risky` when you want the example to stop
-after the quicklook pass for targets whose pre-fit readiness audit flags
-missing frame/resolution assumptions, obvious artifact signatures, no fitted
-pixels, or undersampled LSF. The default is still `always`, which preserves the
-original throughput demonstration.
+By default, the example uses `--archive-mask-policy apply` and
+`--refine-quality-policy skip-risky`: recognized archive/product bad regions
+are excluded as named masks with provenance, and the more expensive refinement
+is skipped for targets whose pre-fit readiness audit or quick-result quality
+flags still indicate missing frame/resolution assumptions, unapplied archive
+bad-region overlap, obvious artifact signatures, no fitted pixels,
+undersampled LSF, high chi-square, or structured residuals. Use
+`--archive-mask-policy warn` to inspect the effect without applying archive
+masks, `--archive-mask-policy ignore` only as an explicit expert override, and
+`--refine-quality-policy always` only when you deliberately want the older
+throughput-oriented behavior for inspection.
 
 The script loads the PHOENIX library once, then for each spectrum:
 

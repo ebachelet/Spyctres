@@ -80,13 +80,15 @@ def test_uves_pop_ascii_auto_detects_nm_and_does_not_assume_error(tmp_path):
     assert segment.err is None
     assert np.array_equal(segment.mask, [True, True])
     assert segment.wave_medium == "unknown"
-    assert segment.observer_frame == "unknown"
+    assert segment.observer_frame == "heliocentric"
     assert segment.stellar_rest_status == "unknown"
     assert isinstance(segment.resolution, ResolutionDescriptor)
     assert segment.resolution.quantity == "R"
     assert segment.resolution.value == pytest.approx(80000.0)
     assert segment.meta["uves_pop_reader"]["third_column_assumed_error"] is False
     assert segment.meta["wave_unit_input"] == "nm"
+    assert segment.meta["fit_readiness_role"] == "quicklook_only_without_formal_errors"
+    assert segment.meta["archive_mask_summary"]["masks_available"] is True
 
 
 def test_uves_pop_ascii_angstrom_and_requested_error_column(tmp_path):
@@ -104,6 +106,10 @@ def test_uves_pop_ascii_angstrom_and_requested_error_column(tmp_path):
     assert np.allclose(segment.err, [0.02, 0.03])
     assert segment.meta["uves_pop_reader"]["err_column"] == 2
     assert segment.meta["wave_unit_input"] == "angstrom"
+    assert (
+        segment.meta["fit_readiness_role"]
+        == "fit_candidate_if_archive_metadata_verified"
+    )
 
 
 def test_sdss_spec_reads_loglam_flux_ivar_and_and_mask(tmp_path):
@@ -134,6 +140,7 @@ def test_sdss_spec_reads_loglam_flux_ivar_and_and_mask(tmp_path):
     assert segment.meta["redshift"] == pytest.approx(0.0123)
     assert segment.meta["sdss_mask_policy"]["ivar_positive_required"] is True
     assert segment.meta["sdss_mask_policy"]["and_mask_zero_required"] is True
+    assert segment.meta["sdss_mask_policy"]["name"] == "and_mask_conservative"
 
 
 def test_sdss_spec_can_ignore_and_mask_but_keeps_ivar_polarity(tmp_path):
@@ -153,6 +160,7 @@ def test_sdss_spec_can_ignore_and_mask_but_keeps_ivar_polarity(tmp_path):
     assert np.allclose(segment.err[[0, 2]], [1.0, 0.5])
     assert np.isnan(segment.err[1])
     assert segment.meta["sdss_mask_policy"]["and_mask_zero_required"] is False
+    assert segment.meta["sdss_mask_policy"]["name"] == "ivar_only"
 
 
 def test_sdss_spec_preserves_specobj_metadata_when_not_in_primary_header(tmp_path):

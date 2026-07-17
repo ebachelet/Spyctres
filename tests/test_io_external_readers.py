@@ -10,7 +10,7 @@ from Spyctres.io import (
 )
 
 
-def _write_sdss_spec(path, wave_A, flux, ivar, and_mask, wdisp=None):
+def _write_sdss_spec(path, wave_A, flux, ivar, and_mask, wdisp=None, or_mask=None):
     columns = [
         fits.Column(name="loglam", format="D", array=np.log10(wave_A)),
         fits.Column(name="flux", format="D", array=np.asarray(flux, dtype=float)),
@@ -20,6 +20,10 @@ def _write_sdss_spec(path, wave_A, flux, ivar, and_mask, wdisp=None):
     if wdisp is not None:
         columns.append(
             fits.Column(name="wdisp", format="D", array=np.asarray(wdisp, dtype=float))
+        )
+    if or_mask is not None:
+        columns.append(
+            fits.Column(name="or_mask", format="J", array=np.asarray(or_mask, dtype=np.int32))
         )
     fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU.from_columns(columns)]).writeto(
         path
@@ -91,14 +95,18 @@ def test_uves_pop_metadata_records_unknown_frames_and_nominal_resolution(tmp_pat
     segment = read_uves_pop_ascii(path)
 
     assert segment.wave_medium == "unknown"
-    assert segment.observer_frame == "unknown"
+    assert segment.observer_frame == "heliocentric"
     assert segment.stellar_rest_status == "unknown"
     assert segment.meta["wave_medium"] == "unknown"
-    assert segment.meta["observer_frame"] == "unknown"
+    assert segment.meta["observer_frame"] == "heliocentric"
     assert segment.meta["stellar_rest_status"] == "unknown"
     assert segment.resolution.quantity == "R"
     assert segment.resolution.value == pytest.approx(80000.0)
     assert "Nominal UVES-POP" in segment.meta["resolution_note"]
+    assert segment.meta["fit_readiness_role"] == "quicklook_only_without_formal_errors"
+    assert segment.meta["archive_mask_summary"]["masks_available"] is True
+    assert segment.meta["archive_mask_summary"]["masks_applied"] == []
+    assert "uves_pop_flag_flattening_5760_5840" in segment.meta["archive_mask_summary"]["masks_not_applied"]
 
 
 def test_sdss_spec_loglam_ivar_and_default_and_mask_policy(tmp_path):
@@ -122,6 +130,8 @@ def test_sdss_spec_loglam_ivar_and_default_and_mask_policy(tmp_path):
     assert np.array_equal(segment.mask, [True, False, False, True])
     assert segment.meta["sdss_mask_policy"]["ivar_positive_required"] is True
     assert segment.meta["sdss_mask_policy"]["and_mask_zero_required"] is True
+    assert segment.meta["sdss_mask_policy"]["name"] == "and_mask_conservative"
+    assert segment.meta["sdss_mask_policy"]["rejection_counts"]["n_used"] == 2
 
 
 def test_sdss_spec_no_and_mask_option_keeps_and_masked_pixel(tmp_path):
@@ -139,6 +149,30 @@ def test_sdss_spec_no_and_mask_option_keeps_and_masked_pixel(tmp_path):
 
     assert np.array_equal(segment.mask, [True, False, True])
     assert segment.meta["sdss_mask_policy"]["and_mask_zero_required"] is False
+    assert segment.meta["sdss_mask_policy"]["name"] == "ivar_only"
+
+
+def test_sdss_spec_strict_policy_uses_or_mask_when_present(tmp_path):
+    path = tmp_path / "spec-strict-mask.fits"
+    wave = np.array([5100.0, 5101.0, 5102.0])
+    _write_sdss_spec(
+        path,
+        wave_A=wave,
+        flux=[1.0, 1.1, 1.2],
+        ivar=[1.0, 1.0, 1.0],
+        and_mask=[0, 0, 1],
+        or_mask=[0, 1, 0],
+    )
+
+    segment = read_sdss_spec(path, sdss_mask_policy="stellar_strict")
+
+    assert np.array_equal(segment.mask, [True, False, False])
+    policy = segment.meta["sdss_mask_policy"]
+    assert policy["name"] == "stellar_strict"
+    assert policy["and_mask_zero_required"] is True
+    assert policy["or_mask_zero_required"] is True
+    assert policy["rejection_counts"]["n_rejected_and_mask_nonzero"] == 1
+    assert policy["rejection_counts"]["n_rejected_or_mask_nonzero"] == 1
 
 
 def test_sdss_spec_metadata_records_wavelength_and_frame_semantics(tmp_path):
