@@ -22,7 +22,6 @@ setup(
         'setuptools<81',
     ],
     python_requires='>=3.12,<4',
-    test_suite="nose.collector",
     classifiers=[
 		'Development Status :: 5 - Production/Stable',
 		'Intended Audience :: Developers',
