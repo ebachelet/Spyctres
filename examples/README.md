@@ -525,6 +525,8 @@ provenance. It does not normalize, resample, or merge the uploaded spectrum.
 To add a new instrument:
 - add a new reader function in `Spyctres/io.py`
 - make that function return a `SpectrumSegment`
-- register the reader under one or more aliases in the read_spectrum registry
+- register the reader under one or more aliases in the read_spectrum registry,
+  including a short `InstrumentInfo` description so users can inspect the
+  reader assumptions with `list_instruments()` and `get_instrument_info()`
 
 Instrument-specific I/O belongs in `Spyctres/io.py`, while the fitter itself operates on generic `SpectrumSegment` objects.

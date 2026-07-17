@@ -7,6 +7,7 @@ from astropy.io import fits
 from Spyctres.fitting import _resolve_segment_fwhm_kms
 from Spyctres.io import (
     COMMON_SPECTRUM_SCHEMA_VERSION,
+    InstrumentInfo,
     READERS,
     ResolutionDescriptor,
     SpectrumCollection,
@@ -14,6 +15,8 @@ from Spyctres.io import (
     canonicalize_segment,
     concatenate_segments,
     coerce_spectrum,
+    get_instrument_info,
+    list_instruments,
     pepsi_ssbvel_correction_kms,
     read_pepsi_nor,
     read_xsl_dr3,
@@ -77,6 +80,42 @@ def test_observer_and_stellar_rest_frames_are_independent():
     assert segment.stellar_rv_applied_kms == pytest.approx(31.25)
 
 
+def test_segment_transformations_preserve_metadata_and_resolution():
+    resolution = ResolutionDescriptor(quantity="R", value=9000.0, source="test")
+    segment = SpectrumSegment(
+        wave=[5002.0, 5000.0, 5001.0],
+        flux=[1.2, 1.0, 1.1],
+        err=[0.12, 0.10, 0.11],
+        mask=[True, False, True],
+        meta={"source_id": "abc", "nested": {"kept": True}},
+        wave_medium="air",
+        wave_frame="stellar_rest",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        stellar_rv_applied_kms=17.5,
+        resolution=resolution,
+        name="demo",
+    )
+
+    sorted_segment = segment.sorted()
+    subset = sorted_segment.subset([False, True, True], name_suffix="sub")
+    window = sorted_segment.window(wmin=5000.0, wmax=5001.0, name="window")
+    shifted = window.with_wave([6000.0, 6001.0], wave_medium="vacuum")
+
+    for transformed in (sorted_segment, subset, window, shifted):
+        assert transformed.meta["source_id"] == "abc"
+        assert transformed.meta["nested"] == {"kept": True}
+        assert transformed.wave_frame == "stellar_rest"
+        assert transformed.observer_frame == "barycentric"
+        assert transformed.stellar_rest_status == "corrected"
+        assert transformed.stellar_rv_applied_kms == pytest.approx(17.5)
+        assert transformed.resolution is resolution
+
+    assert subset.name == "demo_sub"
+    assert window.name == "window"
+    assert shifted.wave_medium == "vacuum"
+
+
 def test_legacy_wave_frame_copy_updates_new_frame_axes():
     segment = SpectrumSegment([5000.0, 5001.0], [1.0, 1.0])
 
@@ -109,6 +148,45 @@ def test_resolution_descriptor_supports_constant_and_tabulated_lsf():
     assert copied.resolution is constant
     assert tabulated.to_metadata()["values"] == [13.0, 11.0, 16.0]
     assert _resolve_segment_fwhm_kms(segment) == pytest.approx(29.9792458)
+
+
+def test_instrument_registry_lists_canonical_names_and_aliases():
+    canonical = list_instruments()
+    aliases = list_instruments(include_aliases=True)
+
+    assert {
+        "pepsi",
+        "xsl",
+        "xshooter",
+        "floyds",
+        "gemini",
+        "uves_pop",
+        "sdss",
+    } <= set(canonical)
+    assert {"x-shooter", "uves-pop", "segue", "pepsi_nor"} <= set(aliases)
+
+    info = get_instrument_info("x-shooter")
+    assert isinstance(info, InstrumentInfo)
+    assert info.canonical_name == "xshooter"
+    assert "x-shooter" in info.aliases
+    assert info.default_wave_medium == "air"
+    assert info.default_observer_frame == "topocentric"
+
+    metadata = info.to_metadata()
+    assert metadata["reader_function"] == "read_xshooter_1d"
+    assert metadata["canonical_name"] == "xshooter"
+    assert "aliases" in metadata
+
+
+def test_instrument_registry_error_uses_human_readable_lists():
+    with pytest.raises(ValueError) as caught:
+        get_instrument_info("not_a_reader")
+
+    message = str(caught.value)
+    assert "Supported instruments:" in message
+    assert "Accepted aliases:" in message
+    assert "xshooter" in message
+    assert "x-shooter" in message
 
 
 def test_current_fitter_rejects_recorded_variable_lsf_clearly():
@@ -157,6 +235,47 @@ def test_concatenate_segments_rejects_overlapping_ranges():
 
     with pytest.raises(ValueError, match="SpectrumCollection"):
         concatenate_segments([first, second])
+
+
+def test_concatenate_segments_preserves_shared_frame_state_and_resolution():
+    resolution = ResolutionDescriptor(quantity="fwhm_kms", value=42.0)
+    first = SpectrumSegment(
+        [5000.0, 5001.0],
+        [1.0, 1.0],
+        err=[0.1, 0.1],
+        wave_medium="vacuum",
+        wave_frame="stellar_rest",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        stellar_rv_applied_kms=12.0,
+        resolution=resolution,
+        name="first",
+    )
+    second = SpectrumSegment(
+        [5100.0, 5101.0],
+        [1.0, 1.0],
+        err=[0.1, 0.1],
+        wave_medium="vacuum",
+        wave_frame="stellar_rest",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        stellar_rv_applied_kms=12.0,
+        resolution=resolution,
+        name="second",
+    )
+
+    merged = concatenate_segments([second, first], name="merged")
+
+    assert np.array_equal(merged.wave, [5000.0, 5001.0, 5100.0, 5101.0])
+    assert merged.wave_medium == "vacuum"
+    assert merged.wave_frame == "stellar_rest"
+    assert merged.observer_frame == "barycentric"
+    assert merged.stellar_rest_status == "corrected"
+    assert merged.stellar_rv_applied_kms == pytest.approx(12.0)
+    assert merged.resolution is resolution
+    assert merged.meta["segment_names"] == ["second", "first"]
+    assert merged.meta["observer_frame"] == "barycentric"
+    assert merged.meta["stellar_rest_status"] == "corrected"
 
 
 def test_unknown_semantics_are_allowed_but_warned():

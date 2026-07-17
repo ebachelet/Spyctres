@@ -172,6 +172,7 @@ def test_data_vectors_align_forward_metadata_after_dropping_a_segment():
         err=[0.1, 0.1],
         mask=[False, False],
         name="dropped",
+        meta={"source_id": "drop"},
         resolution=ResolutionDescriptor(quantity="R", value=1000.0),
     )
     second = SpectrumSegment(
@@ -179,7 +180,10 @@ def test_data_vectors_align_forward_metadata_after_dropping_a_segment():
         [1.0, 1.0],
         err=[0.1, 0.1],
         name="second",
+        meta={"source_id": "second"},
         observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        stellar_rv_applied_kms=12.5,
         resolution=ResolutionDescriptor(quantity="R", value=2000.0),
     )
     third = SpectrumSegment(
@@ -187,7 +191,9 @@ def test_data_vectors_align_forward_metadata_after_dropping_a_segment():
         [1.0, 1.0],
         err=[0.1, 0.1],
         name="third",
+        meta={"source_id": "third"},
         observer_frame="heliocentric",
+        stellar_rest_status="observed",
         resolution=ResolutionDescriptor(quantity="R", value=3000.0),
     )
     vectors = _build_data_vectors([dropped, second, third])
@@ -203,7 +209,18 @@ def test_data_vectors_align_forward_metadata_after_dropping_a_segment():
         "barycentric",
         "heliocentric",
     ]
+    assert [segment.meta["source_id"] for segment in forwarded] == [
+        "second",
+        "third",
+    ]
+    assert [segment.stellar_rest_status for segment in forwarded] == [
+        "corrected",
+        "observed",
+    ]
+    assert forwarded[0].stellar_rv_applied_kms == pytest.approx(12.5)
+    assert forwarded[1].stellar_rv_applied_kms is None
     assert [segment.resolution.value for segment in forwarded] == [2000.0, 3000.0]
+    assert [segment.mask.tolist() for segment in forwarded] == [[True, True], [True, True]]
 
 
 def test_forward_segment_alignment_mismatch_is_rejected():

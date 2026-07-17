@@ -63,6 +63,80 @@ def _extract_fits_header_provenance(headers, keys):
 
 
 @dataclass(frozen=True)
+class InstrumentInfo:
+    """Structured metadata for a registered spectrum reader.
+
+    The registry is intentionally descriptive rather than corrective: it tells
+    users what a reader expects and what assumptions it records, but it does not
+    silently convert wavelength frames, apply RV corrections, or invent LSFs.
+    """
+
+    canonical_name: str
+    aliases: tuple
+    reader: object
+    expected_file_type: str = None
+    wavelength_location: str = None
+    flux_column: str = None
+    uncertainty_column: str = None
+    wavelength_unit: str = None
+    default_wave_medium: str = "unknown"
+    default_observer_frame: str = "unknown"
+    default_stellar_rest_status: str = "unknown"
+    flux_state: str = None
+    segment_structure: str = None
+    resolving_power: str = None
+    known_product_quality_masks: tuple = ()
+    required_optional_dependencies: tuple = ()
+    notes: str = None
+
+    def __post_init__(self):
+        canonical = _normalize_instrument_key(self.canonical_name)
+        aliases = tuple(
+            dict.fromkeys(_normalize_instrument_key(alias) for alias in self.aliases)
+        )
+        if not canonical:
+            raise ValueError("InstrumentInfo.canonical_name must be non-empty.")
+        if not aliases:
+            raise ValueError("InstrumentInfo.aliases must be non-empty.")
+        if canonical not in aliases:
+            aliases = (canonical,) + aliases
+        object.__setattr__(self, "canonical_name", canonical)
+        object.__setattr__(self, "aliases", aliases)
+        object.__setattr__(
+            self,
+            "known_product_quality_masks",
+            tuple(self.known_product_quality_masks or ()),
+        )
+        object.__setattr__(
+            self,
+            "required_optional_dependencies",
+            tuple(self.required_optional_dependencies or ()),
+        )
+
+    def to_metadata(self):
+        """Return a JSON-safe dictionary representation."""
+        return {
+            "canonical_name": self.canonical_name,
+            "aliases": list(self.aliases),
+            "reader_function": getattr(self.reader, "__name__", str(self.reader)),
+            "expected_file_type": self.expected_file_type,
+            "wavelength_location": self.wavelength_location,
+            "flux_column": self.flux_column,
+            "uncertainty_column": self.uncertainty_column,
+            "wavelength_unit": self.wavelength_unit,
+            "default_wave_medium": self.default_wave_medium,
+            "default_observer_frame": self.default_observer_frame,
+            "default_stellar_rest_status": self.default_stellar_rest_status,
+            "flux_state": self.flux_state,
+            "segment_structure": self.segment_structure,
+            "resolving_power": self.resolving_power,
+            "known_product_quality_masks": list(self.known_product_quality_masks),
+            "required_optional_dependencies": list(self.required_optional_dependencies),
+            "notes": self.notes,
+        }
+
+
+@dataclass(frozen=True)
 class ResolutionDescriptor:
     """Instrumental-resolution description for a spectrum segment.
 
@@ -783,6 +857,42 @@ def coerce_spectrum(data, **kwargs):
     )
         
         
+def _shared_segment_attribute(segments, attribute, default_if_mixed="unknown"):
+    values = [getattr(segment, attribute, None) for segment in segments]
+    normalized = [
+        "unknown" if value is None else str(value).strip().lower()
+        for value in values
+    ]
+    if len(set(normalized)) == 1:
+        return normalized[0]
+    return default_if_mixed
+
+
+def _shared_stellar_rv_applied_kms(segments):
+    values = [getattr(segment, "stellar_rv_applied_kms", None) for segment in segments]
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        return None
+    first = float(values[0])
+    if all(np.isclose(float(value), first, rtol=0.0, atol=1e-12) for value in values):
+        return first
+    return None
+
+
+def _shared_resolution_descriptor(segments):
+    descriptors = [getattr(segment, "resolution", None) for segment in segments]
+    if all(descriptor is None for descriptor in descriptors):
+        return None
+    if any(descriptor is None for descriptor in descriptors):
+        return None
+    first = descriptors[0]
+    first_meta = first.to_metadata()
+    if all(descriptor.to_metadata() == first_meta for descriptor in descriptors[1:]):
+        return first
+    return None
+
+
 def concatenate_segments(segments, sort=True, name=None, require_disjoint=True):
     """
     Concatenate genuinely disjoint SpectrumSegment objects for export/plotting.
@@ -824,16 +934,25 @@ def concatenate_segments(segments, sort=True, name=None, require_disjoint=True):
 
     mask = np.concatenate([s.mask for s in segments])
 
-    media = {str(s.wave_medium).lower() for s in segments}
-    frames = {str(s.wave_frame).lower() for s in segments}
-    wave_medium = next(iter(media)) if len(media) == 1 else "unknown"
-    wave_frame = next(iter(frames)) if len(frames) == 1 else "unknown"
+    wave_medium = _shared_segment_attribute(segments, "wave_medium")
+    wave_frame = _shared_segment_attribute(segments, "wave_frame")
+    observer_frame = _shared_segment_attribute(segments, "observer_frame")
+    stellar_rest_status = _shared_segment_attribute(
+        segments,
+        "stellar_rest_status",
+    )
+    stellar_rv_applied_kms = _shared_stellar_rv_applied_kms(segments)
+    resolution = _shared_resolution_descriptor(segments)
 
     meta = {
         "n_segments": len(segments),
         "segment_names": [s.name for s in segments],
         "wave_medium": wave_medium,
         "wave_frame": wave_frame,
+        "observer_frame": observer_frame,
+        "stellar_rest_status": stellar_rest_status,
+        "stellar_rv_applied_kms": stellar_rv_applied_kms,
+        "resolution": None if resolution is None else resolution.to_metadata(),
     }
     out = SpectrumSegment(
         wave,
@@ -844,6 +963,10 @@ def concatenate_segments(segments, sort=True, name=None, require_disjoint=True):
         wave_medium=wave_medium,
         wave_frame=wave_frame,
         name=name,
+        observer_frame=observer_frame,
+        stellar_rest_status=stellar_rest_status,
+        stellar_rv_applied_kms=stellar_rv_applied_kms,
+        resolution=resolution,
     )
     return out.sorted() if sort else out
 
@@ -2436,29 +2559,216 @@ def read_sdss_spec(
     
 
 READERS = {}
+INSTRUMENT_REGISTRY = {}
+_ALIAS_TO_INSTRUMENT = {}
 
 
-def register_reader(names, func):
-    """
-    Register one reader function under one or more instrument aliases.
+def _normalize_instrument_key(name):
+    return str(name or "").strip().lower()
+
+
+def register_reader(names, func, **metadata):
+    """Register one reader function under one or more instrument aliases.
+
+    This populates both the legacy ``READERS`` alias map and the structured
+    ``INSTRUMENT_REGISTRY`` used by discoverability helpers.
     """
     if isinstance(names, str):
         names = [names]
+    aliases = tuple(
+        dict.fromkeys(
+            key for key in (_normalize_instrument_key(name) for name in names) if key
+        )
+    )
+    if not aliases:
+        raise ValueError("register_reader requires at least one non-empty alias.")
+    canonical_name = _normalize_instrument_key(
+        metadata.pop("canonical_name", aliases[0])
+    )
+    info = InstrumentInfo(
+        canonical_name=canonical_name,
+        aliases=aliases,
+        reader=func,
+        **metadata,
+    )
+    if canonical_name in INSTRUMENT_REGISTRY:
+        raise ValueError("Instrument {0!r} is already registered.".format(canonical_name))
+    INSTRUMENT_REGISTRY[canonical_name] = info
+    for alias in info.aliases:
+        if alias in READERS:
+            raise ValueError("Instrument alias {0!r} is already registered.".format(alias))
+        READERS[alias] = func
+        _ALIAS_TO_INSTRUMENT[alias] = canonical_name
 
-    for name in names:
-        key = str(name).strip().lower()
-        if not key:
-            continue
-        READERS[key] = func
+
+def list_instruments(include_aliases=False):
+    """Return registered instrument names.
+
+    Parameters
+    ----------
+    include_aliases : bool, optional
+        If ``False`` (default), return canonical instrument names. If ``True``,
+        return all accepted aliases understood by ``read_spectrum``.
+    """
+    if include_aliases:
+        return sorted(READERS)
+    return sorted(INSTRUMENT_REGISTRY)
 
 
-register_reader(["pepsi", "pepsi_nor", "pepsi-1d", "pepsi1d"], read_pepsi_nor)
-register_reader(["xsl", "xsl_dr3", "xsl-dr3"], read_xsl_dr3)
-register_reader(["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"], read_xshooter_1d)
-register_reader(["floyds", "floyds_csv", "lco_floyds"], read_floyds_csv)
-register_reader(["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"], read_gemini_gmos_ascii)
-register_reader(["uves_pop", "uves-pop", "uvespop"], read_uves_pop_ascii)
-register_reader(["sdss", "sdss_spec", "segue"], read_sdss_spec)
+def get_instrument_info(instrument):
+    """Return structured metadata for a registered instrument or alias."""
+    key = _normalize_instrument_key(instrument)
+    canonical = _ALIAS_TO_INSTRUMENT.get(key, key)
+    info = INSTRUMENT_REGISTRY.get(canonical)
+    if info is None:
+        raise ValueError(
+            "Unknown instrument '{0}'. Supported instruments: {1}. "
+            "Accepted aliases: {2}.".format(
+                instrument,
+                ", ".join(list_instruments()),
+                ", ".join(list_instruments(include_aliases=True)),
+            )
+        )
+    return info
+
+
+def _supported_instrument_message():
+    return (
+        "Supported instruments: {0}. Accepted aliases: {1}.".format(
+            ", ".join(list_instruments()),
+            ", ".join(list_instruments(include_aliases=True)),
+        )
+    )
+
+
+register_reader(
+    ["pepsi", "pepsi_nor", "pepsi-1d", "pepsi1d"],
+    read_pepsi_nor,
+    canonical_name="pepsi",
+    expected_file_type="PEPSI .nor FITS binary table",
+    wavelength_location="Arg table column",
+    flux_column="Fun",
+    uncertainty_column="Var",
+    wavelength_unit="profile-dependent",
+    default_wave_medium="profile-dependent or unknown",
+    default_observer_frame="profile-dependent or unknown",
+    default_stellar_rest_status="profile-dependent or unknown",
+    flux_state="continuum-normalized/rectified product",
+    segment_structure="single merged segment",
+    resolving_power="not inferred by reader",
+    notes=(
+        "PEPSI wavelength semantics are release-profile dependent; the .dxt.nor "
+        "suffix alone is not treated as a frame/medium guarantee."
+    ),
+)
+register_reader(
+    ["xsl", "xsl_dr3", "xsl-dr3"],
+    read_xsl_dr3,
+    canonical_name="xsl",
+    expected_file_type="X-shooter Spectral Library DR3 merged FITS table",
+    wavelength_location="WAVE table column",
+    flux_column="FLUX or corrected flux variant",
+    uncertainty_column="ERR",
+    wavelength_unit="nm converted to Angstrom",
+    default_wave_medium="air",
+    default_observer_frame="unknown",
+    default_stellar_rest_status="corrected",
+    flux_state="DR3 merged/scaled full-spectrum flux",
+    segment_structure="effective UVB/VIS/NIR LSF regions",
+    resolving_power="documented sigma_kms per effective region",
+    known_product_quality_masks=("XSL DR3 header provenance recorded",),
+)
+register_reader(
+    ["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"],
+    read_xshooter_1d,
+    canonical_name="xshooter",
+    expected_file_type="merged 1D X-SHOOTER FITS image product",
+    wavelength_location="linear FITS WCS from CRVAL1/CDELT1/CRPIX1",
+    flux_column="selected image HDU",
+    uncertainty_column="ERRDATA image HDU when present",
+    wavelength_unit="header CUNIT1 or nm default",
+    default_wave_medium="air",
+    default_observer_frame="topocentric",
+    default_stellar_rest_status="observed",
+    flux_state="pipeline reduced 1D flux",
+    segment_structure="single arm/product per file",
+    resolving_power="inferred from arm/slit metadata when recognized",
+    known_product_quality_masks=("QUALDATA == 0 when present",),
+)
+register_reader(
+    ["floyds", "floyds_csv", "lco_floyds"],
+    read_floyds_csv,
+    canonical_name="floyds",
+    expected_file_type="reduced FLOYDS ASCII/CSV spectrum",
+    wavelength_location="wavelength-like named column",
+    flux_column="flux-like named column",
+    uncertainty_column="optional error-like named column",
+    wavelength_unit="Angstrom expected",
+    default_wave_medium="unknown",
+    default_observer_frame="unknown",
+    default_stellar_rest_status="unknown",
+    flux_state="reduced 1D spectrum",
+    segment_structure="single segment",
+    resolving_power="nominal quicklook R=500 stored as cautionary metadata",
+)
+register_reader(
+    ["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"],
+    read_gemini_gmos_ascii,
+    canonical_name="gemini",
+    expected_file_type="Gemini/GMOS IRAF wspectext-like ASCII spectrum",
+    wavelength_location="first numeric column",
+    flux_column="second numeric column",
+    uncertainty_column="optional third numeric column",
+    wavelength_unit="Angstrom expected",
+    default_wave_medium="unknown",
+    default_observer_frame="unknown",
+    default_stellar_rest_status="unknown",
+    flux_state="reduced 1D spectrum",
+    segment_structure="single segment",
+    resolving_power="not inferred by reader",
+)
+register_reader(
+    ["uves_pop", "uves-pop", "uvespop"],
+    read_uves_pop_ascii,
+    canonical_name="uves_pop",
+    expected_file_type="UVES-POP two-column or optional-error ASCII spectrum",
+    wavelength_location="column 0",
+    flux_column="column 1",
+    uncertainty_column="only when err_column is explicitly supplied",
+    wavelength_unit="auto: nm if max(wave)<2000, otherwise Angstrom",
+    default_wave_medium="unknown",
+    default_observer_frame="heliocentric",
+    default_stellar_rest_status="unknown",
+    flux_state="UVES-POP atlas flux/normalized product; verify file provenance",
+    segment_structure="single segment",
+    resolving_power="nominal R=80000 stored as cautionary metadata",
+    known_product_quality_masks=("UVES-POP archive gap/flag catalog",),
+)
+register_reader(
+    ["sdss", "sdss_spec", "segue"],
+    read_sdss_spec,
+    canonical_name="sdss",
+    expected_file_type="SDSS/SEGUE spec FITS table",
+    wavelength_location="loglam table column",
+    flux_column="flux",
+    uncertainty_column="ivar converted to 1-sigma error",
+    wavelength_unit="log10(Angstrom), vacuum",
+    default_wave_medium="vacuum",
+    default_observer_frame="heliocentric",
+    default_stellar_rest_status="observed",
+    flux_state="pipeline calibrated spectrum",
+    segment_structure="single coadd segment",
+    resolving_power="wdisp kept as provenance; no reader default R",
+    known_product_quality_masks=(
+        "ivar>0",
+        "and_mask==0",
+        "or_mask==0 in strict policies",
+    ),
+    notes=(
+        "The generic reader default is and_mask_conservative; PHOENIX fitting "
+        "examples recommend stellar_strict for user-supplied SDSS spectra."
+    ),
+)
 
   
 def read_spectrum(
@@ -2484,14 +2794,14 @@ def read_spectrum(
     SpectrumSegment or SpectrumCollection
         Reader output converted to the versioned common spectrum format.
     """
-    inst = (instrument or "").strip().lower()
+    inst = _normalize_instrument_key(instrument)
     func = READERS.get(inst, None)
 
     if func is None:
         raise ValueError(
-            "Unknown instrument '{0}'. Supported: {1}".format(
+            "Unknown instrument '{0}'. {1}".format(
                 instrument,
-                ", ".join(sorted(READERS)),
+                _supported_instrument_message(),
             )
         )
 

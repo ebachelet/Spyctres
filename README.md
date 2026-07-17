@@ -220,10 +220,10 @@ Recommended example order:
 7. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
    line-window validation path.
 
-Other useful entry points include `quick_example.py` for the legacy fitting
-workflow and smoke tests under `scripts/`. See `examples/README.md` for data
-paths, PHOENIX configuration, caveats, and the same recommended order with more
-detail.
+`quick_example.py` is retained only as a compatibility pointer to these
+maintained workflows; smoke tests live under `scripts/`. See
+`examples/README.md` for data paths, PHOENIX configuration, caveats, and the
+same recommended order with more detail.
 
 For batches, start with the X-SHOOTER UVB throughput example:
 
@@ -282,6 +282,32 @@ Current reader coverage includes:
 - SDSS/SEGUE `spec-PLATE-MJD-FIBER` FITS spectra
 
 Readers return a generic `SpectrumSegment` object so that fitting code can remain instrument-agnostic.
+You can inspect the registered reader assumptions from Python:
+
+```python
+from Spyctres import get_instrument_info, list_instruments
+
+print(list_instruments())
+print(get_instrument_info("xshooter").to_metadata())
+```
+
+This is a discoverability layer only: it documents what each reader accepts and
+records, but it does not silently apply wavelength-frame corrections or invent a
+precision LSF.
+
+The installed package also provides a deliberately read-only CLI for discovery
+and ingestion checks:
+
+```bash
+spyctres instruments
+spyctres instrument-info xshooter
+spyctres inspect-spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter
+```
+
+There is intentionally no general `spyctres fit` command yet. Fitting remains
+Python-first until the public batch defaults and reporting are stable enough
+for a command-line fitting interface.
 
 PEPSI wavelength semantics are release-specific and are not inferred from the
 `.dxt.nor` suffix. Use `product_profile="pets_stellar_rest"` for documented

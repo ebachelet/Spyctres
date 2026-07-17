@@ -55,8 +55,11 @@ from .preprocessing import (
 from .waveutils import convert_segment_wavelength_medium, convert_wavelength_medium
 from .fitting import FitProgressEvent
 from .io import (
+    InstrumentInfo,
     SpectrumCollection,
     SpectrumSegment,
+    get_instrument_info,
+    list_instruments,
     read_sdss_spec,
     read_spectrum,
     read_uves_pop_ascii,
@@ -65,7 +68,8 @@ from .io import (
 
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
-    "read_spectrum", "read_uves_pop_ascii", "read_sdss_spec",
+    "read_spectrum", "list_instruments", "get_instrument_info",
+    "InstrumentInfo", "read_uves_pop_ascii", "read_sdss_spec",
     "sdss_wdisp_to_resolution_descriptor",
     "SpectrumSegment", "SpectrumCollection",
     "ensure_matplotlib_config_dir",
