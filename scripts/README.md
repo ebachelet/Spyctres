@@ -22,6 +22,9 @@ looks sensible before a fit is attempted.
 - `io_smoketest.py` reads reduced 1D spectra through the Spyctres I/O layer and
   prints normalized `SpectrumSegment` metadata. Use it to diagnose reader,
   wavelength-medium, frame, resolution, and mask metadata issues.
+- `throughput_summary.py` reads a batch quickscan/refine JSON checkpoint and
+  reports median/mean quick, refine, and total runtime, with a simple projection
+  for larger batches. It does not run fits.
 
 ## Developer/regression smoke tests
 

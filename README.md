@@ -264,6 +264,16 @@ python examples/batch_quickscan_then_refine.py \
 python -m json.tool /tmp/spyctres_batch_refined.json
 ```
 
+After a small pilot batch, summarize the timing before launching hundreds of
+spectra:
+
+```bash
+python scripts/throughput_summary.py /tmp/spyctres_batch_refined.json --project 100
+```
+
+The summary reports quick-scan, focused-refine, and total per-spectrum timing,
+then projects an approximate wall time for the requested number of spectra.
+
 To open the PHOENIX example notebook:
 
 ```bash
