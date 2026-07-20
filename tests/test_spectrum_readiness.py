@@ -7,6 +7,7 @@ from Spyctres.preprocessing import (
     archive_mask_catalog,
     artifact_exclusion_mask_from_segment,
     audit_spectrum_for_fit,
+    publication_readiness_audit,
 )
 
 
@@ -275,3 +276,110 @@ def test_audit_archive_mask_application_removes_fit_overlap_blocking_flags():
     assert "archive:uves_pop_flag_flattening_5760_5840" in mask_provenance[
         "settings"
     ]["exclude_masks"]
+
+
+def test_publication_readiness_blocks_quicklook_only_metadata():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5050.0, 250),
+        flux=np.ones(250),
+        wave_medium="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+    )
+
+    readiness = publication_readiness_audit(segment, min_fit_pixels=10)
+
+    assert readiness["publication_ready"] is False
+    blockers = set(readiness["blockers"])
+    assert "missing_uncertainties" in blockers
+    assert "resolution_assumption_required" in blockers
+    assert "wave_medium_unknown" in blockers
+    assert "observer_frame_unknown" in blockers
+    assert "stellar_rest_status_unknown" in blockers
+    assert readiness["audit"]["quicklook_only"] is True
+
+
+def test_publication_readiness_requires_validated_resolution_by_default():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5050.0, 250),
+        flux=np.ones(250),
+        err=np.full(250, 0.1),
+        wave_medium="vacuum",
+        observer_frame="heliocentric",
+        stellar_rest_status="observed",
+    )
+
+    readiness = publication_readiness_audit(
+        segment,
+        min_fit_pixels=10,
+        assumed_resolution={
+            "quantity": "R",
+            "value": 2000.0,
+            "source": "user_override",
+        },
+    )
+
+    assert readiness["audit"]["fit_ready"] is True
+    assert readiness["publication_ready"] is False
+    assert "resolution_is_assumed_not_validated" in readiness["blockers"]
+
+    allowed = publication_readiness_audit(
+        segment,
+        min_fit_pixels=10,
+        assumed_resolution={
+            "quantity": "R",
+            "value": 2000.0,
+            "source": "user_override",
+        },
+        allow_assumed_resolution=True,
+    )
+    assert allowed["publication_ready"] is True
+
+
+def test_publication_readiness_passes_documented_fit_ready_segment():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5050.0, 250),
+        flux=np.ones(250),
+        err=np.full(250, 0.1),
+        wave_medium="vacuum",
+        observer_frame="heliocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=2000.0),
+    )
+
+    readiness = publication_readiness_audit(segment, min_fit_pixels=10)
+
+    assert readiness["publication_ready"] is True
+    assert readiness["blockers"] == []
+
+
+def test_publication_readiness_blocks_unapplied_sdss_wdisp_by_default():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5050.0, 250),
+        flux=np.ones(250),
+        err=np.full(250, 0.1),
+        wave_medium="vacuum",
+        observer_frame="heliocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=2000.0),
+        meta={
+            "sdss_lsf": {
+                "present": True,
+                "lsf_source": "sdss_wdisp_not_applied",
+                "attach_wdisp_resolution": False,
+            }
+        },
+    )
+
+    readiness = publication_readiness_audit(segment, min_fit_pixels=10)
+
+    assert readiness["publication_ready"] is False
+    assert "sdss_wdisp_lsf_not_applied" in readiness["blockers"]
+
+    allowed = publication_readiness_audit(
+        segment,
+        min_fit_pixels=10,
+        allow_sdss_wdisp_not_applied=True,
+    )
+    assert allowed["publication_ready"] is True
+    assert "sdss_wdisp_lsf_not_applied" in allowed["warnings"]

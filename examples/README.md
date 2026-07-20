@@ -24,7 +24,11 @@ workflows:
    diagnostic workflow.
 6. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
    useful after the basic workflow is familiar.
-7. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
+7. `publication_quality_xshooter_uvb.py` and
+   `publication_quality_xshooter_uvb.ipynb` — expert scaffold for
+   publication-oriented X-SHOOTER UVB parameter work. Starts audit-only and
+   keeps baseline fitting opt-in.
+8. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
    PEPSI legacy line-window path, not the generic public classification path.
 
 The examples are ordered by how much Spyctres-specific context they assume.
@@ -279,6 +283,52 @@ unsupported O star, a carbon star whose C/O chemistry is absent from the
 current PHOENIX fit, and a very cool low-gravity supergiant. This distinction is
 important: a predictable model-physics mismatch is evidence about the model's
 domain, not automatically evidence that the numerical fitter is broken.
+
+## Example 7: publication-oriented X-SHOOTER UVB scaffold
+
+Use `publication_quality_xshooter_uvb.py` only after the quickstart and
+validation examples are familiar. It is a conservative expert scaffold for
+moving from first-pass classification toward defensible stellar parameters.
+The default run is audit-only and therefore does not require PHOENIX:
+
+```bash
+python examples/publication_quality_xshooter_uvb.py \
+  --output-json /tmp/spyctres_publication_xshooter_uvb.json
+```
+
+The script reads the bundled X-SHOOTER UVB spectrum, prepares explicit Balmer
+window segments through the shared recipe layer, applies documented exclusion
+masks, records metal/RV sanity windows for later checks, and runs both ordinary
+fit-readiness and stricter publication-readiness audits. The publication gate
+treats assumptions that are acceptable for quicklook classification as blockers
+until they are validated, for example assumed resolution, missing formal
+uncertainties, unknown wavelength-frame metadata, artifact flags, unapplied
+archive bad-region overlap, or too few fitted pixels.
+
+The Balmer-core mask is intentionally treated as a sensitivity axis rather than
+a fixed truth. By default the JSON includes an audit-only grid for core
+half-widths of 0, 4, 6, 8, 10, and 12 A, recording how many fitted pixels remain
+and which readiness flags appear. Use `--balmer-core-mask` to choose the
+baseline width shown in plots, and `--core-mask-grid` to change the audit grid.
+Only add `--run-core-mask-fit-grid` when you deliberately want the expensive
+PHOENIX fit repeated for every mask width.
+
+After PHOENIX is configured, opt in to the baseline fit:
+
+```bash
+python examples/publication_quality_xshooter_uvb.py \
+  --run-baseline-fit \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png
+```
+
+This remains a scaffold rather than a final publication pipeline. The saved
+JSON lists the follow-up checks still required before publication claims:
+per-line and joint Balmer comparisons, leave-one-line-out tests, continuum and
+mask variants, resolution/LSF variants, synthetic injection/recovery, and final
+uncertainty accounting. The paired
+`publication_quality_xshooter_uvb.ipynb` notebook is a no-output notebook that
+drives the same script with `RUN_BASELINE_FIT = False` by default.
 
 `simple_phoenix_fit.py` opens an interactive Matplotlib fit figure by default,
 so users can zoom, pan, and inspect residuals. Add `--no-show` for automated or

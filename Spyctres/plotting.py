@@ -135,6 +135,20 @@ def _compute_robust_ylim(y, lower=1.0, upper=99.0, pad_frac=0.05):
     return lo - pad, hi + pad
 
 
+def _expand_ylim_to_include(ylo, yhi, values, pad_frac=0.05):
+    """Expand existing y-limits so finite ``values`` are visible."""
+    values = _as_float_array(values)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return ylo, yhi
+    lo = min(float(ylo), float(np.nanmin(values)))
+    hi = max(float(yhi), float(np.nanmax(values)))
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return ylo, yhi
+    pad = float(pad_frac) * (hi - lo)
+    return lo - pad, hi + pad
+
+
 def _mask_to_spans(wave, mask):
     """
     Convert a boolean mask into contiguous wavelength spans.
@@ -825,6 +839,8 @@ def plot_fit_referee(
     residual_ylim=(-6.0, 6.0),
     layout="side_by_side",
     xlim_mode="fit",
+    flux_ylim_mode="robust",
+    show_raw_model=True,
     feature_regions=None,
 ):
     """
@@ -860,6 +876,18 @@ def plot_fit_referee(
         on fitted pixels. ``"all"`` keeps the full finite segment wavelength
         range while still hiding model/residual values on unused pixels. This
         avoids implying that rejected or out-of-window data were fitted.
+    flux_ylim_mode : {"robust", "visible"}, optional
+        ``"robust"`` uses fitted-pixel flux percentiles for compact overview
+        plots and may clip extreme displayed-but-unused features. ``"visible"``
+        expands those limits to include all displayed observed flux and fitted
+        model values; this is preferred for line-window/referee plots where
+        excluded line cores should remain visible.
+    show_raw_model : bool, optional
+        If True, draw the unconstrained PHOENIX+LSF model before the fitted
+        multiplicative continuum correction. For local line-window publication
+        plots this can be visually misleading when the raw template units are
+        far from the observed flux scale, so callers may set it False and show
+        only the observed flux plus continuum-adjusted model.
     feature_regions : sequence, optional
         Optional non-stellar/diagnostic regions to shade and label. Each item
         may be ``(label, wmin, wmax)``, ``(wmin, wmax)``, or a metadata mapping
@@ -898,6 +926,9 @@ def plot_fit_referee(
     xlim_mode = str(xlim_mode).strip().lower()
     if xlim_mode not in {"fit", "all"}:
         raise ValueError("xlim_mode must be 'fit' or 'all'.")
+    flux_ylim_mode = str(flux_ylim_mode).strip().lower()
+    if flux_ylim_mode not in {"robust", "visible"}:
+        raise ValueError("flux_ylim_mode must be 'robust' or 'visible'.")
     if layout == "side_by_side":
         fig, axes = plt.subplots(
             n_segments,
@@ -986,7 +1017,7 @@ def plot_fit_referee(
             ]
 
         ax_flux.plot(wave[sel], flux[sel], color="0.25", lw=0.7, label="observed")
-        if model_raw is not None:
+        if model_raw is not None and show_raw_model:
             ax_flux.plot(
                 wave[sel],
                 model_raw_plot[sel],
@@ -1048,6 +1079,14 @@ def plot_fit_referee(
                 )
 
         ylo, yhi = _compute_robust_ylim(flux[used] if np.any(used) else flux)
+        if flux_ylim_mode == "visible":
+            visible_values = [flux[display_mask]]
+            visible_values.append(model_corr_plot[display_mask])
+            ylo, yhi = _expand_ylim_to_include(
+                ylo,
+                yhi,
+                np.concatenate(visible_values),
+            )
         ax_flux.set_ylim(ylo, yhi)
         if xlim is not None:
             ax_flux.set_xlim(*xlim)

@@ -2021,6 +2021,126 @@ def audit_spectrum_for_fit(
     )
 
 
+PUBLICATION_READINESS_BLOCKING_FLAGS = frozenset(
+    {
+        "no_fitted_pixels",
+        "missing_uncertainties",
+        "resolution_assumption_required",
+        "wave_medium_unknown",
+        "observer_frame_unknown",
+        "stellar_rest_status_unknown",
+        "artifact_review_required",
+        "lsf_undersampled",
+        "archive_mask_overlap_inside_fit_window",
+        "archive_mask_fraction_high",
+        "flat_zero_block_detected",
+        "sdss_wdisp_lsf_not_applied",
+    }
+)
+
+
+def _segment_has_assumed_resolution(segment_audit):
+    resolution = (
+        segment_audit.get("metadata", {})
+        .get("resolution", {})
+    )
+    return bool(resolution.get("present") and resolution.get("assumed"))
+
+
+def publication_readiness_audit(
+    spectrum,
+    regions=None,
+    fit_windows=None,
+    exclude_mask=None,
+    exclude_masks=None,
+    mask_threshold=0.5,
+    assumed_resolution=None,
+    intended_use="publication_quality_stellar_parameters",
+    min_fit_pixels=200,
+    max_rejected_inside_fit_window_fraction=0.5,
+    allow_assumed_resolution=False,
+    allow_sdss_wdisp_not_applied=False,
+    **audit_kwargs,
+):
+    """Return a stricter audit for publication-oriented stellar parameters.
+
+    This wrapper intentionally builds on :func:`audit_spectrum_for_fit` rather
+    than replacing it. The ordinary audit answers "is this usable for a
+    quicklook or classification fit?". This helper answers the stricter
+    question "are the data and assumptions sufficiently documented to start a
+    publication-quality parameter analysis?".
+
+    A failing publication audit is not a failed ingestion. It usually means the
+    workflow should remain in exploratory/quicklook mode until uncertainties,
+    wavelength/frame metadata, LSF provenance, artifact masks, and fit-window
+    choices have been reviewed.
+    """
+    audit = audit_spectrum_for_fit(
+        spectrum,
+        regions=regions,
+        fit_windows=fit_windows,
+        exclude_mask=exclude_mask,
+        exclude_masks=exclude_masks,
+        mask_threshold=mask_threshold,
+        intended_use=intended_use,
+        assumed_resolution=assumed_resolution,
+        **audit_kwargs,
+    )
+    flags = set(audit.get("interpretation_flags", []))
+    blocking_flags = set(PUBLICATION_READINESS_BLOCKING_FLAGS)
+    if allow_sdss_wdisp_not_applied:
+        blocking_flags.discard("sdss_wdisp_lsf_not_applied")
+
+    blockers = set(flags & blocking_flags)
+    warnings = set(flags - blockers)
+
+    if not audit.get("fit_ready", False):
+        blockers.add("base_fit_readiness_failed")
+
+    n_fit = int(audit.get("n_fit_candidate", 0))
+    if min_fit_pixels is not None and n_fit < int(min_fit_pixels):
+        blockers.add("too_few_fitted_pixels")
+
+    rejected_fraction = float(
+        audit.get("rejected_inside_fit_window_fraction", 0.0) or 0.0
+    )
+    if (
+        max_rejected_inside_fit_window_fraction is not None
+        and rejected_fraction > float(max_rejected_inside_fit_window_fraction)
+    ):
+        blockers.add("high_rejected_inside_fit_window_fraction")
+
+    if not allow_assumed_resolution:
+        if any(_segment_has_assumed_resolution(item) for item in audit["segments"]):
+            blockers.add("resolution_is_assumed_not_validated")
+
+    ready = bool(not blockers)
+    return _json_safe(
+        {
+            "schema_version": 1,
+            "intended_use": str(intended_use),
+            "publication_ready": ready,
+            "ready_for_publication": ready,
+            "exploratory_only": not ready,
+            "blockers": sorted(blockers),
+            "warnings": sorted(warnings),
+            "settings": {
+                "min_fit_pixels": None
+                if min_fit_pixels is None
+                else int(min_fit_pixels),
+                "max_rejected_inside_fit_window_fraction": (
+                    None
+                    if max_rejected_inside_fit_window_fraction is None
+                    else float(max_rejected_inside_fit_window_fraction)
+                ),
+                "allow_assumed_resolution": bool(allow_assumed_resolution),
+                "allow_sdss_wdisp_not_applied": bool(allow_sdss_wdisp_not_applied),
+            },
+            "audit": audit,
+        }
+    )
+
+
 def artifact_exclusion_mask_from_segment(
     seg,
     *,

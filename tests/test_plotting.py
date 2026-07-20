@@ -171,6 +171,72 @@ def test_plot_fit_referee_does_not_draw_model_on_unused_pixels():
     fig.clf()
 
 
+def test_plot_fit_referee_visible_ylim_includes_excluded_line_core():
+    wave = np.linspace(4840.0, 4882.0, 121)
+    core = np.exp(-0.5 * ((wave - 4861.3) / 2.0) ** 2)
+    flux = 1.0 - 0.85 * core
+    model = 1.0 - 0.80 * core
+    used = np.abs(wave - 4861.3) > 6.0
+    segment = SpectrumSegment(
+        wave,
+        flux,
+        err=np.full(wave.size, 0.03),
+        mask=used,
+        name="hbeta_core_masked",
+    )
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": 9000.0,
+            "feh": 0.0,
+            "logg": 3.0,
+            "rv_kms": 0.0,
+            "chi2_red": 1.0,
+            "diagnostics": {
+                "segment_diagnostics": [{"name": segment.name, "n_fit": int(np.sum(used))}],
+            },
+        },
+        models=(model,),
+        continuum_coefficients=(np.array([1.0, 0.0]),),
+        used_masks=(used,),
+        excluded_masks=(~used,),
+    )
+
+    fig, axes = plot_fit_referee(
+        result,
+        segment=segment,
+        layout="stacked",
+        flux_ylim_mode="visible",
+    )
+
+    ylo, yhi = axes[0, 0].get_ylim()
+    assert ylo < float(np.nanmin(flux))
+    assert yhi > float(np.nanmax(flux))
+    fig.clf()
+
+
+def test_plot_fit_referee_can_hide_raw_model_curve():
+    wave = np.linspace(5000.0, 5010.0, 25)
+    segment = SpectrumSegment(
+        wave,
+        np.ones(wave.size),
+        err=np.full(wave.size, 0.03),
+        name="scaled_only",
+    )
+    result = _fit_result_for_segments([segment])
+
+    fig, axes = plot_fit_referee(
+        result,
+        segment=segment,
+        show_raw_model=False,
+    )
+
+    labels = [line.get_label() for line in axes[0, 0].lines]
+    assert not any(label.startswith("PHOENIX+LSF") for label in labels)
+    assert any(label.startswith("continuum-adjusted model") for label in labels)
+    fig.clf()
+
+
 def test_plot_fit_referee_can_annotate_feature_regions():
     wave = np.linspace(4400.0, 4460.0, 40)
     segment = SpectrumSegment(

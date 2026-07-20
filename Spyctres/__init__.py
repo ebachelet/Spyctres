@@ -2,6 +2,11 @@ from .matplotlib_setup import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 
 from .api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
+from .help import (
+    describe_public_function,
+    format_public_function_help,
+    list_public_functions,
+)
 from .defaults import (
     PhoenixFitDefaults,
     clip_grid_to_bounds,
@@ -49,6 +54,7 @@ from .preprocessing import (
     nonstellar_feature_metadata,
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
+    publication_readiness_audit,
     broad_telluric_catalog_fallback_mask,
     telluric_transmission_exclusion_mask,
 )
@@ -68,6 +74,8 @@ from .io import (
 
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
+    "describe_public_function", "format_public_function_help",
+    "list_public_functions",
     "read_spectrum", "list_instruments", "get_instrument_info",
     "InstrumentInfo", "read_uves_pop_ascii", "read_sdss_spec",
     "sdss_wdisp_to_resolution_descriptor",
@@ -89,6 +97,7 @@ __all__ = [
     "archive_exclusion_masks_for_segment", "archive_mask_catalog",
     "archive_mask_summary_for_segment", "artifact_exclusion_mask_from_segment",
     "audit_spectrum_for_fit",
+    "publication_readiness_audit",
     "combine_exclusion_masks", "dilate_boolean_mask",
     "exclusion_mask",
     "NONSTELLAR_FEATURES", "OPTICAL_DIB_DIAGNOSTIC_FEATURES",

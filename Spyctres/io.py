@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from astropy.io import fits
 
+from .help import missing_call_error
 from .preprocessing import archive_mask_catalog
 
 
@@ -2772,7 +2773,7 @@ register_reader(
 
   
 def read_spectrum(
-    path,
+    path=None,
     instrument=None,
     warn_unknown=True,
     **kwargs
@@ -2794,6 +2795,15 @@ def read_spectrum(
     SpectrumSegment or SpectrumCollection
         Reader output converted to the versioned common spectrum format.
     """
+    if path is None:
+        raise ValueError(missing_call_error("read_spectrum"))
+    if instrument is None:
+        raise ValueError(
+            missing_call_error(
+                "read_spectrum",
+                "No instrument reader was specified.",
+            )
+        )
     inst = _normalize_instrument_key(instrument)
     func = READERS.get(inst, None)
 

@@ -5,6 +5,7 @@ import os
 
 from .config import resolve_phoenix_dir
 from .defaults import prepare_phoenix_fit_kwargs
+from .help import missing_call_error
 from .fitting import (
     fit_phoenix_full_spectrum,
     reconstruct_phoenix_legendre_models_for_segments,
@@ -25,7 +26,7 @@ _RECONSTRUCTION_KEYS = (
 
 
 def fit_phoenix_spectrum(
-    spectrum,
+    spectrum=None,
     phoenix_lib=None,
     phoenix_dir=None,
     reconstruct=True,
@@ -33,6 +34,8 @@ def fit_phoenix_spectrum(
     **fit_kwargs,
 ):
     """Fit any canonicalizable spectrum and return a structured result."""
+    if spectrum is None:
+        raise ValueError(missing_call_error("fit_phoenix_spectrum"))
     canonical = coerce_spectrum(spectrum, warn_unknown=warn_unknown, source="public_api")
     if phoenix_lib is None:
         resolved = resolve_phoenix_dir(phoenix_dir)
@@ -85,7 +88,7 @@ def fit_phoenix_spectrum(
 
 
 def fit_stellar_spectrum(
-    spectrum,
+    spectrum=None,
     instrument=None,
     model="phoenix",
     phoenix_lib=None,
@@ -112,6 +115,9 @@ def fit_stellar_spectrum(
     explicit fit keyword override the suggestion. For example, pass ``regions``,
     ``p0``, ``bounds``, ``rv_grid_n``, or ``mdeg`` to take expert control.
     """
+    if spectrum is None:
+        raise ValueError(missing_call_error("fit_stellar_spectrum"))
+
     model_name = str(model).strip().lower()
     if model_name not in {"phoenix", "phoenix_hires", "phoenix-hires"}:
         raise ValueError(
@@ -123,8 +129,11 @@ def fit_stellar_spectrum(
     if input_was_path:
         if instrument is None:
             raise ValueError(
-                "Pass instrument='xshooter', 'pepsi', 'floyds', 'gemini', "
-                "or another registered reader when spectrum is a path."
+                missing_call_error(
+                    "fit_stellar_spectrum",
+                    "A spectrum path was supplied, but no instrument reader was "
+                    "specified.",
+                )
             )
         canonical = read_spectrum(
             spectrum,
@@ -181,4 +190,6 @@ def fit_stellar_spectrum(
 
 def classify_spectrum(*args, **kwargs):
     """Alias for :func:`fit_stellar_spectrum` for classification workflows."""
+    if not args and "spectrum" not in kwargs:
+        raise ValueError(missing_call_error("classify_spectrum"))
     return fit_stellar_spectrum(*args, **kwargs)

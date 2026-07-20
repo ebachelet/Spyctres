@@ -556,7 +556,7 @@ def test_classify_spectrum_alias_and_manual_defaults(monkeypatch):
 
 
 def test_fit_stellar_spectrum_rejects_missing_instrument_for_paths():
-    with pytest.raises(ValueError, match="Pass instrument"):
+    with pytest.raises(ValueError, match="no instrument reader was specified"):
         fit_stellar_spectrum("example.fits", phoenix_lib=object())
 
 

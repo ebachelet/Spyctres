@@ -217,13 +217,22 @@ Recommended example order:
 5. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
    fitting diagnostics.
 6. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
-7. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
+7. `examples/publication_quality_xshooter_uvb.py` and
+   `examples/publication_quality_xshooter_uvb.ipynb` for the expert
+   publication-oriented X-SHOOTER UVB scaffold.
+8. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
    line-window validation path.
 
 `quick_example.py` is retained only as a compatibility pointer to these
 maintained workflows; smoke tests live under `scripts/`. See
 `examples/README.md` for data paths, PHOENIX configuration, caveats, and the
 same recommended order with more detail.
+
+The maintained project roadmap is in
+[`docs/development_plan.md`](docs/development_plan.md). In particular,
+publication-oriented parameter fitting is tracked as a separate expert workflow:
+quick classification remains lightweight, while publication-quality use must
+pass stricter metadata, uncertainty, mask, LSF, residual, and recovery checks.
 
 For batches, start with the X-SHOOTER UVB throughput example:
 
@@ -324,6 +333,25 @@ There is intentionally no general `spyctres fit` command yet. Fitting remains
 Python-first until the public batch defaults and reporting are stable enough
 for a command-line fitting interface.
 
+Inside Python, public entry points also carry lightweight call help. If a user
+calls one without enough information, Spyctres reports the minimal call pattern
+and a one-line fix. The same records are available directly:
+
+```python
+from Spyctres import (
+    describe_public_function,
+    format_public_function_help,
+    list_public_functions,
+)
+
+print(list_public_functions())
+print(format_public_function_help("fit_stellar_spectrum"))
+help_record = describe_public_function("read_spectrum")
+```
+
+The structured `describe_public_function()` output is intended for notebooks
+and a future GUI; the formatted helper is meant for terminal use.
+
 PEPSI wavelength semantics are release-specific and are not inferred from the
 `.dxt.nor` suffix. Use `product_profile="pets_stellar_rest"` for documented
 NASA Exoplanet Archive PETS products (air wavelengths supplied in microns and
@@ -358,6 +386,14 @@ adequate for the intended fit. Native data-quality masks supplied by a reader
 are preferred. For products without such flags, Spyctres also provides an
 explicit same-grid fallback artifact mask, but it is opt-in and recorded as a
 quicklook/product assumption rather than applied silently.
+
+For stricter work, use `publication_readiness_audit()` around the same spectrum
+and masks. It deliberately treats some quicklook assumptions as blockers, for
+example assumed-but-unvalidated resolution, missing formal errors, unknown
+wavelength/frame metadata, unapplied archive bad-region overlap, SDSS tabulated
+LSF provenance that is not yet applied by the fitter, or too few usable pixels.
+This is a guardrail for expert workflows, not a replacement for real validation
+on benchmark spectra.
 
 UVES-POP and SDSS are currently best treated as ingestion plus quicklook
 classification inputs unless the user supplies or validates the missing fit
