@@ -334,7 +334,7 @@
       "url": "https://www.nist.gov/pml/atomic-spectra-database",
       "validated_via": "Official NIST Atomic Spectra Database page; version, DOI, and wavelength/transition scope inspected",
       "validated_on": "2026-07-20",
-      "description": "Provides critically evaluated atomic wavelengths and transition data used as provenance for broad diagnostic windows around H, He, Ca, Mg, and Na features. Spyctres uses these wavelengths only for approximate feature-window selection and diagnostics, not as a replacement for detailed line measurement.",
+      "description": "Provides critically evaluated atomic wavelengths and transition data used as provenance for broad diagnostic windows around H, He, Ca, Mg, Na, K, and Si features. Spyctres uses these wavelengths only for approximate feature-window selection and diagnostics, not as a replacement for detailed line measurement.",
       "affected_code": [
         "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
       ]
@@ -347,6 +347,54 @@
       "validated_via": "Crossref DOI record and publisher DOI landing page",
       "validated_on": "2026-07-20",
       "description": "A standard reference for MK stellar spectral classification and the use of hydrogen, helium, metal, and molecular features across spectral types. Spyctres uses it as broad scientific provenance for tagging diagnostic windows by hot-star, cool-star, temperature, gravity, metallicity, and molecular roles.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "riddick2007_m_dwarf_optical_indices",
+      "citation": "Riddick, F. C., Roche, P. F. & Lucas, P. W. (2007), Optical spectroscopic classification and membership of young M dwarfs in star-forming regions, Monthly Notices of the Royal Astronomical Society, 381, 1067-1076.",
+      "doi": "10.1111/j.1365-2966.2007.12309.x",
+      "url": "https://academic.oup.com/mnras/article/381/3/1067/1063343",
+      "validated_via": "MNRAS publisher page and Oxford repository metadata; TiO, VO, CaH, FeH, and Na optical index definitions inspected",
+      "validated_on": "2026-07-21",
+      "description": "Defines and uses optical molecular and alkali indices for young M-dwarf classification, including TiO, VO, CaH, FeH, and Na regions. Spyctres uses this as provenance for advisory cool-star red-optical diagnostic windows; the windows are broad classification aids and are not treated as calibrated spectral indices by default.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "mcgovern2004_brown_dwarf_gravity_features",
+      "citation": "McGovern, M. R., Kirkpatrick, J. D., McLean, I. S., Burgasser, A. J., Prato, L. & Lowrance, P. J. (2004), Identifying Young Brown Dwarfs Using Gravity-Sensitive Spectral Features, The Astrophysical Journal, 600, 1020-1024.",
+      "doi": "10.1086/379849",
+      "url": "https://doi.org/10.1086/379849",
+      "validated_via": "DOI metadata and accessible abstract/full-text summary; optical and near-IR TiO, VO, K I, Na I, CaH, and FeH gravity-sensitive-feature discussion inspected",
+      "validated_on": "2026-07-21",
+      "description": "Shows that TiO, VO, K I, Na I, CaH, and FeH features in low-resolution optical/J-band spectra are useful gravity diagnostics for very young late-type objects. Spyctres uses this as provenance for tagging cool-star alkali and molecular windows as useful but model-sensitive diagnostics rather than unquestioned fit drivers.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "luhman_rieke1998_kband_classification",
+      "citation": "Luhman, K. L. & Rieke, G. H. (1998), The low-mass initial mass function in young clusters: L1495E, The Astrophysical Journal, 497, 354-369.",
+      "doi": "10.1086/305447",
+      "url": "https://doi.org/10.1086/305447",
+      "validated_via": "DOI metadata and institutional publication page; K-band late-type spectral-classification scope inspected",
+      "validated_on": "2026-07-21",
+      "description": "Uses K-band spectra to derive spectral types and continuum veilings for young late-type stars and compares those classifications with optical results. Spyctres uses this as provenance for advisory K-band Na I and Ca I windows when classifying late-type spectra with near-IR coverage.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "hubrig2007_kband_companion_classification",
+      "citation": "Hubrig, S., Marco, O., Stelzer, B., Schöller, M. & Huélamo, N. (2007), Establishing the nature of companion candidates to X-ray-emitting late B-type stars, Monthly Notices of the Royal Astronomical Society, 381, 1569-1574.",
+      "doi": "10.1111/j.1365-2966.2007.12325.x",
+      "url": "https://academic.oup.com/mnras/article/381/4/1569/972154",
+      "validated_via": "MNRAS publisher page; K-band classification section and feature table listing Br gamma, Na I, Ca I, Mg I, and CO inspected",
+      "validated_on": "2026-07-21",
+      "description": "Lists strong K-band features used for low-resolution spectral classification of late-type companion candidates, including Br gamma, Na I, Ca I, Mg I, and CO. Spyctres uses this as pragmatic provenance for exposing K-band metal and CO windows as diagnostics while retaining telluric/continuum caution tags.",
       "affected_code": [
         "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
       ]

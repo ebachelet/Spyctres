@@ -41,9 +41,10 @@ requirements.
    metadata, and explicit resolution/LSF provenance. The ordinary readiness
    audit should decide whether a quick classification fit is safe to attempt.
    The diagnostic-window selector should remain advisory and generic: it should
-   identify useful Balmer, Paschen, Brackett, Ca I/Ca II, Mg/Na, TiO, and CO
-   windows from wavelength coverage and simple data-quality scores, without
-   automatically launching expensive all-combinations fits. Catalog windows are
+   identify useful Balmer, Paschen, Brackett, He/Mg/Si, CH G-band, Ca I/Ca II,
+   Mg/Na/K, TiO/VO/CaH/FeH, and K-band Na I/Ca I/CO windows from wavelength
+   coverage and simple data-quality scores, without automatically launching
+   expensive all-combinations fits. Catalog windows are
    stored in canonical vacuum Angstrom, stellar-rest-frame coordinates and are
    converted into operational per-segment windows at runtime; provenance should
    keep score components, risk policies, RV padding, contiguous coverage, and
@@ -83,10 +84,12 @@ requirements.
    held-out residual proxy when reconstructed model arrays are available. The
    remaining work is to add fit-level systematic variants, per-line checks,
    stronger common-evaluation residual summaries, injection/recovery, profile
-   scans, and final uncertainty tables. Before expanding the diagnostic-window
-   catalog substantially, add the planned early-type He/Mg/Si family, CH
-   G-band, cool-dwarf CaH/K I/FeH/VO family, and K-band Na I/Ca I family with
-   explicit model-support and risk policies.
+   scans, and final uncertainty tables. The first diagnostic-window catalog
+   expansion now includes the planned early-type He/Mg/Si family, CH G-band,
+   cool-dwarf CaH/K I/FeH/VO family, and K-band Na I/Ca I family with explicit
+   model-support and risk policies. The next step is to calibrate window
+   rankings, masks, and fit-comparison behaviour on real spectra rather than
+   expanding the catalog mechanically.
 
 5. **Public API and reporting polish.**
    Keep refining structured result objects, quality reports, plotting, and

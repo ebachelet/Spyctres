@@ -487,9 +487,11 @@ quicklook/standard/diagnostic use, how to interpret `rv_kms`, any metadata-risk
 flags, and the recommended next step before treating a result as scientific.
 That provenance now also includes advisory diagnostic-window candidates selected
 from the loaded wavelength coverage. These are broad windows around features
-such as Balmer, Paschen, Brackett, Ca I/Ca II, Mg/Na, TiO, and CO; they help
-decide which quick follow-up checks are sensible for hot, intermediate, or cool
-stars without launching an expensive blind all-combinations fit. The catalog is
+such as Balmer, Paschen, Brackett, He/Mg/Si hot-star checks, CH G-band,
+Ca I/Ca II, Mg/Na/K alkali and metal lines, TiO/VO/CaH/FeH molecular bands,
+and K-band Na I/Ca I/CO; they help decide which quick follow-up checks are
+sensible for hot, intermediate, or cool stars without launching an expensive
+blind all-combinations fit. The catalog is
 defined in canonical vacuum Angstrom, stellar-rest-frame coordinates; selection
 converts those broad windows to each segment's declared wavelength medium and
 records the operational window, RV padding, score components, risk policies,

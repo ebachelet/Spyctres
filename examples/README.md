@@ -240,8 +240,8 @@ for asking whether a fit trained on one set of broad features generalizes to
 other selected features, but it is still a diagnostic, not a final publication
 likelihood.
 
-Stress-only windows such as He/NLTE-sensitive features are visible in the
-selection provenance but are excluded from ordinary comparison fits unless
+Stress-only windows such as He/Si/NLTE-sensitive hot-star features are visible
+in the selection provenance but are excluded from ordinary comparison fits unless
 `--include-stress-windows` is supplied. Windows with cautionary risks, such as
 DIB/telluric/model-sensitive regions, remain labelled in the JSON/CSV. The
 comparison plot is a stability diagnostic; it should not be read as "lowest
@@ -358,9 +358,10 @@ archive bad-region overlap, or too few fitted pixels.
 The same run also records a generic diagnostic-window selection from the loaded
 wavelength coverage. This is broader than the UVB/Balmer scaffold: if a
 spectrum covers them, the selector can identify Paschen and Brackett hydrogen
-regions, Ca I/Ca II windows, Mg/Na metal-line checks, and cool-star molecular
-windows such as TiO and CO. These windows are advisory; Spyctres does not fit
-every combination by default. The catalog windows are stored in vacuum
+regions, He/Mg/Si hot-star checks, CH G-band, Ca I/Ca II windows, Mg/Na/K
+metal-line and alkali checks, cool-star molecular windows such as
+TiO/VO/CaH/FeH, and K-band Na I/Ca I/CO features. These windows are advisory;
+Spyctres does not fit every combination by default. The catalog windows are stored in vacuum
 Angstrom, stellar-rest-frame coordinates; the selector converts them to each
 segment's wavelength medium, records any RV/padding used for the operational
 window, and exposes score components rather than a single unexplained ranking.

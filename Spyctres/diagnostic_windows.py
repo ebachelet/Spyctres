@@ -8,7 +8,9 @@ physically measured.  Reference provenance is recorded through ``reference_ids``
 matching entries in ``references.json``; the most relevant sources are NIST ASD
 for atomic wavelengths, Gray & Corbally for MK classification practice,
 Cenarro et al. for Ca II triplet/Paschen behaviour, Meyer et al. for H-band
-classification, and Rayner et al. for cool-star near-IR spectra.
+classification, Riddick et al. and McGovern et al. for late-M gravity-sensitive
+optical molecular/alkali features, and Rayner et al. for cool-star near-IR
+spectra.
 """
 
 from __future__ import annotations
@@ -304,14 +306,17 @@ def _split_roles(roles, window_id):
     family = []
     window_id = str(window_id).lower()
     if any(role in roles for role in ("molecular",)) or any(
-        token in window_id for token in ("tio", "co_", "cah", "feh")
+        token in window_id for token in ("tio", "vo_", "co_", "cah", "feh", "ch_")
     ):
         family.append("molecular")
     if any(token in window_id for token in ("h_", "paschen", "brackett", "br_")):
         family.append("hydrogen")
     if "he_" in window_id:
         family.append("helium")
-    if any(token in window_id for token in ("ca_", "mg_", "na_", "ki_", "li_")):
+    if any(
+        token in window_id
+        for token in ("ca_", "mg_", "na_", "k_i", "ki_", "li_", "si_")
+    ):
         family.append("atomic_metal")
     return {
         "physical_sensitivity": tuple(physical),
@@ -357,6 +362,32 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         ),
     ),
     DiagnosticWindow(
+        id="si_ii_4128_4130",
+        label="Si II 4128/4130",
+        region_A=(4116.0, 4144.0),
+        roles=("temperature", "gravity", "metallicity", "rv", "hot_star"),
+        features=("Si II 4128/4130",),
+        priority=0.58,
+        min_overlap_A=16.0,
+        min_pixels=8,
+        teff_range_K=(7500.0, 12000.0),
+        spectral_type_hint="late-B/A hot-star check near the PHOENIX LTE limit",
+        risk_tags=(
+            "phoenix_hot_star_limit",
+            "nlte_sensitive",
+            "metal_abundance_sensitive",
+        ),
+        model_support="stress_only",
+        reference_ids=(
+            "nist_asd_v512",
+            "gray_corbally2009_spectral_classification",
+        ),
+        notes=(
+            "Presence/absence is useful for early-type triage, but this is not "
+            "a precision abundance or NLTE-safe window in the current PHOENIX path."
+        ),
+    ),
+    DiagnosticWindow(
         id="ca_i_4227",
         label="Ca I 4227",
         region_A=(4205.0, 4248.0),
@@ -370,6 +401,30 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         reference_ids=(
             "nist_asd_v512",
             "gray_corbally2009_spectral_classification",
+        ),
+    ),
+    DiagnosticWindow(
+        id="ch_g_band",
+        label="CH G band",
+        region_A=(4280.0, 4335.0),
+        roles=("temperature", "metallicity", "cool_star", "molecular"),
+        features=("CH G band near 4300 A",),
+        priority=0.78,
+        min_overlap_A=30.0,
+        min_pixels=14,
+        teff_range_K=(4300.0, 6500.0),
+        spectral_type_hint="F/G/K carbon- and metallicity-sensitive check",
+        risk_tags=(
+            "carbon_abundance_sensitive",
+            "continuum_sensitive",
+            "molecular_model_sensitive",
+        ),
+        model_support="uncertain",
+        reference_ids=("gray_corbally2009_spectral_classification",),
+        notes=(
+            "Useful for broad classification, especially when paired with Balmer "
+            "and metal-line windows; fixed-abundance PHOENIX fits should not "
+            "over-interpret CH residuals as only Teff/logg/[Fe/H]."
         ),
     ),
     DiagnosticWindow(
@@ -406,6 +461,59 @@ DIAGNOSTIC_WINDOW_CATALOG = (
             "gray_corbally2009_spectral_classification",
         ),
         notes="Presence/absence is diagnostic; PHOENIX LTE grid limits still apply.",
+    ),
+    DiagnosticWindow(
+        id="mg_ii_4481",
+        label="Mg II 4481",
+        region_A=(4472.0, 4492.0),
+        roles=("temperature", "metallicity", "rv", "hot_star"),
+        features=("Mg II 4481",),
+        priority=0.55,
+        min_overlap_A=12.0,
+        min_pixels=7,
+        teff_range_K=(7000.0, 12000.0),
+        spectral_type_hint="late-B/A hot-star check, often read with He I 4471",
+        risk_tags=(
+            "he_i_4471_overlap",
+            "phoenix_hot_star_limit",
+            "metal_abundance_sensitive",
+        ),
+        model_support="uncertain",
+        reference_ids=(
+            "nist_asd_v512",
+            "gray_corbally2009_spectral_classification",
+        ),
+        notes=(
+            "The He I 4471 / Mg II 4481 neighbourhood is useful for hot-star "
+            "triage, but the current lightweight catalog keeps the overlapping "
+            "features explicit rather than fitting a classification ratio."
+        ),
+    ),
+    DiagnosticWindow(
+        id="si_iii_4552",
+        label="Si III 4552",
+        region_A=(4540.0, 4566.0),
+        roles=("temperature", "gravity", "metallicity", "rv", "hot_star"),
+        features=("Si III 4552",),
+        priority=0.42,
+        min_overlap_A=14.0,
+        min_pixels=7,
+        teff_range_K=(10000.0, 12000.0),
+        spectral_type_hint="early-B stress check; outside ordinary PHOENIX comfort zone",
+        risk_tags=(
+            "phoenix_hot_star_limit",
+            "nlte_sensitive",
+            "metal_abundance_sensitive",
+        ),
+        model_support="stress_only",
+        reference_ids=(
+            "nist_asd_v512",
+            "gray_corbally2009_spectral_classification",
+        ),
+        notes=(
+            "Included to flag spectra that may be too hot for the present "
+            "PHOENIX LTE workflow; it should not drive ordinary fits."
+        ),
     ),
     DiagnosticWindow(
         id="h_beta",
@@ -508,6 +616,77 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         reference_ids=("gray_corbally2009_spectral_classification",),
     ),
     DiagnosticWindow(
+        id="vo_7450",
+        label="VO 7450",
+        region_A=(7380.0, 7580.0),
+        roles=("temperature", "gravity", "cool_star", "molecular"),
+        features=("VO band structure near 7450 A",),
+        priority=0.66,
+        min_overlap_A=85.0,
+        min_pixels=30,
+        teff_range_K=(2500.0, 4200.0),
+        spectral_type_hint="late-M gravity/temperature molecular check",
+        risk_tags=(
+            "telluric_o2_overlap",
+            "molecular_model_sensitive",
+            "continuum_sensitive",
+        ),
+        model_support="uncertain",
+        reference_ids=(
+            "riddick2007_m_dwarf_optical_indices",
+            "mcgovern2004_brown_dwarf_gravity_features",
+        ),
+    ),
+    DiagnosticWindow(
+        id="k_i_7700",
+        label="K I 7665/7699",
+        region_A=(7652.0, 7712.0),
+        roles=("gravity", "metallicity", "rv", "cool_star"),
+        features=("K I 7665/7699",),
+        priority=0.50,
+        min_overlap_A=35.0,
+        min_pixels=16,
+        teff_range_K=(2500.0, 5200.0),
+        spectral_type_hint="cool-star gravity/alkali check",
+        risk_tags=(
+            "telluric_o2_overlap",
+            "pressure_broadened",
+            "stellar_activity_sensitive",
+        ),
+        model_support="uncertain",
+        reference_ids=(
+            "nist_asd_v512",
+            "mcgovern2004_brown_dwarf_gravity_features",
+        ),
+        notes=(
+            "The stellar K I doublet lies close to strong topocentric O2 telluric "
+            "absorption; use it only when telluric handling and wavelength frame "
+            "metadata are trustworthy."
+        ),
+    ),
+    DiagnosticWindow(
+        id="vo_7900",
+        label="VO 7900/8100",
+        region_A=(7860.0, 8155.0),
+        roles=("temperature", "gravity", "cool_star", "molecular"),
+        features=("VO bands near 7900-8150 A",),
+        priority=0.70,
+        min_overlap_A=130.0,
+        min_pixels=45,
+        teff_range_K=(2500.0, 4200.0),
+        spectral_type_hint="late-M gravity/temperature molecular check",
+        risk_tags=(
+            "telluric_h2o_overlap",
+            "molecular_model_sensitive",
+            "continuum_sensitive",
+        ),
+        model_support="uncertain",
+        reference_ids=(
+            "riddick2007_m_dwarf_optical_indices",
+            "mcgovern2004_brown_dwarf_gravity_features",
+        ),
+    ),
+    DiagnosticWindow(
         id="na_i_8200",
         label="Na I 8190",
         region_A=(8170.0, 8230.0),
@@ -522,6 +701,8 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         reference_ids=(
             "nist_asd_v512",
             "gray_corbally2009_spectral_classification",
+            "riddick2007_m_dwarf_optical_indices",
+            "mcgovern2004_brown_dwarf_gravity_features",
         ),
     ),
     DiagnosticWindow(
@@ -564,6 +745,28 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         ),
     ),
     DiagnosticWindow(
+        id="feh_8700",
+        label="FeH 8700",
+        region_A=(8648.0, 8732.0),
+        roles=("temperature", "gravity", "cool_star", "molecular"),
+        features=("FeH band near 8700 A",),
+        priority=0.52,
+        min_overlap_A=42.0,
+        min_pixels=18,
+        teff_range_K=(2500.0, 4200.0),
+        spectral_type_hint="late-M gravity/molecular check near Ca triplet",
+        risk_tags=(
+            "ca_triplet_overlap",
+            "molecular_model_sensitive",
+            "telluric_sensitive",
+        ),
+        model_support="uncertain",
+        reference_ids=(
+            "riddick2007_m_dwarf_optical_indices",
+            "mcgovern2004_brown_dwarf_gravity_features",
+        ),
+    ),
+    DiagnosticWindow(
         id="tio_red_bands",
         label="Red TiO bands",
         region_A=(8430.0, 8900.0),
@@ -578,6 +781,7 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         reference_ids=(
             "gray_corbally2009_spectral_classification",
             "rayner2009_irtf_cool_stars",
+            "riddick2007_m_dwarf_optical_indices",
         ),
     ),
     DiagnosticWindow(
@@ -649,6 +853,46 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         ),
     ),
     DiagnosticWindow(
+        id="na_i_kband",
+        label="K-band Na I",
+        region_A=(21950.0, 22130.0),
+        roles=("temperature", "gravity", "metallicity", "rv", "cool_star"),
+        features=("Na I 2.20/2.21 μm",),
+        priority=0.62,
+        min_overlap_A=80.0,
+        min_pixels=25,
+        teff_range_K=(3000.0, 6500.0),
+        spectral_type_hint="K-band late-type-star classification check",
+        risk_tags=("telluric_sensitive", "continuum_sensitive", "veiling_sensitive"),
+        model_support="uncertain",
+        reference_ids=(
+            "nist_asd_v512",
+            "luhman_rieke1998_kband_classification",
+            "hubrig2007_kband_companion_classification",
+            "kleinmann_hall1986_kband_atlas",
+        ),
+    ),
+    DiagnosticWindow(
+        id="ca_i_kband",
+        label="K-band Ca I",
+        region_A=(22540.0, 22740.0),
+        roles=("temperature", "gravity", "metallicity", "rv", "cool_star"),
+        features=("Ca I 2.26 μm",),
+        priority=0.60,
+        min_overlap_A=90.0,
+        min_pixels=25,
+        teff_range_K=(3000.0, 6500.0),
+        spectral_type_hint="K-band late-type-star classification check",
+        risk_tags=("telluric_sensitive", "continuum_sensitive", "veiling_sensitive"),
+        model_support="uncertain",
+        reference_ids=(
+            "nist_asd_v512",
+            "luhman_rieke1998_kband_classification",
+            "hubrig2007_kband_companion_classification",
+            "kleinmann_hall1986_kband_atlas",
+        ),
+    ),
+    DiagnosticWindow(
         id="co_23um_bandhead",
         label="CO 2.3 μm bandhead",
         region_A=(22850.0, 23650.0),
@@ -663,6 +907,7 @@ DIAGNOSTIC_WINDOW_CATALOG = (
         reference_ids=(
             "kleinmann_hall1986_kband_atlas",
             "rayner2009_irtf_cool_stars",
+            "hubrig2007_kband_companion_classification",
         ),
     ),
 )

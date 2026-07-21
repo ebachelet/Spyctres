@@ -50,6 +50,8 @@ def test_blue_optical_selection_includes_balmer_ca_he_and_mg_windows():
 
     assert {"h_beta", "h_gamma", "h_delta", "ca_hk_h_epsilon"} <= ids
     assert "he_i_4471" in ids
+    assert "mg_ii_4481" in ids
+    assert "si_ii_4128_4130" in ids
     assert "mg_i_b" in ids
     assert "co_23um_bandhead" not in ids
     assert selection["selection_policy"]["expensive_fits_run"] is False
@@ -59,6 +61,34 @@ def test_blue_optical_selection_includes_balmer_ca_he_and_mg_windows():
     assert "score_components" in h_beta
     assert "detrended_contrast_score" in h_beta["score_components"]
     assert h_beta["feature_family"] == ["hydrogen"]
+
+
+def test_blue_optical_selection_includes_ch_g_band_for_intermediate_stars():
+    segment = _segment(3800.0, 5220.0)
+
+    selection = select_diagnostic_windows(segment, initial_teff=5500.0)
+    ids = {item["id"] for item in selection["selected"]}
+
+    assert "ch_g_band" in ids
+    ch = next(item for item in selection["selected"] if item["id"] == "ch_g_band")
+    assert "molecular" in ch["feature_family"]
+    assert ch["model_support"] == "uncertain"
+    assert "carbon_abundance_sensitive" in ch["risk_tags"]
+
+
+def test_red_optical_selection_includes_cool_molecular_and_alkali_windows():
+    segment = _segment(6500.0, 9000.0, n=2500, name="red")
+
+    selection = select_diagnostic_windows(segment, initial_teff=3200.0)
+    ids = {item["id"] for item in selection["selected"]}
+
+    assert {"vo_7450", "vo_7900", "feh_8700", "k_i_7700"} <= ids
+    ki = next(item for item in selection["selected"] if item["id"] == "k_i_7700")
+    assert "atomic_metal" in ki["feature_family"]
+    assert "telluric_o2_overlap" in ki["risk_tags"]
+    vo = next(item for item in selection["selected"] if item["id"] == "vo_7900")
+    assert "molecular" in vo["feature_family"]
+    assert vo["model_support"] == "uncertain"
 
 
 def test_near_ir_selection_has_hot_and_cool_diagnostics():
@@ -75,6 +105,8 @@ def test_near_ir_selection_has_hot_and_cool_diagnostics():
 
     assert "ca_ii_triplet_paschen" in cool_ids
     assert "co_23um_bandhead" in cool_ids
+    assert "na_i_kband" in cool_ids
+    assert "ca_i_kband" in cool_ids
     assert "tio_red_bands" in cool_ids
     assert "paschen_beta" in hot_ids
     assert "brackett_h_band" in hot_ids
@@ -84,6 +116,7 @@ def test_near_ir_selection_has_hot_and_cool_diagnostics():
     hot_scores = {item["id"]: item["score"] for item in hot_selection["selected"]}
     assert cool_scores["co_23um_bandhead"] > hot_scores["co_23um_bandhead"]
     assert hot_scores["br_gamma"] > cool_scores["br_gamma"]
+    assert cool_scores["na_i_kband"] > hot_scores["na_i_kband"]
     co_hot = next(
         item for item in hot_selection["selected"] if item["id"] == "co_23um_bandhead"
     )
@@ -127,12 +160,19 @@ def test_collection_selection_combines_segment_coverage():
 
 def test_role_filter_matches_split_metadata_fields():
     selection = select_diagnostic_windows(
-        _segment(8200.0, 24000.0, n=3000, name="nir"),
+        SpectrumCollection(
+            [
+                _segment(7000.0, 9000.0, n=1600, name="red"),
+                _segment(21000.0, 24000.0, n=1200, name="nir"),
+            ]
+        ),
         roles=["molecular"],
     )
     ids = {item["id"] for item in selection["selected"]}
 
     assert "co_23um_bandhead" in ids
+    assert "vo_7900" in ids
+    assert "feh_8700" in ids
     assert "tio_red_bands" in ids
     assert "br_gamma" not in ids
 
