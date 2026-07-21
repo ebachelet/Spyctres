@@ -11,7 +11,8 @@ Example
 python scripts/diagnostic_window_audit.py \
   examples/xsl_validation_manifest.csv \
   --output-json /tmp/spyctres_diagnostic_window_audit.json \
-  --output-csv /tmp/spyctres_diagnostic_window_audit.csv
+  --output-csv /tmp/spyctres_diagnostic_window_audit.csv \
+  --output-plot /tmp/spyctres_diagnostic_window_audit.png
 """
 
 from __future__ import annotations
@@ -107,7 +108,8 @@ def build_parser():
             "  python scripts/diagnostic_window_audit.py "
             "examples/xsl_validation_manifest.csv "
             "--output-json /tmp/spyctres_diagnostic_window_audit.json "
-            "--output-csv /tmp/spyctres_diagnostic_window_audit.csv\n\n"
+            "--output-csv /tmp/spyctres_diagnostic_window_audit.csv "
+            "--output-plot /tmp/spyctres_diagnostic_window_audit.png\n\n"
             "Generic manifest rows may include: path, target_id or xsl_id, "
             "instrument, spectral_type, teff_ref, validation_role."
         ),
@@ -133,6 +135,17 @@ def build_parser():
         "--output-csv",
         default=None,
         help="Optional compact per-target CSV path.",
+    )
+    parser.add_argument(
+        "--output-plot",
+        default=None,
+        help="Optional compact top-window heatmap path.",
+    )
+    parser.add_argument(
+        "--plot-max-windows",
+        type=int,
+        default=18,
+        help="Maximum top-window columns shown in the heatmap. Default: 18.",
     )
     parser.add_argument(
         "--roles",
@@ -588,6 +601,63 @@ def write_audit_csv(path, payload):
             )
 
 
+def plot_audit_heatmap(payload, savepath=None, *, max_windows=18):
+    """Plot a compact target-by-window heatmap from an audit payload.
+
+    The heatmap uses the per-target ``top_window_ids`` list, not every selected
+    covered window.  This makes broad-coverage products such as XSL easier to
+    inspect: cells are darker when a window appears closer to the top of that
+    target's scored list.
+    """
+    import matplotlib.pyplot as plt
+
+    targets = list(payload.get("targets", ()))
+    if not targets:
+        raise ValueError("No diagnostic-window audit targets to plot.")
+    max_windows = int(max_windows)
+    if max_windows < 1:
+        raise ValueError("max_windows must be >= 1.")
+
+    window_ids = _ordered_top_window_ids(targets, max_windows=max_windows)
+    if not window_ids:
+        raise ValueError("No top diagnostic windows available to plot.")
+
+    matrix = np.zeros((len(targets), len(window_ids)), dtype=float)
+    for row_index, target in enumerate(targets):
+        top_ids = list(target.get("selection_summary", {}).get("top_window_ids", ()))
+        scale = max(len(top_ids), 1)
+        for rank, window_id in enumerate(top_ids):
+            if window_id not in window_ids:
+                continue
+            col_index = window_ids.index(window_id)
+            matrix[row_index, col_index] = (scale - rank) / scale
+
+    height = max(4.0, 0.42 * len(targets) + 1.8)
+    width = max(9.0, 0.52 * len(window_ids) + 3.0)
+    fig, ax = plt.subplots(figsize=(width, height), constrained_layout=True)
+    image = ax.imshow(matrix, aspect="auto", interpolation="nearest", cmap="Blues")
+    ax.set_title(
+        "Diagnostic-window audit: top selected windows\n"
+        "Darker cells mean higher rank; stress/peculiar targets are shown but "
+        "excluded from ordinary recovery statistics.",
+        fontsize=11,
+    )
+    ax.set_xlabel("diagnostic window")
+    ax.set_ylabel("target")
+    ax.set_xticks(np.arange(len(window_ids)))
+    ax.set_xticklabels(window_ids, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(np.arange(len(targets)))
+    ax.set_yticklabels([_target_plot_label(target) for target in targets], fontsize=8)
+    ax.grid(False)
+    cbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
+    cbar.set_label("relative rank in target top list")
+    if savepath is not None:
+        savepath = Path(savepath)
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(savepath, dpi=170)
+    return fig, ax
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     roles = _parse_roles(args.roles)
@@ -610,6 +680,15 @@ def main(argv=None):
     print("Writing diagnostic-window audit outputs...", flush=True)
     write_audit_json(args.output_json, payload)
     write_audit_csv(args.output_csv, payload)
+    if args.output_plot is not None:
+        fig, _ax = plot_audit_heatmap(
+            payload,
+            savepath=args.output_plot,
+            max_windows=args.plot_max_windows,
+        )
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
     missing = payload["summary"]["n_ordinary_missing_expected_groups"]
     print(
         "Done. targets={0}, ordinary_missing_expected_groups={1}, output={2}".format(
@@ -686,6 +765,31 @@ def _group_has_coverage(window_ids, coverage_spans):
             if max(lo, span_lo) < min(hi, span_hi):
                 return True
     return False
+
+
+def _ordered_top_window_ids(targets, *, max_windows):
+    counts = Counter()
+    first_seen = {}
+    for target in targets:
+        for window_id in target.get("selection_summary", {}).get("top_window_ids", ()):
+            counts[window_id] += 1
+            first_seen.setdefault(window_id, len(first_seen))
+    ordered = sorted(
+        counts,
+        key=lambda item: (-counts[item], first_seen[item], item),
+    )
+    return ordered[: int(max_windows)]
+
+
+def _target_plot_label(target):
+    bits = [str(target.get("target_id") or "target")]
+    spectral_type = target.get("spectral_type")
+    if spectral_type:
+        bits.append(str(spectral_type))
+    role = target.get("validation_role")
+    if role and role != "standard":
+        bits.append("[{0}]".format(role))
+    return " ".join(bits)
 
 
 def _emit_progress(callback, message):

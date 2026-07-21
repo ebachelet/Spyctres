@@ -2,6 +2,7 @@ import csv
 import json
 
 import numpy as np
+import pytest
 
 from scripts import diagnostic_window_audit
 
@@ -37,6 +38,7 @@ def test_diagnostic_window_audit_cli_writes_json_and_csv(tmp_path):
     manifest = tmp_path / "manifest.csv"
     output_json = tmp_path / "audit" / "windows.json"
     output_csv = tmp_path / "audit" / "windows.csv"
+    output_plot = tmp_path / "audit" / "windows.png"
     _write_ascii_spectrum(spectrum)
     _write_manifest(
         manifest,
@@ -61,6 +63,8 @@ def test_diagnostic_window_audit_cli_writes_json_and_csv(tmp_path):
             str(output_json),
             "--output-csv",
             str(output_csv),
+            "--output-plot",
+            str(output_plot),
             "--fail-on-standard-missing",
         ]
     )
@@ -76,6 +80,7 @@ def test_diagnostic_window_audit_cli_writes_json_and_csv(tmp_path):
     assert "ch_g_band" in target["selection_summary"]["selected_window_ids"]
     assert "h_beta" in target["selection_summary"]["selected_window_ids"]
     assert output_csv.exists()
+    assert output_plot.exists()
 
 
 def test_stress_missing_expectations_do_not_count_as_ordinary_failures():
@@ -148,3 +153,36 @@ def test_expected_group_checks_are_coverage_and_teff_aware():
     assert by_id["ch_g_band"]["status"] == "ok"
     assert by_id["kband_late_type"]["status"] == "not_applicable_no_coverage"
     assert by_id["cool_red_molecular"]["status"] == "not_applicable_teff"
+
+
+def test_plot_audit_heatmap_writes_file_and_rejects_empty_payload(tmp_path):
+    payload = {
+        "targets": [
+            {
+                "target_id": "hot",
+                "spectral_type": "A0",
+                "validation_role": "standard",
+                "selection_summary": {"top_window_ids": ["h_beta", "h_gamma"]},
+            },
+            {
+                "target_id": "cool",
+                "spectral_type": "M2",
+                "validation_role": "cool_stress",
+                "selection_summary": {"top_window_ids": ["tio_7050", "h_beta"]},
+            },
+        ]
+    }
+    plot_path = tmp_path / "plots" / "audit.png"
+
+    fig, _ax = diagnostic_window_audit.plot_audit_heatmap(
+        payload,
+        savepath=plot_path,
+    )
+
+    import matplotlib.pyplot as plt
+
+    plt.close(fig)
+    assert plot_path.exists()
+
+    with pytest.raises(ValueError, match="No diagnostic-window audit targets"):
+        diagnostic_window_audit.plot_audit_heatmap({"targets": []})
