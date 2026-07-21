@@ -60,6 +60,10 @@ scientific than smoke tests.
   spectra using the manifest roles and validation budgets.
 - `xsl_validation_plots.py` renders saved XSL validation JSON payloads into
   classification plots for inspection and review.
+- `diagnostic_window_audit.py` runs the PHOENIX-free diagnostic-window selector
+  over a manifest, such as the bundled XSL Figure 1 validation manifest, and
+  writes role-aware JSON/CSV summaries. Use it before changing diagnostic-window
+  scores so standard targets and stress/peculiar targets remain separated.
 
 Validation outputs can be large and should usually remain local unless they are
 small, curated example assets that are intentionally added under `examples/`.
