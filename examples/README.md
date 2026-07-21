@@ -390,6 +390,12 @@ choice, resolution assumptions, and single-line/leave-one-line-out Balmer
 window sets. It is deliberately not executed by default, so the example remains
 cheap and does not launch a hidden grid of PHOENIX fits.
 
+The scaffold also writes cheap per-line Balmer diagnostics into the JSON:
+sideband coverage, line-depth and equivalent-width proxies, masked-core
+fractions, blue/red wing asymmetry, and known DIB overlaps. These are
+observed-profile sanity checks only. They tell you which Balmer lines deserve
+visual or fitted follow-up; they are not calibrated atmospheric measurements.
+
 To save compact review artifacts for the mask grid and generic feature-window
 selection:
 
@@ -399,7 +405,8 @@ python examples/publication_quality_xshooter_uvb.py \
   --output-comparison-csv /tmp/spyctres_core_mask_summary.csv \
   --output-comparison-plot /tmp/spyctres_core_mask_summary.png \
   --output-diagnostic-window-csv /tmp/spyctres_diagnostic_windows.csv \
-  --output-systematic-plan-csv /tmp/spyctres_systematic_plan.csv
+  --output-systematic-plan-csv /tmp/spyctres_systematic_plan.csv \
+  --output-balmer-line-csv /tmp/spyctres_balmer_line_diagnostics.csv
 ```
 
 After PHOENIX is configured, opt in to the baseline fit:

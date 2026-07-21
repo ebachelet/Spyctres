@@ -11,6 +11,7 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     comparison_plot = tmp_path / "core_mask_summary.png"
     window_csv = tmp_path / "diagnostic_windows.csv"
     systematic_csv = tmp_path / "systematic_plan.csv"
+    line_csv = tmp_path / "balmer_lines.csv"
     cmd = [
         sys.executable,
         "examples/publication_quality_xshooter_uvb.py",
@@ -24,6 +25,8 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
         str(window_csv),
         "--output-systematic-plan-csv",
         str(systematic_csv),
+        "--output-balmer-line-csv",
+        str(line_csv),
         "--force",
     ]
 
@@ -83,7 +86,20 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
         for item in plan["variants"]
     )
     assert any(item["id"].startswith("window_set_single_") for item in plan["variants"])
+    line_diagnostics = payload["per_line_balmer_diagnostics"]
+    assert line_diagnostics["status"] == "computed"
+    assert line_diagnostics["summary"]["n_lines"] == 3
+    line_labels = {item["line_label"] for item in line_diagnostics["lines"]}
+    assert {"Hδ", "Hγ", "Hβ"} == line_labels
+    assert all(item["diagnostic_type"] == "observed_profile_proxy" for item in line_diagnostics["lines"])
+    assert all("absorption_depth_proxy" in item for item in line_diagnostics["lines"])
+    assert any(
+        overlap.get("id") in {"dib_4428", "dib_4882"}
+        for item in line_diagnostics["lines"]
+        for overlap in item["known_nonstellar_overlaps"]
+    )
     assert comparison_csv.exists()
     assert comparison_plot.exists()
     assert window_csv.exists()
     assert systematic_csv.exists()
+    assert line_csv.exists()

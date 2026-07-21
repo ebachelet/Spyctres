@@ -79,7 +79,8 @@ requirements.
    penalty/recommendation, a bounded fit-level systematic-variant plan for
    continuum degree, preparation normalization, Balmer-core mask, resolution
    assumption, and Balmer window-set sensitivity, an opt-in baseline PHOENIX
-   fit, and a separate bounded diagnostic-window comparison scaffold. The comparison
+   fit, cheap per-line Balmer observed-profile diagnostics, and a separate
+   bounded diagnostic-window comparison scaffold. The comparison
    scaffold plans trusted-baseline, role-balanced, single-window,
    leave-one-out, and leave-one-family-out checks without ranking by raw
    chi-square alone; expensive fits stay opt-in. It now includes held-out
@@ -87,8 +88,8 @@ requirements.
    model arrays are available, so users can compare parameter stability and
    residual behaviour without treating raw in-fit chi-square as a winner
    selector. The remaining work is to execute selected fit-level systematic
-   variants after baseline review, add per-line checks, injection/recovery,
-   profile scans, and final uncertainty tables. The first diagnostic-window catalog
+   variants after baseline review, add model-residual per-line checks,
+   injection/recovery, profile scans, and final uncertainty tables. The first diagnostic-window catalog
    expansion now includes the planned early-type He/Mg/Si family, CH G-band,
    cool-dwarf CaH/K I/FeH/VO family, and K-band Na I/Ca I family with explicit
    model-support and risk policies. The next step is to calibrate window

@@ -16,6 +16,10 @@ Example audit-only run
 python examples/publication_quality_xshooter_uvb.py \
   --output-json /tmp/spyctres_publication_xshooter_uvb.json
 
+Optional review artifacts can also be written as CSV/PNG tables, including
+core-mask sensitivity, generic diagnostic windows, systematic-variant plans,
+and per-line Balmer observed-profile diagnostics.
+
 Example baseline fit after PHOENIX is configured
 ------------------------------------------------
 python examples/publication_quality_xshooter_uvb.py \
@@ -55,6 +59,7 @@ from Spyctres.plotting import plot_fit_referee
 from Spyctres.preprocessing import (
     archive_exclusion_masks_for_segment,
     audit_spectrum_for_fit,
+    overlapping_nonstellar_features,
 )
 from Spyctres.recipes import prepare_xshooter_balmer_case
 
@@ -112,6 +117,10 @@ def build_parser():
             "Examples:\n"
             "  python examples/publication_quality_xshooter_uvb.py "
             "--output-json /tmp/spyctres_publication_xshooter_uvb.json\n\n"
+            "  python examples/publication_quality_xshooter_uvb.py "
+            "--output-json /tmp/spyctres_publication_xshooter_uvb.json "
+            "--output-balmer-line-csv /tmp/spyctres_balmer_lines.csv "
+            "--output-systematic-plan-csv /tmp/spyctres_systematics.csv\n\n"
             "  python examples/publication_quality_xshooter_uvb.py "
             "--run-baseline-fit "
             "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
@@ -176,6 +185,15 @@ def build_parser():
             "Optional CSV table listing the planned fit-level systematic "
             "variants. This is a plan/report only; expensive variant fits are "
             "not run by default."
+        ),
+    )
+    parser.add_argument(
+        "--output-balmer-line-csv",
+        default=None,
+        help=(
+            "Optional CSV table of cheap per-line Balmer observed-profile "
+            "diagnostics: sideband coverage, line-depth proxies, wing "
+            "asymmetry, mask fractions, and known DIB overlaps."
         ),
     )
     parser.add_argument(
@@ -567,6 +585,390 @@ def _fit_window_summary(segments):
             }
         )
     return rows
+
+
+def _finite_or_none(value):
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value):
+        return None
+    return value
+
+
+def _median_or_none(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return None
+    return float(np.nanmedian(values))
+
+
+def _percentile_or_none(values, percentile):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return None
+    return float(np.nanpercentile(values, float(percentile)))
+
+
+def _integrate_trapezoid(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    good = np.isfinite(x) & np.isfinite(y)
+    if np.count_nonzero(good) < 2:
+        return None
+    x = x[good]
+    y = y[good]
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+    dx = np.diff(x)
+    if dx.size == 0:
+        return None
+    return float(np.sum(0.5 * (y[:-1] + y[1:]) * dx))
+
+
+def _exclusion_union_for_wave(wave, exclude_masks):
+    wave = np.asarray(wave, dtype=float)
+    union = np.zeros(wave.shape, dtype=bool)
+    rows = []
+    for mask in exclude_masks or ():
+        name = getattr(mask, "name", "exclude_mask")
+        try:
+            raw = np.asarray(mask(wave))
+        except Exception as exc:  # pragma: no cover - defensive provenance path
+            rows.append(
+                {
+                    "name": str(name),
+                    "status": "error",
+                    "error": "{0}: {1}".format(type(exc).__name__, exc),
+                    "n_pixels": 0,
+                }
+            )
+            continue
+        if raw.shape != wave.shape:
+            rows.append(
+                {
+                    "name": str(name),
+                    "status": "shape_mismatch",
+                    "n_pixels": 0,
+                }
+            )
+            continue
+        if raw.dtype == bool:
+            cur = raw
+        else:
+            cur = np.asarray(raw, dtype=float) > 0.5
+            cur |= ~np.isfinite(np.asarray(raw, dtype=float))
+        union |= cur
+        rows.append(
+            {
+                "name": str(name),
+                "status": "ok",
+                "n_pixels": int(np.count_nonzero(cur)),
+            }
+        )
+    return union, rows
+
+
+def _sideband_masks_for_segment(segment, wave, base_valid):
+    center = _finite_or_none(segment.meta.get("line_center_data"))
+    cont_windows = segment.meta.get("cont_windows")
+    if center is None or cont_windows is None:
+        return {
+            "mode": "fallback_percentile",
+            "blue": np.zeros(wave.shape, dtype=bool),
+            "red": np.zeros(wave.shape, dtype=bool),
+            "combined": np.zeros(wave.shape, dtype=bool),
+            "windows_A": [],
+        }
+    blue = np.zeros(wave.shape, dtype=bool)
+    red = np.zeros(wave.shape, dtype=bool)
+    windows = []
+    for lo_offset, hi_offset in cont_windows:
+        lo = center + float(lo_offset)
+        hi = center + float(hi_offset)
+        cur = base_valid & (wave >= min(lo, hi)) & (wave <= max(lo, hi))
+        if hi <= center:
+            blue |= cur
+        elif lo >= center:
+            red |= cur
+        else:
+            blue |= cur & (wave < center)
+            red |= cur & (wave > center)
+        windows.append([float(min(lo, hi)), float(max(lo, hi))])
+    return {
+        "mode": "explicit_sidebands",
+        "blue": blue,
+        "red": red,
+        "combined": blue | red,
+        "windows_A": windows,
+    }
+
+
+def _line_feature_overlap_notes(segment):
+    return overlapping_nonstellar_features(
+        segment,
+        names=("dib_4428", "dib_4882"),
+        padding_A=0.0,
+    )
+
+
+def _balmer_line_diagnostics(collection, exclude_masks, *, core_mask_halfwidth):
+    """Return cheap observed-profile diagnostics for each Balmer fit segment.
+
+    These summaries intentionally avoid PHOENIX models. They are meant to flag
+    line-specific data/model-risk before expensive publication fits: sideband
+    coverage, masked-pixel fractions, line-depth proxies, wing asymmetry, and
+    known DIB overlaps.
+    """
+    rows = []
+    core_mask_halfwidth = float(core_mask_halfwidth)
+    if not np.isfinite(core_mask_halfwidth) or core_mask_halfwidth < 0.0:
+        core_mask_halfwidth = 0.0
+
+    for index, segment in enumerate(collection.segments):
+        wave = np.asarray(segment.wave, dtype=float)
+        flux = np.asarray(segment.flux, dtype=float)
+        err = None if segment.err is None else np.asarray(segment.err, dtype=float)
+        segment_mask = np.asarray(
+            getattr(segment, "mask", np.ones(wave.shape, dtype=bool)),
+            dtype=bool,
+        )
+        base_valid = (
+            segment_mask
+            & np.isfinite(wave)
+            & np.isfinite(flux)
+        )
+        if err is not None and err.shape == wave.shape:
+            base_valid &= np.isfinite(err) & (err > 0)
+        excluded, exclusion_rows = _exclusion_union_for_wave(wave, exclude_masks)
+        fit_candidate = base_valid & ~excluded
+
+        center = _finite_or_none(segment.meta.get("line_center_data"))
+        sidebands = _sideband_masks_for_segment(segment, wave, base_valid)
+        sideband_flux = flux[sidebands["combined"]]
+        continuum = _median_or_none(sideband_flux)
+        continuum_source = sidebands["mode"]
+        if continuum is None or continuum <= 0.0:
+            continuum = _percentile_or_none(flux[base_valid], 90.0)
+            continuum_source = "fallback_90th_percentile"
+        if continuum is None or continuum <= 0.0:
+            continuum = _median_or_none(flux[base_valid])
+            continuum_source = "fallback_median"
+
+        normalized = None
+        if continuum is not None and continuum > 0.0:
+            normalized = flux / float(continuum)
+
+        if center is None:
+            core_mask = np.zeros(wave.shape, dtype=bool)
+            blue_wing = np.zeros(wave.shape, dtype=bool)
+            red_wing = np.zeros(wave.shape, dtype=bool)
+        else:
+            core_mask = base_valid & (np.abs(wave - center) <= core_mask_halfwidth)
+            blue_wing = fit_candidate & (wave < center - core_mask_halfwidth)
+            red_wing = fit_candidate & (wave > center + core_mask_halfwidth)
+
+        line_mask = base_valid
+        fit_line_mask = fit_candidate
+        core_norm = None if normalized is None else normalized[core_mask]
+        fit_norm = None if normalized is None else normalized[fit_line_mask]
+        blue_norm = None if normalized is None else normalized[blue_wing]
+        red_norm = None if normalized is None else normalized[red_wing]
+
+        core_min = _percentile_or_none(core_norm, 5.0) if core_norm is not None else None
+        absorption_depth = (
+            None if core_min is None else float(1.0 - float(core_min))
+        )
+        ew_proxy = (
+            None
+            if normalized is None
+            else _integrate_trapezoid(wave[line_mask], 1.0 - normalized[line_mask])
+        )
+        ew_fit_proxy = (
+            None
+            if normalized is None
+            else _integrate_trapezoid(
+                wave[fit_line_mask],
+                1.0 - normalized[fit_line_mask],
+            )
+        )
+        blue_median = _median_or_none(blue_norm) if blue_norm is not None else None
+        red_median = _median_or_none(red_norm) if red_norm is not None else None
+        wing_asymmetry = None
+        if blue_median is not None and red_median is not None:
+            denom = max(abs(0.5 * (blue_median + red_median)), 1e-30)
+            wing_asymmetry = float((red_median - blue_median) / denom)
+
+        n_base = int(np.count_nonzero(base_valid))
+        n_fit = int(np.count_nonzero(fit_candidate))
+        n_core = int(np.count_nonzero(core_mask))
+        n_core_excluded = int(np.count_nonzero(core_mask & excluded))
+        n_sideband = int(np.count_nonzero(sidebands["combined"]))
+        n_blue = int(np.count_nonzero(sidebands["blue"]))
+        n_red = int(np.count_nonzero(sidebands["red"]))
+        feature_overlaps = _line_feature_overlap_notes(segment)
+
+        flags = []
+        if n_fit < 50:
+            flags.append("low_fit_pixels")
+        if n_base > 0 and n_fit / max(1, n_base) < 0.5:
+            flags.append("high_line_mask_fraction")
+        if n_sideband < 10 or n_blue < 3 or n_red < 3:
+            flags.append("weak_or_missing_sideband_coverage")
+        if absorption_depth is None:
+            flags.append("line_depth_unmeasured")
+        elif absorption_depth < 0.02:
+            flags.append("weak_or_emission_like_core")
+        elif absorption_depth > 0.85:
+            flags.append("very_deep_core_or_artifact")
+        if wing_asymmetry is not None and abs(wing_asymmetry) > 0.08:
+            flags.append("wing_asymmetry_review")
+        if feature_overlaps:
+            flags.append("known_nonstellar_overlap")
+
+        rows.append(
+            {
+                "segment_index": int(index),
+                "segment_name": segment.name,
+                "line_label": segment.meta.get("line_label", segment.name),
+                "line_center_vac_A": segment.meta.get("line_center_vac"),
+                "line_center_data_A": center,
+                "wave_medium": segment.wave_medium,
+                "diagnostic_type": "observed_profile_proxy",
+                "n_pixels": int(wave.size),
+                "n_base_valid": n_base,
+                "n_fit_candidate": n_fit,
+                "fit_candidate_fraction": float(n_fit / max(1, n_base)),
+                "n_core_pixels": n_core,
+                "n_core_excluded_pixels": n_core_excluded,
+                "core_excluded_fraction": float(n_core_excluded / max(1, n_core)),
+                "core_mask_halfwidth_A": float(core_mask_halfwidth),
+                "sideband_mode": sidebands["mode"],
+                "sideband_windows_A": sidebands["windows_A"],
+                "n_sideband_pixels": n_sideband,
+                "n_blue_sideband_pixels": n_blue,
+                "n_red_sideband_pixels": n_red,
+                "continuum_proxy": continuum,
+                "continuum_proxy_source": continuum_source,
+                "core_5th_percentile_normalized_flux": core_min,
+                "absorption_depth_proxy": absorption_depth,
+                "equivalent_width_proxy_A": ew_proxy,
+                "fit_candidate_equivalent_width_proxy_A": ew_fit_proxy,
+                "blue_wing_median_normalized_flux": blue_median,
+                "red_wing_median_normalized_flux": red_median,
+                "wing_asymmetry_fraction": wing_asymmetry,
+                "known_nonstellar_overlaps": feature_overlaps,
+                "exclusion_masks": exclusion_rows,
+                "quality_flags": flags,
+                "interpretation": (
+                    "Observed-profile proxy only. Use this to decide which "
+                    "Balmer lines need visual/fitted follow-up; do not treat "
+                    "these values as calibrated atmospheric parameters."
+                ),
+            }
+        )
+
+    flagged = [
+        row["line_label"]
+        for row in rows
+        if row.get("quality_flags")
+    ]
+    depths = [
+        row["absorption_depth_proxy"]
+        for row in rows
+        if row.get("absorption_depth_proxy") is not None
+    ]
+    asym = [
+        abs(row["wing_asymmetry_fraction"])
+        for row in rows
+        if row.get("wing_asymmetry_fraction") is not None
+    ]
+    return {
+        "schema_version": 1,
+        "status": "computed" if rows else "no_lines",
+        "method": "observed_balmer_profile_proxy_diagnostics",
+        "core_mask_halfwidth_A": float(core_mask_halfwidth),
+        "summary": {
+            "n_lines": int(len(rows)),
+            "n_flagged_lines": int(len(flagged)),
+            "flagged_lines": flagged,
+            "median_absorption_depth_proxy": (
+                None if not depths else float(np.nanmedian(depths))
+            ),
+            "max_abs_wing_asymmetry_fraction": (
+                None if not asym else float(np.nanmax(asym))
+            ),
+        },
+        "lines": rows,
+        "interpretation": (
+            "These diagnostics are cheap observed-spectrum checks for line-by-"
+            "line review. They help identify Balmer lines affected by masks, "
+            "sideband weakness, DIB overlap, artifacts, or asymmetric wings "
+            "before expensive PHOENIX systematic variants are run."
+        ),
+    }
+
+
+def _write_balmer_line_diagnostic_csv(path, diagnostics):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "line_label",
+        "segment_name",
+        "line_center_data_A",
+        "n_base_valid",
+        "n_fit_candidate",
+        "fit_candidate_fraction",
+        "n_core_pixels",
+        "n_core_excluded_pixels",
+        "core_excluded_fraction",
+        "n_sideband_pixels",
+        "continuum_proxy_source",
+        "absorption_depth_proxy",
+        "equivalent_width_proxy_A",
+        "fit_candidate_equivalent_width_proxy_A",
+        "wing_asymmetry_fraction",
+        "known_nonstellar_overlaps",
+        "quality_flags",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in diagnostics.get("lines", ()):
+            writer.writerow(
+                {
+                    "line_label": row.get("line_label"),
+                    "segment_name": row.get("segment_name"),
+                    "line_center_data_A": row.get("line_center_data_A"),
+                    "n_base_valid": row.get("n_base_valid"),
+                    "n_fit_candidate": row.get("n_fit_candidate"),
+                    "fit_candidate_fraction": row.get("fit_candidate_fraction"),
+                    "n_core_pixels": row.get("n_core_pixels"),
+                    "n_core_excluded_pixels": row.get("n_core_excluded_pixels"),
+                    "core_excluded_fraction": row.get("core_excluded_fraction"),
+                    "n_sideband_pixels": row.get("n_sideband_pixels"),
+                    "continuum_proxy_source": row.get("continuum_proxy_source"),
+                    "absorption_depth_proxy": row.get("absorption_depth_proxy"),
+                    "equivalent_width_proxy_A": row.get("equivalent_width_proxy_A"),
+                    "fit_candidate_equivalent_width_proxy_A": row.get(
+                        "fit_candidate_equivalent_width_proxy_A"
+                    ),
+                    "wing_asymmetry_fraction": row.get("wing_asymmetry_fraction"),
+                    "known_nonstellar_overlaps": ";".join(
+                        item.get("id", item.get("name", "feature"))
+                        for item in row.get("known_nonstellar_overlaps", ())
+                    ),
+                    "quality_flags": ";".join(row.get("quality_flags", ())),
+                }
+            )
 
 
 def _diagnostic_window_payload(segment):
@@ -999,6 +1401,11 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
             "metadata": {mask.name: dict(mask.metadata) for mask in exclude_masks},
             "archive_mask_policy": args.archive_mask_policy,
         },
+        "per_line_balmer_diagnostics": _balmer_line_diagnostics(
+            collection,
+            exclude_masks,
+            core_mask_halfwidth=float(args.balmer_core_mask),
+        ),
         "ordinary_readiness": None,
         "publication_readiness": None,
         "core_mask_sensitivity": None,
@@ -1498,6 +1905,10 @@ def main(argv=None):
     _write_diagnostic_window_csv(
         args.output_diagnostic_window_csv,
         payload["analysis_design"]["generic_diagnostic_windows"],
+    )
+    _write_balmer_line_diagnostic_csv(
+        args.output_balmer_line_csv,
+        payload["per_line_balmer_diagnostics"],
     )
     _atomic_write_json(output_path, payload)
     print("Wrote scaffold checkpoint: {0}".format(output_path), flush=True)
