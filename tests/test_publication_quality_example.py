@@ -263,6 +263,48 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
     assert "trial_1" in csv_text
 
 
+def test_publication_summary_treats_masked_core_note_as_informational():
+    module = _load_publication_example_module()
+    diagnostics = {
+        "status": "computed",
+        "summary": {"quality_flags": ["core_model_only_not_fitted"]},
+        "lines": [
+            {
+                "status": "ok",
+                "line_label": "Hγ",
+                "used_residuals": {
+                    "chi2_red_proxy": 1.1,
+                    "rms_fractional_residual": 0.01,
+                },
+                "quality_flags": ["core_model_only_not_fitted"],
+            }
+        ],
+    }
+    payload = {
+        "publication_readiness": {"publication_ready": True, "blockers": []},
+        "baseline_fit": {
+            "success": True,
+            "teff": 9000.0,
+            "feh": 0.0,
+            "logg": 3.0,
+            "rv_kms": 0.0,
+            "chi2_red": 1.2,
+            "quality_flags": [],
+        },
+        "baseline_line_residual_diagnostics": diagnostics,
+        "systematic_variant_results": {"status": "planned", "records": []},
+        "injection_recovery": {"status": "planned", "records": []},
+    }
+
+    summary = module._build_publication_comparison_summary(payload)
+    row = summary["comparison_rows"][0]
+
+    assert "line_residual_flags_present" not in summary["headline_flags"]
+    assert row["line_quality_flags"] == []
+    assert row["line_info_flags"] == ["core_model_only_not_fitted"]
+    assert row["problem_lines"] == []
+
+
 def test_balmer_model_residual_diagnostics_from_reconstructed_result(tmp_path):
     module = _load_publication_example_module()
     wave = np.linspace(4310.0, 4370.0, 301)

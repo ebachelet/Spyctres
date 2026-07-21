@@ -134,6 +134,13 @@ PUBLICATION_FOLLOWUP_STEPS = (
 )
 
 
+LINE_RESIDUAL_INFORMATIONAL_FLAGS = frozenset(
+    {
+        "core_model_only_not_fitted",
+    }
+)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -2838,13 +2845,20 @@ def _line_residual_summary_for_report(diagnostics):
             "max_rms_fractional_residual": None,
             "problem_lines": [],
             "quality_flags": [],
+            "informational_flags": [],
         }
     lines = list(diagnostics.get("lines") or ())
     ok_lines = [line for line in lines if line.get("status") == "ok"]
     chi2_values = []
     rms_values = []
     problem_lines = []
-    flags = set(diagnostics.get("summary", {}).get("quality_flags") or ())
+    flags = set()
+    info_flags = set()
+    for flag in diagnostics.get("summary", {}).get("quality_flags") or ():
+        if flag in LINE_RESIDUAL_INFORMATIONAL_FLAGS:
+            info_flags.add(flag)
+        else:
+            flags.add(flag)
     for line in ok_lines:
         used = line.get("used_residuals") or {}
         chi2 = _finite_or_none(used.get("chi2_red_proxy"))
@@ -2854,8 +2868,14 @@ def _line_residual_summary_for_report(diagnostics):
         if rms is not None:
             rms_values.append(rms)
         line_flags = list(line.get("quality_flags") or ())
-        flags.update(line_flags)
-        if line_flags:
+        problem_flags = []
+        for flag in line_flags:
+            if flag in LINE_RESIDUAL_INFORMATIONAL_FLAGS:
+                info_flags.add(flag)
+            else:
+                flags.add(flag)
+                problem_flags.append(flag)
+        if problem_flags:
             problem_lines.append(str(line.get("line_label", line.get("segment_name"))))
     return {
         "status": diagnostics.get("status", "unknown"),
@@ -2868,6 +2888,7 @@ def _line_residual_summary_for_report(diagnostics):
         ),
         "problem_lines": sorted(set(problem_lines)),
         "quality_flags": sorted(flags),
+        "informational_flags": sorted(info_flags),
     }
 
 
@@ -2925,6 +2946,7 @@ def _comparison_row_from_fit(
         ),
         "problem_lines": line_summary["problem_lines"],
         "line_quality_flags": line_summary["quality_flags"],
+        "line_info_flags": line_summary["informational_flags"],
         "error": error,
     }
 
@@ -3151,6 +3173,7 @@ def _write_publication_summary_csv(path, summary):
         "max_line_rms_fractional_residual",
         "problem_lines",
         "line_quality_flags",
+        "line_info_flags",
         "error",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -3163,13 +3186,19 @@ def _write_publication_summary_csv(path, summary):
                         key: row.get(key)
                         for key in columns
                         if key
-                        not in {"quality_flags", "problem_lines", "line_quality_flags"}
+                        not in {
+                            "quality_flags",
+                            "problem_lines",
+                            "line_quality_flags",
+                            "line_info_flags",
+                        }
                     },
                     "quality_flags": ";".join(row.get("quality_flags") or ()),
                     "problem_lines": ";".join(row.get("problem_lines") or ()),
                     "line_quality_flags": ";".join(
                         row.get("line_quality_flags") or ()
                     ),
+                    "line_info_flags": ";".join(row.get("line_info_flags") or ()),
                 }
             )
 
@@ -3249,6 +3278,7 @@ def _write_publication_summary_markdown(path, summary):
         ("max_line_chi2_red_proxy", "max line χ²ν proxy"),
         ("problem_lines", "problem lines"),
         ("line_quality_flags", "line flags"),
+        ("line_info_flags", "line info"),
     ]
     content = [
         "# Spyctres publication workflow summary",
