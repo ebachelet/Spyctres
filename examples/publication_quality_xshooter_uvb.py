@@ -45,6 +45,14 @@ python examples/publication_quality_xshooter_uvb.py \
   --injection-recovery-trials 3 \
   --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
   --output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv
+
+Optional compact reviewer summary
+---------------------------------
+python examples/publication_quality_xshooter_uvb.py \
+  --run-baseline-fit \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-publication-summary-md /tmp/spyctres_publication_summary.md \
+  --output-publication-summary-csv /tmp/spyctres_publication_summary.csv
 """
 
 from __future__ import annotations
@@ -154,7 +162,12 @@ def build_parser():
             "--run-baseline-fit --run-injection-recovery "
             "--injection-recovery-trials 3 "
             "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
-            "--output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv"
+            "--output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv\n\n"
+            "  python examples/publication_quality_xshooter_uvb.py "
+            "--run-baseline-fit "
+            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
+            "--output-publication-summary-md /tmp/spyctres_publication_summary.md "
+            "--output-publication-summary-csv /tmp/spyctres_publication_summary.csv"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -231,6 +244,30 @@ def build_parser():
         help=(
             "Optional CSV table summarizing opt-in synthetic injection/recovery "
             "trials. Requires --run-injection-recovery."
+        ),
+    )
+    parser.add_argument(
+        "--output-publication-summary-md",
+        default=None,
+        help=(
+            "Optional compact Markdown reviewer summary built from the JSON "
+            "payload. This does not run extra fits."
+        ),
+    )
+    parser.add_argument(
+        "--output-publication-summary-csv",
+        default=None,
+        help=(
+            "Optional compact CSV comparison of baseline, systematic variants, "
+            "and injection/recovery trials. This does not run extra fits."
+        ),
+    )
+    parser.add_argument(
+        "--output-publication-summary-plot",
+        default=None,
+        help=(
+            "Optional compact PNG plot of recovered-minus-baseline parameter "
+            "deltas for completed systematic and injection/recovery checks."
         ),
     )
     parser.add_argument(
@@ -2780,6 +2817,568 @@ def _run_injection_recovery(
     return results
 
 
+def _summary_fit_value(fit_payload, key):
+    if not isinstance(fit_payload, dict):
+        return None
+    return _finite_or_none(fit_payload.get(key))
+
+
+def _summary_delta(value, baseline_value):
+    if value is None or baseline_value is None:
+        return None
+    return float(value - baseline_value)
+
+
+def _line_residual_summary_for_report(diagnostics):
+    if not isinstance(diagnostics, dict):
+        return {
+            "status": "not_available",
+            "n_lines": 0,
+            "max_chi2_red_proxy": None,
+            "max_rms_fractional_residual": None,
+            "problem_lines": [],
+            "quality_flags": [],
+        }
+    lines = list(diagnostics.get("lines") or ())
+    ok_lines = [line for line in lines if line.get("status") == "ok"]
+    chi2_values = []
+    rms_values = []
+    problem_lines = []
+    flags = set(diagnostics.get("summary", {}).get("quality_flags") or ())
+    for line in ok_lines:
+        used = line.get("used_residuals") or {}
+        chi2 = _finite_or_none(used.get("chi2_red_proxy"))
+        rms = _finite_or_none(used.get("rms_fractional_residual"))
+        if chi2 is not None:
+            chi2_values.append(chi2)
+        if rms is not None:
+            rms_values.append(rms)
+        line_flags = list(line.get("quality_flags") or ())
+        flags.update(line_flags)
+        if line_flags:
+            problem_lines.append(str(line.get("line_label", line.get("segment_name"))))
+    return {
+        "status": diagnostics.get("status", "unknown"),
+        "n_lines": int(len(ok_lines)),
+        "max_chi2_red_proxy": (
+            float(np.nanmax(chi2_values)) if chi2_values else None
+        ),
+        "max_rms_fractional_residual": (
+            float(np.nanmax(rms_values)) if rms_values else None
+        ),
+        "problem_lines": sorted(set(problem_lines)),
+        "quality_flags": sorted(flags),
+    }
+
+
+def _comparison_row_from_fit(
+    *,
+    source_kind,
+    source_id,
+    label,
+    status,
+    fit_payload,
+    baseline_fit,
+    line_residual_diagnostics=None,
+    all_passed=None,
+    error=None,
+):
+    baseline = {
+        key: _summary_fit_value(baseline_fit, key)
+        for key in ("teff", "feh", "logg", "rv_kms", "chi2_red")
+    }
+    values = {
+        key: _summary_fit_value(fit_payload, key)
+        for key in ("teff", "feh", "logg", "rv_kms", "chi2_red")
+    }
+    quality_flags = (
+        list(fit_payload.get("quality_flags") or ())
+        if isinstance(fit_payload, dict)
+        else []
+    )
+    line_summary = _line_residual_summary_for_report(line_residual_diagnostics)
+    return {
+        "source_kind": source_kind,
+        "source_id": source_id,
+        "label": label,
+        "status": status,
+        "success": (
+            fit_payload.get("success") if isinstance(fit_payload, dict) else None
+        ),
+        "teff": values["teff"],
+        "feh": values["feh"],
+        "logg": values["logg"],
+        "rv_kms": values["rv_kms"],
+        "chi2_red": values["chi2_red"],
+        "delta_teff": _summary_delta(values["teff"], baseline["teff"]),
+        "delta_feh": _summary_delta(values["feh"], baseline["feh"]),
+        "delta_logg": _summary_delta(values["logg"], baseline["logg"]),
+        "delta_rv_kms": _summary_delta(values["rv_kms"], baseline["rv_kms"]),
+        "delta_chi2_red": _summary_delta(values["chi2_red"], baseline["chi2_red"]),
+        "all_passed": all_passed,
+        "quality_flags": quality_flags,
+        "line_residual_status": line_summary["status"],
+        "n_line_residuals": line_summary["n_lines"],
+        "max_line_chi2_red_proxy": line_summary["max_chi2_red_proxy"],
+        "max_line_rms_fractional_residual": (
+            line_summary["max_rms_fractional_residual"]
+        ),
+        "problem_lines": line_summary["problem_lines"],
+        "line_quality_flags": line_summary["quality_flags"],
+        "error": error,
+    }
+
+
+def _comparison_row_from_injection_record(record, baseline_fit):
+    summary = record.get("fit_summary") or {}
+    recovered = summary.get("recovered") or {}
+    delta = summary.get("delta") or {}
+    fit_payload = {
+        "success": summary.get("success"),
+        "teff": recovered.get("teff"),
+        "feh": recovered.get("feh"),
+        "logg": recovered.get("logg"),
+        "rv_kms": recovered.get("rv_kms"),
+        "chi2_red": summary.get("chi2_red"),
+        "quality_flags": summary.get("quality_flags") or (),
+    }
+    row = _comparison_row_from_fit(
+        source_kind="injection_recovery_trial",
+        source_id="trial_{0}".format(record.get("trial_index")),
+        label="Injection/recovery trial {0}".format(record.get("trial_index")),
+        status=record.get("status"),
+        fit_payload=fit_payload,
+        baseline_fit=baseline_fit,
+        line_residual_diagnostics=record.get("line_residual_diagnostics"),
+        all_passed=summary.get("all_passed"),
+        error=record.get("error"),
+    )
+    for key in ("teff", "feh", "logg", "rv_kms"):
+        row["delta_{0}".format(key)] = _finite_or_none(delta.get(key))
+    return row
+
+
+def _max_abs_shift_by_kind(rows):
+    out = {}
+    for source_kind in sorted(
+        {row.get("source_kind") for row in rows if row.get("source_kind") != "baseline"}
+    ):
+        kind_rows = [
+            row
+            for row in rows
+            if row.get("source_kind") == source_kind and row.get("status") == "ok"
+        ]
+        out[source_kind] = {}
+        for key in ("teff", "feh", "logg", "rv_kms", "chi2_red"):
+            delta_key = "delta_{0}".format(key)
+            values = [
+                _finite_or_none(row.get(delta_key))
+                for row in kind_rows
+            ]
+            values = [value for value in values if value is not None]
+            out[source_kind][delta_key] = (
+                float(np.nanmax(np.abs(values))) if values else None
+            )
+    return out
+
+
+def _build_publication_comparison_summary(payload):
+    baseline_fit = payload.get("baseline_fit")
+    baseline_available = isinstance(baseline_fit, dict)
+    rows = []
+    headline_flags = set()
+
+    publication = payload.get("publication_readiness") or {}
+    if publication and not publication.get("publication_ready", False):
+        headline_flags.add("publication_gate_blocked")
+    for blocker in publication.get("blockers") or ():
+        headline_flags.add("blocker:{0}".format(blocker))
+
+    if baseline_available:
+        rows.append(
+            _comparison_row_from_fit(
+                source_kind="baseline",
+                source_id="baseline",
+                label="Baseline fit",
+                status="ok" if baseline_fit.get("success") else "fit_failed",
+                fit_payload=baseline_fit,
+                baseline_fit=baseline_fit,
+                line_residual_diagnostics=payload.get(
+                    "baseline_line_residual_diagnostics"
+                ),
+                all_passed=None,
+            )
+        )
+        for flag in baseline_fit.get("quality_flags") or ():
+            headline_flags.add("baseline:{0}".format(flag))
+    else:
+        headline_flags.add("baseline_not_run")
+
+    systematic = payload.get("systematic_variant_results") or {}
+    systematic_records = list(systematic.get("records") or ())
+    if systematic.get("status") in {
+        "completed_with_errors",
+        "completed_with_fit_failures",
+    }:
+        headline_flags.add("systematic_variants_need_review")
+    elif not systematic_records:
+        headline_flags.add("systematic_variants_not_run")
+    for record in systematic_records:
+        fit_payload = record.get("fit") or {}
+        row = _comparison_row_from_fit(
+            source_kind="systematic_variant",
+            source_id=str(record.get("variant_id")),
+            label=record.get("label") or str(record.get("variant_id")),
+            status=record.get("status"),
+            fit_payload=fit_payload,
+            baseline_fit=baseline_fit,
+            line_residual_diagnostics=record.get("line_residual_diagnostics"),
+            all_passed=None,
+            error=record.get("error"),
+        )
+        rows.append(row)
+        if record.get("status") not in {"ok", "skipped"}:
+            headline_flags.add(
+                "systematic:{0}:{1}".format(
+                    record.get("variant_id"),
+                    record.get("status"),
+                )
+            )
+
+    injection = payload.get("injection_recovery") or {}
+    injection_records = list(injection.get("records") or ())
+    if injection.get("status") in {
+        "completed_with_recovery_failures",
+        "completed_with_errors",
+        "completed_no_successful_trials",
+    }:
+        headline_flags.add("injection_recovery_needs_review")
+    elif not injection_records:
+        headline_flags.add("injection_recovery_not_run")
+    for record in injection_records:
+        row = _comparison_row_from_injection_record(record, baseline_fit)
+        rows.append(row)
+        if not row.get("all_passed", False):
+            headline_flags.add(
+                "injection:{0}:failed_tolerance".format(record.get("trial_index"))
+            )
+
+    for row in rows:
+        if row.get("line_quality_flags"):
+            headline_flags.add("line_residual_flags_present")
+
+    if not baseline_available:
+        status = "summary_ready_no_baseline_fit"
+    elif "publication_gate_blocked" in headline_flags:
+        status = "summary_ready_publication_blocked"
+    elif any("failed" in flag or "error" in flag for flag in headline_flags):
+        status = "summary_ready_needs_review"
+    else:
+        status = "summary_ready_for_reviewer"
+
+    recommendations = []
+    if "baseline_not_run" in headline_flags:
+        recommendations.append(
+            "Run --run-baseline-fit before interpreting parameter stability."
+        )
+    if "systematic_variants_not_run" in headline_flags:
+        recommendations.append(
+            "Run a bounded --run-systematic-variants subset after inspecting the baseline."
+        )
+    if "injection_recovery_not_run" in headline_flags:
+        recommendations.append(
+            "Run --run-injection-recovery to test same-model noise/mask recovery."
+        )
+    if "line_residual_flags_present" in headline_flags:
+        recommendations.append(
+            "Inspect line-specific residual flags before treating the fit as publication-grade."
+        )
+    if publication.get("blockers"):
+        recommendations.append(
+            "Resolve publication-readiness blockers: {0}.".format(
+                ", ".join(publication.get("blockers"))
+            )
+        )
+
+    return {
+        "schema_version": 1,
+        "status": status,
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "baseline_available": bool(baseline_available),
+        "publication_ready": publication.get("publication_ready"),
+        "publication_blockers": list(publication.get("blockers") or ()),
+        "headline_flags": sorted(headline_flags),
+        "comparison_rows": rows,
+        "max_abs_parameter_shifts": _max_abs_shift_by_kind(rows),
+        "systematic_variant_status": systematic.get("status"),
+        "injection_recovery_status": injection.get("status"),
+        "recommendations": recommendations,
+        "interpretation": (
+            "Compact reviewer summary built from existing JSON products. It "
+            "does not run additional fits. Parameter shifts summarize "
+            "sensitivity, not model preference; line flags and readiness "
+            "blockers should be reviewed before scientific claims."
+        ),
+    }
+
+
+def _write_publication_summary_csv(path, summary):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "source_kind",
+        "source_id",
+        "label",
+        "status",
+        "success",
+        "teff",
+        "feh",
+        "logg",
+        "rv_kms",
+        "chi2_red",
+        "delta_teff",
+        "delta_feh",
+        "delta_logg",
+        "delta_rv_kms",
+        "delta_chi2_red",
+        "all_passed",
+        "quality_flags",
+        "line_residual_status",
+        "n_line_residuals",
+        "max_line_chi2_red_proxy",
+        "max_line_rms_fractional_residual",
+        "problem_lines",
+        "line_quality_flags",
+        "error",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in summary.get("comparison_rows", ()):
+            writer.writerow(
+                {
+                    **{
+                        key: row.get(key)
+                        for key in columns
+                        if key
+                        not in {"quality_flags", "problem_lines", "line_quality_flags"}
+                    },
+                    "quality_flags": ";".join(row.get("quality_flags") or ()),
+                    "problem_lines": ";".join(row.get("problem_lines") or ()),
+                    "line_quality_flags": ";".join(
+                        row.get("line_quality_flags") or ()
+                    ),
+                }
+            )
+
+
+def _format_md_value(value):
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, float):
+        if not np.isfinite(value):
+            return "—"
+        if abs(value) >= 100:
+            return "{0:.1f}".format(value)
+        if abs(value) >= 10:
+            return "{0:.2f}".format(value)
+        return "{0:.4g}".format(value)
+    return str(value)
+
+
+def _markdown_table(columns, rows):
+    if not rows:
+        return "_No rows available._\n"
+    lines = [
+        "| " + " | ".join(label for _key, label in columns) + " |",
+        "| " + " | ".join("---" for _key, _label in columns) + " |",
+    ]
+    for row in rows:
+        values = []
+        for key, _label in columns:
+            value = row.get(key)
+            if isinstance(value, (list, tuple)):
+                value = ", ".join(str(item) for item in value)
+            values.append(_format_md_value(value).replace("|", "\\|"))
+        lines.append("| " + " | ".join(values) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def _write_publication_summary_markdown(path, summary):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_rows = [
+        row
+        for row in summary.get("comparison_rows", ())
+        if row.get("source_kind") == "baseline"
+    ]
+    systematic_rows = [
+        row
+        for row in summary.get("comparison_rows", ())
+        if row.get("source_kind") == "systematic_variant"
+    ]
+    injection_rows = [
+        row
+        for row in summary.get("comparison_rows", ())
+        if row.get("source_kind") == "injection_recovery_trial"
+    ]
+    param_columns = [
+        ("source_id", "id"),
+        ("status", "status"),
+        ("teff", "Teff"),
+        ("delta_teff", "ΔTeff"),
+        ("feh", "[Fe/H]"),
+        ("delta_feh", "Δ[Fe/H]"),
+        ("logg", "logg"),
+        ("delta_logg", "Δlogg"),
+        ("rv_kms", "RV"),
+        ("delta_rv_kms", "ΔRV"),
+        ("chi2_red", "χ²ν"),
+        ("all_passed", "passed"),
+    ]
+    line_columns = [
+        ("source_id", "id"),
+        ("line_residual_status", "line status"),
+        ("n_line_residuals", "n lines"),
+        ("max_line_chi2_red_proxy", "max line χ²ν proxy"),
+        ("problem_lines", "problem lines"),
+        ("line_quality_flags", "line flags"),
+    ]
+    content = [
+        "# Spyctres publication workflow summary",
+        "",
+        "Status: `{0}`".format(summary.get("status")),
+        "",
+        "Interpretation: {0}".format(summary.get("interpretation")),
+        "",
+        "## Headline flags",
+        "",
+    ]
+    flags = summary.get("headline_flags") or ()
+    if flags:
+        content.extend("- `{0}`".format(flag) for flag in flags)
+    else:
+        content.append("- none")
+    content.extend(
+        [
+            "",
+            "## Recommendations",
+            "",
+        ]
+    )
+    recommendations = summary.get("recommendations") or ()
+    if recommendations:
+        content.extend("- {0}".format(item) for item in recommendations)
+    else:
+        content.append("- No immediate summary-level recommendation.")
+    content.extend(
+        [
+            "",
+            "## Baseline",
+            "",
+            _markdown_table(param_columns, baseline_rows),
+            "",
+            "## Systematic variants",
+            "",
+            _markdown_table(param_columns, systematic_rows),
+            "",
+            "## Injection/recovery",
+            "",
+            _markdown_table(param_columns, injection_rows),
+            "",
+            "## Line residual overview",
+            "",
+            _markdown_table(
+                line_columns,
+                baseline_rows + systematic_rows + injection_rows,
+            ),
+            "",
+        ]
+    )
+    path.write_text("\n".join(content), encoding="utf-8")
+
+
+def _write_publication_summary_plot(path, summary):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import matplotlib.pyplot as plt
+
+    rows = [
+        row
+        for row in summary.get("comparison_rows", ())
+        if row.get("source_kind") != "baseline" and row.get("status") == "ok"
+    ]
+    fig, axes = plt.subplots(
+        4,
+        1,
+        figsize=(12.5, 10.0),
+        sharex=True,
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+    keys = [
+        ("delta_teff", "ΔTeff [K]"),
+        ("delta_feh", "Δ[Fe/H] [dex]"),
+        ("delta_logg", "Δlogg [dex]"),
+        ("delta_rv_kms", "ΔRV [km/s]"),
+    ]
+    if not rows:
+        for ax in axes:
+            ax.axis("off")
+        axes[0].text(
+            0.5,
+            0.5,
+            "No completed systematic/injection rows to plot.",
+            ha="center",
+            va="center",
+            transform=axes[0].transAxes,
+        )
+    else:
+        labels = [str(row.get("source_id")) for row in rows]
+        x = np.arange(len(rows))
+        colors = [
+            "tab:blue"
+            if row.get("source_kind") == "systematic_variant"
+            else "tab:green"
+            for row in rows
+        ]
+        for ax, (key, ylabel) in zip(axes, keys):
+            values = [
+                _finite_or_none(row.get(key))
+                for row in rows
+            ]
+            numeric = np.asarray(
+                [np.nan if value is None else value for value in values],
+                dtype=float,
+            )
+            ax.axhline(0.0, color="0.3", lw=0.8)
+            ax.bar(x, numeric, color=colors, alpha=0.85)
+            ax.set_ylabel(ylabel)
+            ax.grid(axis="y", alpha=0.25)
+        axes[-1].set_xticks(x)
+        axes[-1].set_xticklabels(labels, rotation=35, ha="right")
+    fig.suptitle("Publication workflow parameter-shift summary")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def _write_publication_summary_outputs(args, payload):
+    summary = _build_publication_comparison_summary(payload)
+    payload["publication_summary"] = summary
+    _write_publication_summary_csv(args.output_publication_summary_csv, summary)
+    _write_publication_summary_markdown(args.output_publication_summary_md, summary)
+    _write_publication_summary_plot(args.output_publication_summary_plot, summary)
+    return summary
+
+
 def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks):
     generic_windows = _diagnostic_window_payload(segment)
     return {
@@ -2842,6 +3441,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         "systematic_variant_plan": _build_systematic_variant_plan(args, case),
         "systematic_variant_results": None,
         "injection_recovery": None,
+        "publication_summary": None,
         "baseline_fit": None,
         "baseline_line_residual_diagnostics": None,
     }
@@ -3325,6 +3925,20 @@ def main(argv=None):
     output_path = Path(args.output_json)
     if args.resume and output_path.exists() and not args.force:
         existing = _read_existing(output_path)
+        if (
+            args.output_publication_summary_md is not None
+            or args.output_publication_summary_csv is not None
+            or args.output_publication_summary_plot is not None
+        ):
+            summary = _write_publication_summary_outputs(args, existing)
+            _atomic_write_json(output_path, existing)
+            print(
+                "Publication summary: status={0}, rows={1}".format(
+                    summary["status"],
+                    len(summary["comparison_rows"]),
+                ),
+                flush=True,
+            )
         print(
             "Existing checkpoint: status={0}, publication_ready={1}".format(
                 existing.get("status"),
@@ -3514,6 +4128,15 @@ def main(argv=None):
             "configuration is ready.",
             flush=True,
         )
+    summary = _write_publication_summary_outputs(args, payload)
+    _atomic_write_json(output_path, payload)
+    print(
+        "Publication summary: status={0}, rows={1}".format(
+            summary["status"],
+            len(summary["comparison_rows"]),
+        ),
+        flush=True,
+    )
     return 0
 
 

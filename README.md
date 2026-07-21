@@ -549,6 +549,12 @@ running expensive variants; they are not calibrated line measurements. When an
 opt-in baseline PHOENIX fit is run, the scaffold adds per-line model-residual
 diagnostics that keep fitted-pixel residuals separate from masked/core overplot
 checks.
+For review handoff, the same publication checkpoint can now be summarized into
+compact Markdown, CSV, and PNG artifacts with `--output-publication-summary-md`,
+`--output-publication-summary-csv`, and `--output-publication-summary-plot`.
+These reports are post-processing only: they compare the baseline, any executed
+systematic variants, and any injection/recovery trials already present in the
+JSON without launching extra PHOENIX fits.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,

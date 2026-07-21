@@ -83,8 +83,9 @@ requirements.
    per-line model-residual diagnostics, opt-in execution of a bounded subset of
    fit-level systematic variants with per-variant JSON checkpoints, opt-in
    same-model synthetic injection/recovery trials with per-trial checkpoints,
-   and a separate bounded diagnostic-window
-   comparison scaffold. The comparison
+   compact Markdown/CSV/PNG publication-summary artifacts generated from the
+   saved checkpoint without launching extra fits, and a separate bounded
+   diagnostic-window comparison scaffold. The comparison
    scaffold plans trusted-baseline, role-balanced, single-window,
    leave-one-out, and leave-one-family-out checks without ranking by raw
    chi-square alone; expensive fits stay opt-in. It now includes held-out

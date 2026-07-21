@@ -30,6 +30,9 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     window_csv = tmp_path / "diagnostic_windows.csv"
     systematic_csv = tmp_path / "systematic_plan.csv"
     line_csv = tmp_path / "balmer_lines.csv"
+    summary_md = tmp_path / "nested" / "publication_summary.md"
+    summary_csv = tmp_path / "nested" / "publication_summary.csv"
+    summary_plot = tmp_path / "nested" / "publication_summary.png"
     cmd = [
         sys.executable,
         "examples/publication_quality_xshooter_uvb.py",
@@ -45,6 +48,12 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
         str(systematic_csv),
         "--output-balmer-line-csv",
         str(line_csv),
+        "--output-publication-summary-md",
+        str(summary_md),
+        "--output-publication-summary-csv",
+        str(summary_csv),
+        "--output-publication-summary-plot",
+        str(summary_plot),
         "--force",
     ]
 
@@ -63,6 +72,9 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert payload["baseline_line_residual_diagnostics"] is None
     assert payload["systematic_variant_results"] is None
     assert payload["injection_recovery"] is None
+    assert payload["publication_summary"]["status"] == "summary_ready_no_baseline_fit"
+    assert payload["publication_summary"]["comparison_rows"] == []
+    assert "baseline_not_run" in payload["publication_summary"]["headline_flags"]
     assert payload["ordinary_readiness"]["n_fit_candidate"] > 0
     assert "publication_readiness" in payload
     assert "balmer_windows" in payload["analysis_design"]
@@ -124,6 +136,131 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert window_csv.exists()
     assert systematic_csv.exists()
     assert line_csv.exists()
+    assert summary_md.exists()
+    assert summary_csv.exists()
+    assert summary_plot.exists()
+    assert "Spyctres publication workflow summary" in summary_md.read_text()
+    assert "delta_teff" in summary_csv.read_text().splitlines()[0]
+
+
+def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path):
+    module = _load_publication_example_module()
+    line_diagnostics = {
+        "status": "computed",
+        "summary": {"quality_flags": ["line_high_chi2_proxy"]},
+        "lines": [
+            {
+                "status": "ok",
+                "line_label": "Hβ",
+                "used_residuals": {
+                    "chi2_red_proxy": 12.0,
+                    "rms_fractional_residual": 0.08,
+                },
+                "quality_flags": ["line_high_chi2_proxy"],
+            }
+        ],
+    }
+    payload = {
+        "publication_readiness": {
+            "publication_ready": False,
+            "blockers": ["artifact_review_required"],
+        },
+        "baseline_fit": {
+            "success": True,
+            "teff": 9000.0,
+            "feh": 0.0,
+            "logg": 3.0,
+            "rv_kms": 0.0,
+            "chi2_red": 2.0,
+            "quality_flags": ["high_chi2"],
+        },
+        "baseline_line_residual_diagnostics": line_diagnostics,
+        "systematic_variant_results": {
+            "status": "completed",
+            "records": [
+                {
+                    "variant_id": "continuum_mdeg_1",
+                    "label": "continuum degree 1",
+                    "status": "ok",
+                    "fit": {
+                        "success": True,
+                        "teff": 9125.0,
+                        "feh": 0.1,
+                        "logg": 3.2,
+                        "rv_kms": 1.5,
+                        "chi2_red": 2.4,
+                        "quality_flags": [],
+                    },
+                    "line_residual_diagnostics": line_diagnostics,
+                }
+            ],
+        },
+        "injection_recovery": {
+            "status": "completed_with_recovery_failures",
+            "records": [
+                {
+                    "trial_index": 1,
+                    "status": "ok",
+                    "fit_summary": {
+                        "success": True,
+                        "recovered": {
+                            "teff": 9075.0,
+                            "feh": -0.02,
+                            "logg": 3.04,
+                            "rv_kms": -0.4,
+                        },
+                        "delta": {
+                            "teff": 75.0,
+                            "feh": -0.02,
+                            "logg": 0.04,
+                            "rv_kms": -0.4,
+                        },
+                        "chi2_red": 1.2,
+                        "quality_flags": ["recovery_shift_warning"],
+                        "all_passed": False,
+                    },
+                }
+            ],
+        },
+    }
+
+    summary = module._build_publication_comparison_summary(payload)
+
+    assert summary["status"] == "summary_ready_publication_blocked"
+    assert len(summary["comparison_rows"]) == 3
+    assert "publication_gate_blocked" in summary["headline_flags"]
+    assert "injection_recovery_needs_review" in summary["headline_flags"]
+    assert "line_residual_flags_present" in summary["headline_flags"]
+    assert summary["max_abs_parameter_shifts"]["systematic_variant"]["delta_teff"] == 125.0
+    assert (
+        summary["max_abs_parameter_shifts"]["injection_recovery_trial"]["delta_rv_kms"]
+        == 0.4
+    )
+
+    args = module.build_parser().parse_args(
+        [
+            "--output-json",
+            str(tmp_path / "publication.json"),
+            "--output-publication-summary-md",
+            str(tmp_path / "summary" / "publication.md"),
+            "--output-publication-summary-csv",
+            str(tmp_path / "summary" / "publication.csv"),
+            "--output-publication-summary-plot",
+            str(tmp_path / "summary" / "publication.png"),
+        ]
+    )
+    written_summary = module._write_publication_summary_outputs(args, payload)
+
+    assert payload["publication_summary"]["status"] == written_summary["status"]
+    assert (tmp_path / "summary" / "publication.md").exists()
+    assert (tmp_path / "summary" / "publication.csv").exists()
+    assert (tmp_path / "summary" / "publication.png").exists()
+    md_text = (tmp_path / "summary" / "publication.md").read_text()
+    assert "Systematic variants" in md_text
+    assert "Injection/recovery" in md_text
+    csv_text = (tmp_path / "summary" / "publication.csv").read_text()
+    assert "continuum_mdeg_1" in csv_text
+    assert "trial_1" in csv_text
 
 
 def test_balmer_model_residual_diagnostics_from_reconstructed_result(tmp_path):

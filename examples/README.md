@@ -456,6 +456,24 @@ deltas. It is a necessary optimizer/masking/noise-response sanity check around
 the baseline solution, but it is not a validation that PHOENIX describes the
 real star perfectly.
 
+To produce a compact reviewer-facing summary from whichever checks are already
+present in the JSON checkpoint, add the publication summary outputs. This is
+post-processing only: it does not run extra PHOENIX fits, and it works for
+audit-only, baseline-only, systematic-variant, and injection/recovery states:
+
+```bash
+python examples/publication_quality_xshooter_uvb.py \
+  --resume \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-publication-summary-md /tmp/spyctres_publication_summary.md \
+  --output-publication-summary-csv /tmp/spyctres_publication_summary.csv \
+  --output-publication-summary-plot /tmp/spyctres_publication_summary.png
+```
+
+The Markdown summary is intended for quick human review; the CSV and PNG record
+baseline/systematic/recovery parameter shifts and line-residual flags in a
+machine-readable, referee-friendly form.
+
 This remains a scaffold rather than a final publication pipeline. The saved
 JSON lists the follow-up checks still required before publication claims:
 per-line and joint Balmer comparisons, leave-one-line-out tests, continuum and
@@ -463,8 +481,9 @@ mask variants, resolution/LSF variants, synthetic injection/recovery, and final
 uncertainty accounting. The first four categories are now represented in the
 saved systematic-variant plan, selected variants can be executed explicitly,
 same-model injection/recovery can be run explicitly, and the baseline fit
-produces per-line residual summaries; external real-star recovery validation
-and final uncertainty tables remain later steps. The paired
+produces per-line residual summaries. A compact publication summary can now be
+generated from those saved products for review; external real-star recovery
+validation and final uncertainty tables remain later steps. The paired
 `publication_quality_xshooter_uvb.ipynb` notebook is a no-output notebook that
 drives the same script with `RUN_BASELINE_FIT = False` by default.
 
