@@ -25,6 +25,10 @@ Example opt-in bounded fit run:
     --R 6200 \
     --max-comparisons 4 \
     --output-json /tmp/spyctres_window_comparison_fit.json
+
+Fit runs write both held-out residual checks and common-window residual
+summaries by default.  Use ``--no-evaluate-heldout --no-evaluate-common`` only
+for timing-only runs where reconstructed model diagnostics are unnecessary.
 """
 
 from __future__ import annotations
@@ -113,10 +117,28 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--evaluate-common",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When --run-fits is active, score every fit on the same union of "
+            "planned comparison windows. Default: true."
+        ),
+    )
+    parser.add_argument(
         "--holdout-min-pixels",
         type=int,
         default=3,
         help="Minimum valid unfitted pixels required to score a held-out window.",
+    )
+    parser.add_argument(
+        "--common-min-pixels",
+        type=int,
+        default=None,
+        help=(
+            "Minimum valid pixels required to score a common-evaluation window. "
+            "Default: same as --holdout-min-pixels."
+        ),
     )
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
@@ -225,9 +247,9 @@ def main(argv=None):
         "auto_defaults": True,
         "defaults_mode": args.defaults_mode,
         "science_case": "diagnostic_window_comparison",
-        # Held-out checks need reconstructed model arrays. Turn this off with
-        # --no-evaluate-heldout when scalar timing comparisons are all you need.
-        "reconstruct": bool(args.evaluate_heldout),
+        # Held-out/common residual checks need reconstructed model arrays. Turn
+        # both off when scalar timing comparisons are all you need.
+        "reconstruct": bool(args.evaluate_heldout or args.evaluate_common),
         "progress_callback": _progress,
     }
 
@@ -238,7 +260,9 @@ def main(argv=None):
         spectrum,
         run_fits=bool(args.run_fits),
         evaluate_heldout=bool(args.evaluate_heldout),
+        evaluate_common=bool(args.evaluate_common),
         holdout_min_pixels=int(args.holdout_min_pixels),
+        common_min_pixels=args.common_min_pixels,
         fit_call_kwargs=fit_call_kwargs,
         base_fit_kwargs=base_fit_kwargs,
         roles=_parse_roles(args.roles),

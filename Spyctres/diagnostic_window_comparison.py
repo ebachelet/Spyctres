@@ -168,7 +168,9 @@ def run_diagnostic_window_comparison(
     *,
     run_fits=False,
     evaluate_heldout=True,
+    evaluate_common=True,
     holdout_min_pixels=3,
+    common_min_pixels=None,
     fit_callable=None,
     fit_call_kwargs=None,
     base_fit_kwargs=None,
@@ -184,6 +186,10 @@ def run_diagnostic_window_comparison(
     fit options through ``base_fit_kwargs``.
     """
     plan = build_diagnostic_window_comparison_plan(spectrum, **plan_kwargs)
+    common_min_pixels = (
+        int(holdout_min_pixels) if common_min_pixels is None else int(common_min_pixels)
+    )
+    common_records = _common_evaluation_records(plan)
     payload = {
         "schema_version": 1,
         "operation": "run_diagnostic_window_comparison",
@@ -196,13 +202,24 @@ def run_diagnostic_window_comparison(
         "run_policy": {
             "run_fits": bool(run_fits),
             "evaluate_heldout": bool(evaluate_heldout),
+            "evaluate_common": bool(evaluate_common),
             "holdout_min_pixels": int(holdout_min_pixels),
+            "common_min_pixels": int(common_min_pixels),
             "fit_callable": _callable_name(fit_callable),
             "regions_overridden_per_comparison": True,
             "held_out_evaluation": (
                 "computed_on_valid_unfitted_pixels_when_reconstructed_models_exist"
             ),
+            "common_evaluation": (
+                "computed_on_the_same_union_of_planned_comparison_windows_when_"
+                "reconstructed_models_exist"
+            ),
         },
+        "common_evaluation_definition": _common_evaluation_definition(
+            common_records,
+            min_pixels=common_min_pixels,
+        ),
+        "common_evaluation_summary": None,
         "fit_records": [],
     }
 
@@ -259,6 +276,20 @@ def run_diagnostic_window_comparison(
                     "status": "skipped",
                     "reason": "evaluate_heldout_false",
                 }
+            if evaluate_common:
+                record["common_evaluation"] = (
+                    evaluate_diagnostic_window_common_evaluation(
+                        spectrum,
+                        result,
+                        common_windows=common_records,
+                        min_pixels=common_min_pixels,
+                    )
+                )
+            else:
+                record["common_evaluation"] = {
+                    "status": "skipped",
+                    "reason": "evaluate_common_false",
+                }
             record["result"] = result_payload
         except Exception as exc:  # pragma: no cover - exercised by tests indirectly
             record["fit_status"] = "error"
@@ -285,6 +316,7 @@ def run_diagnostic_window_comparison(
     else:
         payload["status"] = "fits_completed"
     payload["run_policy"]["fit_callable"] = _callable_name(fit_callable)
+    payload["common_evaluation_summary"] = _summarize_common_evaluations(records)
     return _json_native(payload)
 
 
@@ -385,6 +417,92 @@ def evaluate_diagnostic_window_holdout(
     )
 
 
+def evaluate_diagnostic_window_common_evaluation(
+    spectrum,
+    result,
+    *,
+    common_windows,
+    min_pixels=3,
+):
+    """Score a fit over the same diagnostic windows used for every comparison.
+
+    Unlike :func:`evaluate_diagnostic_window_holdout`, this metric deliberately
+    does *not* remove pixels that were used by the fit.  The goal is a
+    common-pixel residual summary for comparing different window combinations,
+    not an independent held-out validation.  Explicitly excluded pixels and
+    invalid spectrum masks are still respected.
+    """
+    common_windows = [dict(record) for record in common_windows or ()]
+    if not common_windows:
+        return {
+            "status": "no_common_windows",
+            "method": "common_valid_window_residuals",
+            "windows": [],
+            "overall": None,
+        }
+
+    segments = _as_segments(spectrum)
+    models, used_masks, excluded_masks = _model_mask_arrays_from_result(
+        result,
+        n_segments=len(segments),
+    )
+    if models is None:
+        return {
+            "status": "skipped_no_reconstructed_model",
+            "reason": (
+                "Common-evaluation residual scoring requires reconstructed "
+                "model arrays. Run comparison fits with reconstruct=True."
+            ),
+            "method": "common_valid_window_residuals",
+            "windows": [],
+            "overall": None,
+        }
+
+    min_pixels = int(min_pixels)
+    if min_pixels < 1:
+        raise ValueError("min_pixels must be >= 1.")
+
+    rows = [
+        _evaluate_one_window_residuals(
+            segments,
+            models,
+            used_masks,
+            excluded_masks,
+            record,
+            min_pixels=min_pixels,
+            exclude_used_pixels=False,
+            quality_flag_prefix="common",
+        )
+        for record in common_windows
+    ]
+    evaluated = [row for row in rows if row.get("status") == "ok"]
+    overall = _summarize_common_rows(evaluated)
+    if evaluated:
+        status = "ok"
+    elif rows:
+        status = "no_evaluable_common_pixels"
+    else:
+        status = "no_common_windows"
+    return _json_native(
+        {
+            "status": status,
+            "method": "common_valid_window_residuals",
+            "coordinate_policy": (
+                "Uses a fixed union of planned comparison windows for every "
+                "fit record. Valid spectrum pixels and explicit exclusion masks "
+                "are respected, but fit-used pixels are not removed; this keeps "
+                "the evaluated pixels common across comparisons."
+            ),
+            "min_pixels": int(min_pixels),
+            "n_common_windows": int(len(common_windows)),
+            "n_evaluated_windows": int(len(evaluated)),
+            "common_window_ids": [record.get("id") for record in common_windows],
+            "overall": overall,
+            "windows": rows,
+        }
+    )
+
+
 def write_diagnostic_window_comparison_json(path, payload):
     """Write comparison payload as atomic JSON, creating the parent directory."""
     path = Path(path)
@@ -429,6 +547,12 @@ def write_diagnostic_window_comparison_csv(path, payload):
         "heldout_n_pixels",
         "heldout_mean_chi2_red_proxy",
         "heldout_median_abs_sigma",
+        "common_status",
+        "common_n_evaluated_windows",
+        "common_n_pixels",
+        "common_mean_chi2_red_proxy",
+        "common_median_abs_sigma",
+        "common_max_rms_fraction",
         "fit_status",
         "success",
         "teff",
@@ -446,6 +570,8 @@ def write_diagnostic_window_comparison_csv(path, payload):
             summary = row.get("result_summary") or {}
             heldout = row.get("held_out_evaluation") or {}
             heldout_overall = heldout.get("overall") or {}
+            common = row.get("common_evaluation") or {}
+            common_overall = common.get("overall") or {}
             writer.writerow(
                 {
                     "comparison_index": comparison.get("comparison_index"),
@@ -473,6 +599,20 @@ def write_diagnostic_window_comparison_csv(path, payload):
                     ),
                     "heldout_median_abs_sigma": heldout_overall.get(
                         "median_abs_sigma"
+                    ),
+                    "common_status": common.get("status"),
+                    "common_n_evaluated_windows": common.get(
+                        "n_evaluated_windows"
+                    ),
+                    "common_n_pixels": common_overall.get("n_pixels"),
+                    "common_mean_chi2_red_proxy": common_overall.get(
+                        "mean_chi2_red_proxy"
+                    ),
+                    "common_median_abs_sigma": common_overall.get(
+                        "median_abs_sigma"
+                    ),
+                    "common_max_rms_fraction": common_overall.get(
+                        "max_rms_fraction"
                     ),
                     "fit_status": row.get("fit_status"),
                     "success": summary.get("success"),
@@ -525,6 +665,7 @@ def plot_diagnostic_window_comparison(payload, savepath=None):
     rv = _summary_array(records, "rv_kms")
     chi2 = _summary_array(records, "chi2_red")
     heldout_chi2 = _heldout_overall_array(records, "mean_chi2_red_proxy")
+    common_chi2 = _common_overall_array(records, "mean_chi2_red_proxy")
     has_fit_values = any(
         np.any(np.isfinite(values)) for values in (teff, logg, feh, rv, chi2)
     )
@@ -539,7 +680,11 @@ def plot_diagnostic_window_comparison(payload, savepath=None):
     )
     axes = np.atleast_1d(axes)
 
-    if np.any(np.isfinite(chi2)) or np.any(np.isfinite(heldout_chi2)):
+    if (
+        np.any(np.isfinite(chi2))
+        or np.any(np.isfinite(heldout_chi2))
+        or np.any(np.isfinite(common_chi2))
+    ):
         if np.any(np.isfinite(chi2)):
             axes[0].plot(x, chi2, marker="o", color="tab:red", label="fit χ²ν")
         if np.any(np.isfinite(heldout_chi2)):
@@ -550,6 +695,15 @@ def plot_diagnostic_window_comparison(payload, savepath=None):
                 ls="--",
                 color="tab:purple",
                 label="held-out χ² proxy",
+            )
+        if np.any(np.isfinite(common_chi2)):
+            axes[0].plot(
+                x,
+                common_chi2,
+                marker="^",
+                ls=":",
+                color="tab:blue",
+                label="common-window χ² proxy",
             )
         axes[0].legend(frameon=False, fontsize=8)
         axes[0].set_ylabel("χ²ν")
@@ -653,9 +807,9 @@ def _comparison_record(combo, records, *, all_selected, candidate_index):
         "held_out_evaluation": {
             "status": "not_computed",
             "reason": (
-                "This initial runner records held-out windows as metadata. "
-                "Common-evaluation residual checks are planned as a later "
-                "publication-quality layer."
+                "Residual checks require a completed fit with reconstructed "
+                "model arrays. Use run_fits=True with reconstruct=True to "
+                "compute held-out and common-window diagnostics."
             ),
         },
     }
@@ -669,6 +823,29 @@ def _evaluate_one_heldout_window(
     record,
     *,
     min_pixels,
+):
+    return _evaluate_one_window_residuals(
+        segments,
+        models,
+        used_masks,
+        excluded_masks,
+        record,
+        min_pixels=min_pixels,
+        exclude_used_pixels=True,
+        quality_flag_prefix="heldout",
+    )
+
+
+def _evaluate_one_window_residuals(
+    segments,
+    models,
+    used_masks,
+    excluded_masks,
+    record,
+    *,
+    min_pixels,
+    exclude_used_pixels,
+    quality_flag_prefix,
 ):
     chunks = []
     segment_rows = []
@@ -690,7 +867,7 @@ def _evaluate_one_heldout_window(
         if mask.shape == wave.shape:
             valid &= mask
         used = used_masks[index]
-        if used is not None:
+        if used is not None and exclude_used_pixels:
             valid &= ~used
         excluded = excluded_masks[index]
         if excluded is not None:
@@ -765,11 +942,11 @@ def _evaluate_one_heldout_window(
 
     flags = []
     if chi2_proxy is not None and chi2_proxy > 9.0:
-        flags.append("heldout_high_chi2_proxy")
+        flags.append("{0}_high_chi2_proxy".format(quality_flag_prefix))
     if median_abs_sigma is not None and median_abs_sigma > 3.0:
-        flags.append("heldout_large_median_abs_sigma")
+        flags.append("{0}_large_median_abs_sigma".format(quality_flag_prefix))
     if rms_fraction > 0.10:
-        flags.append("heldout_large_fractional_rms")
+        flags.append("{0}_large_fractional_rms".format(quality_flag_prefix))
     return {
         "window_id": record.get("id"),
         "label": record.get("label"),
@@ -791,6 +968,32 @@ def _evaluate_one_heldout_window(
 def _summarize_heldout_rows(rows):
     if not rows:
         return None
+    return _summarize_residual_rows(
+        rows,
+        interpretation=(
+            "Held-out metrics are residual summaries on valid pixels that were "
+            "not used by this comparison fit. They are useful for stability "
+            "triage but are not a calibrated publication likelihood."
+        ),
+    )
+
+
+def _summarize_common_rows(rows):
+    if not rows:
+        return None
+    return _summarize_residual_rows(
+        rows,
+        interpretation=(
+            "Common-evaluation metrics use the same planned comparison windows "
+            "for every fit and keep fit-used pixels in the evaluation. They are "
+            "a fairer cross-comparison residual summary than raw in-fit chi-"
+            "square, but they are still diagnostic rather than a calibrated "
+            "publication likelihood."
+        ),
+    )
+
+
+def _summarize_residual_rows(rows, *, interpretation):
     n_pixels = int(sum(int(row.get("n_pixels", 0)) for row in rows))
     chi2 = _finite_values(row.get("chi2_red_proxy") for row in rows)
     med_abs = _finite_values(row.get("median_abs_sigma") for row in rows)
@@ -810,11 +1013,7 @@ def _summarize_heldout_rows(rows):
         "median_abs_sigma": None if not med_abs else float(np.nanmedian(med_abs)),
         "max_rms_fraction": None if not rms_frac else float(np.nanmax(rms_frac)),
         "quality_flags": flags,
-        "interpretation": (
-            "Held-out metrics are residual summaries on valid pixels that were "
-            "not used by this comparison fit. They are useful for stability "
-            "triage but are not a calibrated publication likelihood."
-        ),
+        "interpretation": interpretation,
     }
 
 
@@ -827,6 +1026,170 @@ def _finite_values(values):
             continue
         if np.isfinite(value):
             out.append(value)
+    return out
+
+
+def _common_evaluation_records(plan):
+    selected_by_id = {
+        record.get("id"): dict(record)
+        for record in plan.get("selection", {}).get("selected", ())
+    }
+    common_ids = []
+    for comparison in plan.get("planned_comparisons", ()):
+        for window_id in comparison.get("window_ids", ()):
+            if window_id not in common_ids and window_id in selected_by_id:
+                common_ids.append(window_id)
+    return [selected_by_id[window_id] for window_id in common_ids]
+
+
+def _common_evaluation_definition(records, *, min_pixels):
+    records = [dict(record) for record in records or ()]
+    if not records:
+        status = "no_common_windows"
+    else:
+        status = "defined"
+    return _json_native(
+        {
+            "status": status,
+            "method": "common_valid_window_residuals",
+            "window_policy": (
+                "Union of window IDs present in planned, non-skipped comparison "
+                "records. Stress-only windows enter only when the comparison "
+                "plan itself includes them."
+            ),
+            "pixel_policy": (
+                "Every completed fit is evaluated on valid pixels inside the "
+                "same common windows. Fit-used pixels are retained so the pixel "
+                "set is comparable across combinations; explicit excluded "
+                "pixels remain excluded."
+            ),
+            "min_pixels": int(min_pixels),
+            "n_windows": int(len(records)),
+            "window_ids": [record.get("id") for record in records],
+            "window_labels": [record.get("label") for record in records],
+            "feature_families": sorted(
+                {
+                    family
+                    for record in records
+                    for family in record.get("feature_family", ())
+                }
+            ),
+            "risk_tags": sorted(
+                {tag for record in records for tag in record.get("risk_tags", ())}
+            ),
+        }
+    )
+
+
+def _summarize_common_evaluations(records):
+    common_rows = [
+        {
+            "comparison_index": record.get("comparison", {}).get("comparison_index"),
+            "comparison_id": record.get("comparison", {}).get("id"),
+            "kind": record.get("comparison", {}).get("kind"),
+            "fit_status": record.get("fit_status"),
+            "result_summary": record.get("result_summary") or {},
+            "common_overall": (record.get("common_evaluation") or {}).get("overall"),
+            "common_status": (record.get("common_evaluation") or {}).get("status"),
+        }
+        for record in records
+    ]
+    evaluable = [
+        row for row in common_rows if isinstance(row.get("common_overall"), Mapping)
+    ]
+    if not common_rows:
+        status = "no_fit_records"
+    elif evaluable:
+        status = "ok"
+    else:
+        status = "no_evaluable_common_residuals"
+
+    best = None
+    chi2_values = []
+    for row in evaluable:
+        chi2 = row["common_overall"].get("mean_chi2_red_proxy")
+        try:
+            chi2 = float(chi2)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(chi2):
+            continue
+        chi2_values.append(chi2)
+        if best is None or chi2 < best["common_mean_chi2_red_proxy"]:
+            best = {
+                "comparison_index": row.get("comparison_index"),
+                "comparison_id": row.get("comparison_id"),
+                "kind": row.get("kind"),
+                "common_mean_chi2_red_proxy": chi2,
+            }
+
+    return _json_native(
+        {
+            "status": status,
+            "n_fit_records": int(len(common_rows)),
+            "n_evaluable_records": int(len(evaluable)),
+            "best_by_common_mean_chi2_proxy": best,
+            "mean_common_chi2_red_proxy": (
+                None if not chi2_values else float(np.nanmean(chi2_values))
+            ),
+            "parameter_spread": _parameter_spread_for_records(evaluable),
+            "records": [
+                {
+                    "comparison_index": row.get("comparison_index"),
+                    "comparison_id": row.get("comparison_id"),
+                    "kind": row.get("kind"),
+                    "fit_status": row.get("fit_status"),
+                    "common_status": row.get("common_status"),
+                    "common_mean_chi2_red_proxy": (
+                        None
+                        if not isinstance(row.get("common_overall"), Mapping)
+                        else row["common_overall"].get("mean_chi2_red_proxy")
+                    ),
+                    "common_n_pixels": (
+                        None
+                        if not isinstance(row.get("common_overall"), Mapping)
+                        else row["common_overall"].get("n_pixels")
+                    ),
+                    "common_quality_flags": (
+                        []
+                        if not isinstance(row.get("common_overall"), Mapping)
+                        else list(row["common_overall"].get("quality_flags", ()))
+                    ),
+                }
+                for row in common_rows
+            ],
+            "interpretation": (
+                "Common-evaluation summaries compare completed fits on the same "
+                "diagnostic-window set. They are useful for feature-sensitivity "
+                "triage and parameter-stability checks, not as an automatic "
+                "model-selection rule."
+            ),
+        }
+    )
+
+
+def _parameter_spread_for_records(rows):
+    out = {}
+    for key in ("teff", "logg", "feh", "rv_kms", "chi2_red"):
+        values = _finite_values(
+            (row.get("result_summary") or {}).get(key) for row in rows
+        )
+        if not values:
+            out[key] = {
+                "n": 0,
+                "min": None,
+                "max": None,
+                "range": None,
+                "std": None,
+            }
+            continue
+        out[key] = {
+            "n": int(len(values)),
+            "min": float(np.nanmin(values)),
+            "max": float(np.nanmax(values)),
+            "range": float(np.nanmax(values) - np.nanmin(values)),
+            "std": float(np.nanstd(values)),
+        }
     return out
 
 
@@ -1026,6 +1389,21 @@ def _heldout_overall_array(records, key):
     for record in records:
         heldout = record.get("held_out_evaluation") or {}
         overall = heldout.get("overall") or {}
+        try:
+            value = float(overall.get(key))
+        except (TypeError, ValueError):
+            value = np.nan
+        if not np.isfinite(value):
+            value = np.nan
+        values.append(value)
+    return np.asarray(values, dtype=float)
+
+
+def _common_overall_array(records, key):
+    values = []
+    for record in records:
+        common = record.get("common_evaluation") or {}
+        overall = common.get("overall") or {}
         try:
             value = float(overall.get(key))
         except (TypeError, ValueError):

@@ -516,9 +516,12 @@ checks, records held-out windows as provenance, excludes stress-only windows by
 default, and warns that raw χ² should not be used as the sole model-selection
 criterion. When comparison fits are run with reconstructed model arrays, the
 runner also scores selected-but-held-out windows on valid pixels that were not
-used by that fit. These held-out residuals are reported as proxy diagnostics
-beside the in-window χ²; they are a generalization check, not a calibrated
-publication likelihood.
+used by that fit, and it scores every completed fit over the same union of
+planned diagnostic windows. The common-window residual summary is often the
+cleaner cross-comparison view because each fit is judged on the same feature
+set, while the held-out residuals remain a stricter generalization check. Both
+are proxy diagnostics, not calibrated publication likelihoods or automatic
+model-selection rules.
 For publication-oriented Balmer-window work, Spyctres treats line-core masking
 as an explicit sensitivity choice rather than a hidden fit parameter. The
 publication scaffold records the retained-pixel fraction and an

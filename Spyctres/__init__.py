@@ -41,6 +41,7 @@ from .diagnostic_windows import (
 )
 from .diagnostic_window_comparison import (
     build_diagnostic_window_comparison_plan,
+    evaluate_diagnostic_window_common_evaluation,
     evaluate_diagnostic_window_holdout,
     plot_diagnostic_window_comparison,
     run_diagnostic_window_comparison,
@@ -114,6 +115,7 @@ __all__ = [
     "diagnostic_window_catalog", "fit_regions_from_combination",
     "format_diagnostic_window_table", "select_diagnostic_windows",
     "build_diagnostic_window_comparison_plan",
+    "evaluate_diagnostic_window_common_evaluation",
     "evaluate_diagnostic_window_holdout",
     "run_diagnostic_window_comparison", "plot_diagnostic_window_comparison",
     "write_diagnostic_window_comparison_csv",

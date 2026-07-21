@@ -7,6 +7,7 @@ import numpy as np
 
 from Spyctres.diagnostic_window_comparison import (
     build_diagnostic_window_comparison_plan,
+    evaluate_diagnostic_window_common_evaluation,
     evaluate_diagnostic_window_holdout,
     plot_diagnostic_window_comparison,
     run_diagnostic_window_comparison,
@@ -119,6 +120,12 @@ def test_run_comparison_executes_fake_fit_with_regions():
     assert payload["fit_records"][0]["held_out_evaluation"]["status"] == (
         "skipped_no_reconstructed_model"
     )
+    assert payload["fit_records"][0]["common_evaluation"]["status"] == (
+        "skipped_no_reconstructed_model"
+    )
+    assert payload["common_evaluation_summary"]["status"] == (
+        "no_evaluable_common_residuals"
+    )
 
 
 def test_run_comparison_scores_held_out_windows_with_reconstructed_models():
@@ -158,10 +165,48 @@ def test_run_comparison_scores_held_out_windows_with_reconstructed_models():
         for item in payload["fit_records"]
         if item["held_out_evaluation"]["status"] == "ok"
     ]
+    common_evaluations = [
+        item["common_evaluation"]
+        for item in payload["fit_records"]
+        if item["common_evaluation"]["status"] == "ok"
+    ]
     assert evaluations
     assert evaluations[0]["overall"]["n_pixels"] > 0
     assert evaluations[0]["overall"]["mean_chi2_red_proxy"] is not None
     assert any(row["status"] == "ok" for row in evaluations[0]["windows"])
+    assert common_evaluations
+    assert common_evaluations[0]["overall"]["n_pixels"] > 0
+    assert common_evaluations[0]["overall"]["mean_chi2_red_proxy"] is not None
+    assert payload["common_evaluation_summary"]["status"] == "ok"
+    assert payload["common_evaluation_summary"]["n_evaluable_records"] >= 1
+    assert payload["common_evaluation_summary"]["parameter_spread"]["teff"]["n"] >= 1
+
+
+def test_common_evaluation_keeps_fit_used_pixels():
+    segment = _segment()
+    plan = build_diagnostic_window_comparison_plan(
+        segment,
+        max_comparisons=2,
+    )
+    common_windows = plan["selection"]["selected"][:2]
+    result = PhoenixFitResult(
+        summary={"success": True, "chi2_red": 1.0},
+        models=(segment.flux * 0.997,),
+        used_masks=(np.ones(segment.wave.size, dtype=bool),),
+        excluded_masks=(np.zeros(segment.wave.size, dtype=bool),),
+    )
+
+    common = evaluate_diagnostic_window_common_evaluation(
+        segment,
+        result,
+        common_windows=common_windows,
+        min_pixels=3,
+    )
+
+    assert common["status"] == "ok"
+    assert common["n_evaluated_windows"] >= 1
+    assert common["overall"]["n_pixels"] > 0
+    assert common["coordinate_policy"].startswith("Uses a fixed union")
 
 
 def test_evaluate_diagnostic_window_holdout_can_be_called_directly():
@@ -213,6 +258,7 @@ def test_comparison_outputs_are_json_csv_and_plot_friendly(tmp_path):
     header = csv_path.read_text().splitlines()[0]
     assert header.startswith("comparison_index")
     assert "heldout_mean_chi2_red_proxy" in header
+    assert "common_mean_chi2_red_proxy" in header
     assert plot_path.exists()
 
 

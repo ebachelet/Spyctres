@@ -220,7 +220,9 @@ python examples/diagnostic_window_comparison.py \
 To launch actual PHOENIX fits for a bounded subset of those combinations, opt
 in explicitly. By default, fit runs reconstruct the model and score
 selected-but-held-out windows on valid pixels that were not used by each
-comparison fit:
+comparison fit. They also score every completed fit on the same union of
+planned diagnostic windows, which gives a more direct common-pixel residual
+summary across window choices:
 
 ```bash
 python examples/diagnostic_window_comparison.py \
@@ -234,11 +236,12 @@ python examples/diagnostic_window_comparison.py \
   --output-plot /tmp/spyctres_windows_fit.png
 ```
 
-Use `--no-evaluate-heldout` only when you are doing scalar timing checks and do
-not need the extra reconstructed-model pass. The held-out χ² proxy is useful
-for asking whether a fit trained on one set of broad features generalizes to
-other selected features, but it is still a diagnostic, not a final publication
-likelihood.
+Use `--no-evaluate-heldout` and/or `--no-evaluate-common` only when you are
+doing scalar timing checks and do not need the extra reconstructed-model pass.
+The held-out χ² proxy asks whether a fit trained on one set of broad features
+generalizes to other selected features. The common-window χ² proxy asks how all
+fits behave on the same broad feature set. Both are diagnostics, not final
+publication likelihoods.
 
 Stress-only windows such as He/Si/NLTE-sensitive hot-star features are visible
 in the selection provenance but are excluded from ordinary comparison fits unless
