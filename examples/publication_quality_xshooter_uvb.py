@@ -36,6 +36,15 @@ python examples/publication_quality_xshooter_uvb.py \
   --max-systematic-run-variants 2 \
   --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
   --output-systematic-results-csv /tmp/spyctres_systematic_results.csv
+
+Optional same-model synthetic recovery check
+--------------------------------------------
+python examples/publication_quality_xshooter_uvb.py \
+  --run-baseline-fit \
+  --run-injection-recovery \
+  --injection-recovery-trials 3 \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv
 """
 
 from __future__ import annotations
@@ -140,7 +149,12 @@ def build_parser():
             "--run-baseline-fit --run-systematic-variants "
             "--max-systematic-run-variants 2 "
             "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
-            "--output-systematic-results-csv /tmp/spyctres_systematic_results.csv"
+            "--output-systematic-results-csv /tmp/spyctres_systematic_results.csv\n\n"
+            "  python examples/publication_quality_xshooter_uvb.py "
+            "--run-baseline-fit --run-injection-recovery "
+            "--injection-recovery-trials 3 "
+            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
+            "--output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -212,6 +226,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--output-injection-recovery-csv",
+        default=None,
+        help=(
+            "Optional CSV table summarizing opt-in synthetic injection/recovery "
+            "trials. Requires --run-injection-recovery."
+        ),
+    )
+    parser.add_argument(
         "--output-balmer-line-csv",
         default=None,
         help=(
@@ -254,6 +276,15 @@ def build_parser():
         help=(
             "After a successful --run-baseline-fit, execute a bounded subset "
             "of the planned systematic variants. Default: false."
+        ),
+    )
+    parser.add_argument(
+        "--run-injection-recovery",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "After a successful --run-baseline-fit, run bounded same-model "
+            "synthetic injection/recovery trials. Default: false."
         ),
     )
     parser.add_argument(
@@ -430,6 +461,40 @@ def build_parser():
             "Skip already completed systematic variants in the current JSON "
             "checkpoint. Default: true."
         ),
+    )
+    parser.add_argument(
+        "--injection-recovery-trials",
+        type=int,
+        default=3,
+        help=(
+            "Number of synthetic recovery trials when --run-injection-recovery "
+            "is set. Must be between 1 and 20. Default: 3."
+        ),
+    )
+    parser.add_argument(
+        "--injection-noise-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Gaussian noise scale for synthetic recovery, in units of the "
+            "segment 1-sigma errors. Use 0 for a deterministic no-noise "
+            "optimizer sanity check. Default: 1."
+        ),
+    )
+    parser.add_argument(
+        "--injection-default-error-fraction",
+        type=float,
+        default=0.02,
+        help=(
+            "Fallback fractional 1-sigma error used only if a segment lacks "
+            "usable uncertainties. Default: 0.02."
+        ),
+    )
+    parser.add_argument(
+        "--injection-seed",
+        type=int,
+        default=20260721,
+        help="Random seed for synthetic injection/recovery trials.",
     )
     return parser
 
@@ -2233,6 +2298,488 @@ def _run_selected_systematic_variants(
     return results
 
 
+def _baseline_truth_from_payload(fit_payload):
+    return {
+        "teff": _finite_or_none((fit_payload or {}).get("teff")),
+        "feh": _finite_or_none((fit_payload or {}).get("feh")),
+        "logg": _finite_or_none((fit_payload or {}).get("logg")),
+        "rv_kms": _finite_or_none((fit_payload or {}).get("rv_kms")),
+    }
+
+
+def _injection_recovery_tolerances():
+    return {
+        "teff": 250.0,
+        "feh": 0.25,
+        "logg": 0.35,
+        "rv_kms": 10.0,
+    }
+
+
+def _make_synthetic_collection_from_baseline(
+    args,
+    collection,
+    baseline_result,
+    *,
+    trial_index,
+    rng,
+):
+    """Return a synthetic collection generated from the fitted baseline model.
+
+    This is a same-model injection/recovery check: it asks whether the fitting
+    machinery can recover its own injected PHOENIX+continuum solution under the
+    existing wavelength grid, masks, and error model.  It is deliberately not a
+    validation of PHOENIX physics against real stars.
+    """
+    segments = list(collection.segments)
+    models, _used_masks, _excluded_masks = _result_model_mask_arrays(
+        baseline_result,
+        n_segments=len(segments),
+    )
+    if models is None:
+        raise ValueError(
+            "Synthetic injection/recovery requires reconstructed baseline "
+            "model arrays. Run the baseline fit through this scaffold."
+        )
+
+    noise_scale = float(args.injection_noise_scale)
+    if not np.isfinite(noise_scale) or noise_scale < 0.0:
+        raise ValueError("--injection-noise-scale must be finite and >= 0.")
+    default_error_fraction = float(args.injection_default_error_fraction)
+    if (
+        not np.isfinite(default_error_fraction)
+        or default_error_fraction <= 0.0
+    ):
+        raise ValueError("--injection-default-error-fraction must be finite and > 0.")
+
+    out_segments = []
+    error_sources = []
+    for segment_index, (segment, model) in enumerate(zip(segments, models)):
+        wave = np.asarray(segment.wave, dtype=float)
+        model = np.asarray(model, dtype=float)
+        if model.shape != wave.shape:
+            raise ValueError(
+                "Baseline model shape mismatch for segment {0}: {1} vs {2}.".format(
+                    segment_index,
+                    model.shape,
+                    wave.shape,
+                )
+            )
+        if segment.err is None:
+            finite_model = model[np.isfinite(model)]
+            scale = (
+                max(abs(float(np.nanmedian(finite_model))), 1e-30)
+                if finite_model.size
+                else 1.0
+            )
+            err = np.full(wave.shape, scale * default_error_fraction, dtype=float)
+            error_source = "fallback_fractional_error"
+        else:
+            err = np.asarray(segment.err, dtype=float).copy()
+            good_err = np.isfinite(err) & (err > 0.0)
+            if not np.any(good_err):
+                finite_model = model[np.isfinite(model)]
+                scale = (
+                    max(abs(float(np.nanmedian(finite_model))), 1e-30)
+                    if finite_model.size
+                    else 1.0
+                )
+                err = np.full(wave.shape, scale * default_error_fraction, dtype=float)
+                error_source = "fallback_fractional_error"
+            else:
+                fallback = float(np.nanmedian(err[good_err]))
+                err[~good_err] = fallback
+                error_source = "segment_sigma_errors"
+
+        noise = np.zeros(wave.shape, dtype=float)
+        if noise_scale > 0.0:
+            noise = rng.normal(loc=0.0, scale=err * noise_scale)
+        flux = model + noise
+        mask = np.asarray(segment.mask, dtype=bool) & np.isfinite(wave) & np.isfinite(flux)
+        mask &= np.isfinite(err) & (err > 0.0)
+        meta = dict(segment.meta)
+        meta.update(
+            {
+                "synthetic_injection_recovery": True,
+                "synthetic_trial_index": int(trial_index),
+                "synthetic_source": "baseline_continuum_adjusted_model",
+                "synthetic_noise_scale": float(noise_scale),
+                "synthetic_error_source": error_source,
+            }
+        )
+        out_segments.append(
+            segment.copy(
+                flux=flux,
+                err=err,
+                mask=mask,
+                meta=meta,
+                name="{0}_synthetic_trial_{1}".format(
+                    segment.name,
+                    int(trial_index),
+                ),
+            )
+        )
+        error_sources.append(error_source)
+
+    return collection.copy(
+        segments=out_segments,
+        meta={
+            **dict(collection.meta),
+            "synthetic_injection_recovery": True,
+            "synthetic_trial_index": int(trial_index),
+            "synthetic_noise_scale": float(noise_scale),
+            "synthetic_error_sources": list(dict.fromkeys(error_sources)),
+        },
+        name="{0}_synthetic_trial_{1}".format(
+            collection.name or "publication_balmer",
+            int(trial_index),
+        ),
+    )
+
+
+def _injection_trial_summary(fit_payload, truth):
+    recovered = _baseline_truth_from_payload(fit_payload)
+    deltas = {}
+    tolerances = _injection_recovery_tolerances()
+    pass_flags = {}
+    for key, truth_value in truth.items():
+        recovered_value = recovered.get(key)
+        if truth_value is None or recovered_value is None:
+            deltas[key] = None
+            pass_flags[key] = False
+        else:
+            delta = float(recovered_value - truth_value)
+            deltas[key] = delta
+            pass_flags[key] = bool(abs(delta) <= tolerances[key])
+    return {
+        "success": fit_payload.get("success") if isinstance(fit_payload, dict) else None,
+        "truth": dict(truth),
+        "recovered": recovered,
+        "delta": deltas,
+        "tolerances": tolerances,
+        "passed_tolerances": pass_flags,
+        "all_passed": bool(pass_flags and all(pass_flags.values())),
+        "chi2_red": (
+            _finite_or_none(fit_payload.get("chi2_red"))
+            if isinstance(fit_payload, dict)
+            else None
+        ),
+        "quality_flags": (
+            list(fit_payload.get("quality_flags") or ())
+            if isinstance(fit_payload, dict)
+            else []
+        ),
+    }
+
+
+def _injection_recovery_summary(records, truth):
+    counts = {}
+    for record in records:
+        status = str(record.get("status", "unknown"))
+        counts[status] = counts.get(status, 0) + 1
+    ok_records = [record for record in records if record.get("status") == "ok"]
+    pass_count = sum(
+        1
+        for record in ok_records
+        if (record.get("fit_summary") or {}).get("all_passed")
+    )
+    delta_stats = {}
+    for key in ("teff", "feh", "logg", "rv_kms"):
+        values = [
+            (record.get("fit_summary") or {}).get("delta", {}).get(key)
+            for record in ok_records
+        ]
+        values = [float(value) for value in values if value is not None]
+        if values:
+            arr = np.asarray(values, dtype=float)
+            delta_stats[key] = {
+                "n": int(arr.size),
+                "mean": float(np.nanmean(arr)),
+                "median": float(np.nanmedian(arr)),
+                "std": float(np.nanstd(arr)),
+                "max_abs": float(np.nanmax(np.abs(arr))),
+            }
+        else:
+            delta_stats[key] = {
+                "n": 0,
+                "mean": None,
+                "median": None,
+                "std": None,
+                "max_abs": None,
+            }
+    if not records:
+        status = "no_trials_selected"
+    elif counts.get("error"):
+        status = "completed_with_errors"
+    elif ok_records and pass_count == len(ok_records):
+        status = "completed_all_recovered"
+    elif ok_records:
+        status = "completed_with_recovery_failures"
+    else:
+        status = "completed_no_successful_trials"
+    flags = sorted(
+        {
+            flag
+            for record in records
+            for flag in (record.get("fit_summary") or {}).get("quality_flags", ())
+        }
+    )
+    return {
+        "schema_version": 1,
+        "status": status,
+        "n_records": int(len(records)),
+        "n_ok": int(len(ok_records)),
+        "n_passed_all_tolerances": int(pass_count),
+        "status_counts": counts,
+        "truth": dict(truth),
+        "tolerances": _injection_recovery_tolerances(),
+        "delta_statistics": delta_stats,
+        "quality_flags_seen": flags,
+        "interpretation": (
+            "Same-model synthetic recovery checks optimizer, masks, continuum "
+            "handling, and noise response around the baseline solution. Passing "
+            "this test is necessary but not sufficient for publication use, "
+            "because it does not test PHOENIX model physics against real stars."
+        ),
+    }
+
+
+def _run_one_injection_recovery_trial(
+    args,
+    collection,
+    exclude_masks,
+    baseline_result,
+    truth,
+    *,
+    trial_index,
+    rng,
+    fit_runner=None,
+):
+    if fit_runner is None:
+        fit_runner = _run_baseline_fit
+    started = time.monotonic()
+    try:
+        synthetic_collection = _make_synthetic_collection_from_baseline(
+            args,
+            collection,
+            baseline_result,
+            trial_index=trial_index,
+            rng=rng,
+        )
+        ordinary_i, publication_i = _run_readiness(
+            args,
+            synthetic_collection,
+            exclude_masks,
+        )
+        fit_payload, fit_result = fit_runner(
+            args,
+            synthetic_collection,
+            exclude_masks,
+            output_plot=None,
+            return_result=True,
+            fit_label="synthetic recovery trial {0}".format(trial_index),
+        )
+        residuals = _balmer_model_residual_diagnostics(
+            synthetic_collection,
+            fit_result,
+            core_mask_halfwidth=float(args.balmer_core_mask),
+        )
+        return {
+            "trial_index": int(trial_index),
+            "status": "ok" if fit_payload.get("success") else "fit_failed",
+            "elapsed_s": float(time.monotonic() - started),
+            "ordinary_readiness": ordinary_i,
+            "publication_readiness": publication_i,
+            "fit_summary": _injection_trial_summary(fit_payload, truth),
+            "fit": fit_payload,
+            "line_residual_diagnostics": residuals,
+        }
+    except Exception as exc:  # pragma: no cover - defensive checkpoint path.
+        return {
+            "trial_index": int(trial_index),
+            "status": "error",
+            "error": "{0}: {1}".format(type(exc).__name__, exc),
+            "elapsed_s": float(time.monotonic() - started),
+        }
+
+
+def _write_injection_recovery_csv(path, results):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "trial_index",
+        "status",
+        "success",
+        "truth_teff",
+        "truth_feh",
+        "truth_logg",
+        "truth_rv_kms",
+        "recovered_teff",
+        "recovered_feh",
+        "recovered_logg",
+        "recovered_rv_kms",
+        "delta_teff",
+        "delta_feh",
+        "delta_logg",
+        "delta_rv_kms",
+        "all_passed",
+        "chi2_red",
+        "quality_flags",
+        "elapsed_s",
+        "error",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for record in results.get("records", ()):
+            summary = record.get("fit_summary") or {}
+            truth = summary.get("truth") or {}
+            recovered = summary.get("recovered") or {}
+            delta = summary.get("delta") or {}
+            writer.writerow(
+                {
+                    "trial_index": record.get("trial_index"),
+                    "status": record.get("status"),
+                    "success": summary.get("success"),
+                    "truth_teff": truth.get("teff"),
+                    "truth_feh": truth.get("feh"),
+                    "truth_logg": truth.get("logg"),
+                    "truth_rv_kms": truth.get("rv_kms"),
+                    "recovered_teff": recovered.get("teff"),
+                    "recovered_feh": recovered.get("feh"),
+                    "recovered_logg": recovered.get("logg"),
+                    "recovered_rv_kms": recovered.get("rv_kms"),
+                    "delta_teff": delta.get("teff"),
+                    "delta_feh": delta.get("feh"),
+                    "delta_logg": delta.get("logg"),
+                    "delta_rv_kms": delta.get("rv_kms"),
+                    "all_passed": summary.get("all_passed"),
+                    "chi2_red": summary.get("chi2_red"),
+                    "quality_flags": ";".join(summary.get("quality_flags") or ()),
+                    "elapsed_s": record.get("elapsed_s"),
+                    "error": record.get("error"),
+                }
+            )
+
+
+def _skipped_injection_recovery(status, reason, truth=None):
+    truth = {} if truth is None else dict(truth)
+    return {
+        **_injection_recovery_summary([], truth),
+        "status": status,
+        "reason": reason,
+        "records": [],
+    }
+
+
+def _run_injection_recovery(
+    args,
+    collection,
+    exclude_masks,
+    baseline_result,
+    baseline_payload,
+    output_path,
+    payload,
+    *,
+    fit_runner=None,
+):
+    n_trials = int(args.injection_recovery_trials)
+    if n_trials < 1 or n_trials > 20:
+        raise ValueError("--injection-recovery-trials must be between 1 and 20.")
+    truth = _baseline_truth_from_payload(baseline_payload)
+    missing_truth = [key for key, value in truth.items() if value is None]
+    if missing_truth:
+        return _skipped_injection_recovery(
+            "skipped_missing_baseline_truth",
+            "Baseline fit did not report all injected truth parameters: {0}.".format(
+                ", ".join(missing_truth)
+            ),
+            truth=truth,
+        )
+
+    existing = payload.get("injection_recovery") or {}
+    records = list(existing.get("records") or [])
+    completed = {
+        int(record.get("trial_index"))
+        for record in records
+        if record.get("status") in {"ok", "fit_failed"}
+        and record.get("trial_index") is not None
+    }
+    for trial_index in range(1, n_trials + 1):
+        if trial_index in completed:
+            print(
+                "Skipping completed injection/recovery trial {0}/{1}".format(
+                    trial_index,
+                    n_trials,
+                ),
+                flush=True,
+            )
+            continue
+        print(
+            "Running injection/recovery trial {0}/{1}".format(
+                trial_index,
+                n_trials,
+            ),
+            flush=True,
+        )
+        trial_rng = np.random.default_rng(int(args.injection_seed) + int(trial_index))
+        record = _run_one_injection_recovery_trial(
+            args,
+            collection,
+            exclude_masks,
+            baseline_result,
+            truth,
+            trial_index=trial_index,
+            rng=trial_rng,
+            fit_runner=fit_runner,
+        )
+        records = [
+            old
+            for old in records
+            if int(old.get("trial_index", -1)) != trial_index
+        ]
+        records.append(record)
+        records.sort(key=lambda item: int(item.get("trial_index", 0)))
+        payload["injection_recovery"] = {
+            **_injection_recovery_summary(records, truth),
+            "method": "same_model_baseline_noise_injection",
+            "config": {
+                "n_trials_requested": int(n_trials),
+                "noise_scale": float(args.injection_noise_scale),
+                "default_error_fraction": float(
+                    args.injection_default_error_fraction
+                ),
+                "seed": int(args.injection_seed),
+            },
+            "records": records,
+        }
+        _atomic_write_json(output_path, payload)
+        print(
+            "Injection/recovery trial {0}: status={1}, passed={2}".format(
+                trial_index,
+                record.get("status"),
+                (record.get("fit_summary") or {}).get("all_passed"),
+            ),
+            flush=True,
+        )
+
+    results = {
+        **_injection_recovery_summary(records, truth),
+        "method": "same_model_baseline_noise_injection",
+        "config": {
+            "n_trials_requested": int(n_trials),
+            "noise_scale": float(args.injection_noise_scale),
+            "default_error_fraction": float(args.injection_default_error_fraction),
+            "seed": int(args.injection_seed),
+        },
+        "records": records,
+    }
+    payload["injection_recovery"] = results
+    return results
+
+
 def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks):
     generic_windows = _diagnostic_window_payload(segment)
     return {
@@ -2294,6 +2841,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         "core_mask_sensitivity_recommendation": None,
         "systematic_variant_plan": _build_systematic_variant_plan(args, case),
         "systematic_variant_results": None,
+        "injection_recovery": None,
         "baseline_fit": None,
         "baseline_line_residual_diagnostics": None,
     }
@@ -2906,6 +3454,32 @@ def main(argv=None):
                 payload["systematic_variant_results"],
             )
             _atomic_write_json(output_path, payload)
+        if args.run_injection_recovery:
+            if not payload["baseline_fit"].get("success"):
+                print(
+                    "Skipping injection/recovery because the baseline fit failed.",
+                    flush=True,
+                )
+                payload["injection_recovery"] = _skipped_injection_recovery(
+                    "skipped_baseline_failed",
+                    "Synthetic recovery requires a successful baseline fit.",
+                    truth=_baseline_truth_from_payload(payload["baseline_fit"]),
+                )
+            else:
+                payload["injection_recovery"] = _run_injection_recovery(
+                    args,
+                    collection,
+                    exclude_masks,
+                    baseline_result,
+                    payload["baseline_fit"],
+                    output_path,
+                    payload,
+                )
+            _write_injection_recovery_csv(
+                args.output_injection_recovery_csv,
+                payload["injection_recovery"],
+            )
+            _atomic_write_json(output_path, payload)
     else:
         if args.run_systematic_variants:
             print(
@@ -2919,6 +3493,20 @@ def main(argv=None):
             _write_systematic_variant_results_csv(
                 args.output_systematic_results_csv,
                 payload["systematic_variant_results"],
+            )
+            _atomic_write_json(output_path, payload)
+        if args.run_injection_recovery:
+            print(
+                "Skipping injection/recovery: add --run-baseline-fit first.",
+                flush=True,
+            )
+            payload["injection_recovery"] = _skipped_injection_recovery(
+                "skipped_requires_run_baseline_fit",
+                "Add --run-baseline-fit before synthetic injection/recovery.",
+            )
+            _write_injection_recovery_csv(
+                args.output_injection_recovery_csv,
+                payload["injection_recovery"],
             )
             _atomic_write_json(output_path, payload)
         print(

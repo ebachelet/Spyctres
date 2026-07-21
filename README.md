@@ -536,6 +536,12 @@ workflow lightweight and avoiding hidden fit grids. After a successful baseline
 fit, `--run-systematic-variants` executes a small priority subset with atomic
 JSON checkpoints after each variant; use `--systematic-variant-ids` to run a
 specific reviewer-requested subset.
+The same scaffold can also run a bounded same-model synthetic
+injection/recovery check with `--run-injection-recovery`. This creates noisy
+synthetic Balmer-window spectra from the reconstructed baseline model, refits
+them, and reports parameter deltas against the injected baseline truth. It is
+an optimizer/masking/noise-response sanity check, not external validation of
+PHOENIX physics against real reference stars.
 It also records cheap observed-profile diagnostics for each Balmer line:
 sideband coverage, mask fractions, line-depth and equivalent-width proxies,
 wing asymmetry, and DIB overlaps. These identify lines needing review before

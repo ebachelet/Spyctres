@@ -438,13 +438,32 @@ python examples/publication_quality_xshooter_uvb.py \
   --output-systematic-results-csv /tmp/spyctres_systematic_results.csv
 ```
 
+To run a bounded same-model synthetic injection/recovery check after a
+successful baseline fit:
+
+```bash
+python examples/publication_quality_xshooter_uvb.py \
+  --run-baseline-fit \
+  --run-injection-recovery \
+  --injection-recovery-trials 3 \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv
+```
+
+This creates noisy synthetic Balmer-window spectra from the reconstructed
+baseline model, refits them, and reports recovered-minus-injected parameter
+deltas. It is a necessary optimizer/masking/noise-response sanity check around
+the baseline solution, but it is not a validation that PHOENIX describes the
+real star perfectly.
+
 This remains a scaffold rather than a final publication pipeline. The saved
 JSON lists the follow-up checks still required before publication claims:
 per-line and joint Balmer comparisons, leave-one-line-out tests, continuum and
 mask variants, resolution/LSF variants, synthetic injection/recovery, and final
 uncertainty accounting. The first four categories are now represented in the
 saved systematic-variant plan, selected variants can be executed explicitly,
-and the baseline fit produces per-line residual summaries; injection/recovery
+same-model injection/recovery can be run explicitly, and the baseline fit
+produces per-line residual summaries; external real-star recovery validation
 and final uncertainty tables remain later steps. The paired
 `publication_quality_xshooter_uvb.ipynb` notebook is a no-output notebook that
 drives the same script with `RUN_BASELINE_FIT = False` by default.

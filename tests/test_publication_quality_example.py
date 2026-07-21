@@ -62,6 +62,7 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert payload["baseline_fit"] is None
     assert payload["baseline_line_residual_diagnostics"] is None
     assert payload["systematic_variant_results"] is None
+    assert payload["injection_recovery"] is None
     assert payload["ordinary_readiness"]["n_fit_candidate"] > 0
     assert "publication_readiness" in payload
     assert "balmer_windows" in payload["analysis_design"]
@@ -299,3 +300,135 @@ def test_systematic_variant_execution_is_bounded_and_checkpointed(tmp_path):
     csv_header = Path(args.output_systematic_results_csv).read_text().splitlines()[0]
     assert "variant_id" in csv_header
     assert "chi2_red" in csv_header
+
+
+def test_injection_recovery_is_bounded_and_checkpointed(tmp_path):
+    module = _load_publication_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "--output-json",
+            str(tmp_path / "publication_with_injection.json"),
+            "--output-injection-recovery-csv",
+            str(tmp_path / "injection_recovery.csv"),
+            "--injection-recovery-trials",
+            "2",
+            "--injection-noise-scale",
+            "0",
+            "--force",
+        ]
+    )
+
+    wave = np.linspace(3900.0, 5050.0, 1600)
+    flux = (
+        1.0
+        - 0.18 * np.exp(-0.5 * ((wave - 4101.7) / 8.0) ** 2)
+        - 0.16 * np.exp(-0.5 * ((wave - 4340.5) / 9.0) ** 2)
+        - 0.14 * np.exp(-0.5 * ((wave - 4861.3) / 10.0) ** 2)
+    )
+    err = np.full_like(wave, 0.03)
+    segment = SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=err,
+        mask=np.ones_like(wave, dtype=bool),
+        name="synthetic_xshooter_uvb",
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+    )
+    case, collection, exclude_masks = module._prepare_balmer_collection(
+        args,
+        segment,
+        core_mask_halfwidth=float(args.balmer_core_mask),
+    )
+    payload = module._base_payload(
+        args,
+        args.spectrum,
+        segment,
+        case,
+        collection,
+        exclude_masks,
+    )
+    baseline_payload = {
+        "success": True,
+        "teff": 9000.0,
+        "feh": 0.0,
+        "logg": 3.0,
+        "rv_kms": 0.0,
+        "chi2_red": 1.0,
+    }
+    baseline_result = PhoenixFitResult(
+        summary=baseline_payload,
+        models=tuple(np.asarray(seg.flux, dtype=float) for seg in collection.segments),
+        used_masks=tuple(np.asarray(seg.mask, dtype=bool) for seg in collection.segments),
+        excluded_masks=tuple(
+            np.zeros(np.asarray(seg.wave).shape, dtype=bool)
+            for seg in collection.segments
+        ),
+    )
+    calls = []
+
+    def fake_runner(
+        args_i,
+        collection_i,
+        exclude_masks_i,
+        *,
+        output_plot=None,
+        return_result=False,
+        fit_label="baseline",
+    ):
+        calls.append(fit_label)
+        result = PhoenixFitResult(
+            summary={
+                "success": True,
+                "teff": 9000.0 + len(calls),
+                "feh": 0.01,
+                "logg": 3.02,
+                "rv_kms": -0.4,
+                "chi2_red": 1.05,
+            },
+            models=tuple(np.asarray(seg.flux, dtype=float) for seg in collection_i.segments),
+            used_masks=tuple(
+                np.asarray(seg.mask, dtype=bool) for seg in collection_i.segments
+            ),
+            excluded_masks=tuple(
+                np.zeros(np.asarray(seg.wave).shape, dtype=bool)
+                for seg in collection_i.segments
+            ),
+            quality_flags=("synthetic_recovery_test_flag",),
+        )
+        fit_payload = result.to_dict(include_arrays=False)
+        if return_result:
+            return fit_payload, result
+        return fit_payload
+
+    results = module._run_injection_recovery(
+        args,
+        collection,
+        exclude_masks,
+        baseline_result,
+        baseline_payload,
+        args.output_json,
+        payload,
+        fit_runner=fake_runner,
+    )
+    module._write_injection_recovery_csv(
+        args.output_injection_recovery_csv,
+        results,
+    )
+
+    assert results["method"] == "same_model_baseline_noise_injection"
+    assert results["status"] == "completed_all_recovered"
+    assert results["n_records"] == 2
+    assert results["n_passed_all_tolerances"] == 2
+    assert len(calls) == 2
+    assert all(
+        record["fit_summary"]["all_passed"]
+        for record in results["records"]
+    )
+    assert "synthetic_recovery_test_flag" in results["quality_flags_seen"]
+    checkpoint = json.loads(Path(args.output_json).read_text())
+    assert checkpoint["injection_recovery"]["n_records"] == 2
+    csv_header = Path(args.output_injection_recovery_csv).read_text().splitlines()[0]
+    assert "delta_teff" in csv_header
+    assert "all_passed" in csv_header
