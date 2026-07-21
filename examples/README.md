@@ -17,18 +17,20 @@ workflows:
 1. `simple_phoenix_fit.py` — shortest command-line path using the public API.
 2. `batch_quickscan_then_refine.py` — batch-oriented quick scan followed by
    focused refinement; useful when fitting many spectra.
-3. `high_resolution_sideband_normalization.py` — local line-window sideband
+3. `diagnostic_window_comparison.py` — quick feature-window comparison plan,
+   with opt-in bounded PHOENIX fits.
+4. `high_resolution_sideband_normalization.py` — local line-window sideband
    normalization for UVES/PEPSI-like high-resolution diagnostics.
-4. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
-5. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
+5. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
+6. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
    diagnostic workflow.
-6. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
+7. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
    useful after the basic workflow is familiar.
-7. `publication_quality_xshooter_uvb.py` and
+8. `publication_quality_xshooter_uvb.py` and
    `publication_quality_xshooter_uvb.ipynb` — expert scaffold for
    publication-oriented X-SHOOTER UVB parameter work. Starts audit-only and
    keeps baseline fitting opt-in.
-8. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
+9. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
    PEPSI legacy line-window path, not the generic public classification path.
 
 The examples are ordered by how much Spyctres-specific context they assume.
@@ -197,7 +199,47 @@ PHOENIX full-spectrum multiplicative continuum for low/medium-resolution
 classification or broad-window fitting. These are complementary workflows, not
 competing defaults.
 
-## Example 3: high-resolution local sideband normalization
+## Example 3: diagnostic-window comparison scaffold
+
+Use `diagnostic_window_comparison.py` when you want to ask "which broad
+features are available in this spectrum, and which small window combinations
+would be worth checking?" The default is a cheap dry run: it reads the bundled
+spectrum, selects diagnostic windows from the wavelength coverage, writes an
+auditable JSON plan, and can save a compact CSV/PNG summary. It does not load
+PHOENIX unless `--run-fits` is supplied.
+
+```bash
+python examples/diagnostic_window_comparison.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output-json /tmp/spyctres_windows.json \
+  --output-csv /tmp/spyctres_windows.csv \
+  --output-plot /tmp/spyctres_windows.png
+```
+
+To launch actual PHOENIX fits for a bounded subset of those combinations, opt
+in explicitly:
+
+```bash
+python examples/diagnostic_window_comparison.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --run-fits \
+  --R 6200 \
+  --max-comparisons 4 \
+  --output-json /tmp/spyctres_windows_fit.json \
+  --output-csv /tmp/spyctres_windows_fit.csv \
+  --output-plot /tmp/spyctres_windows_fit.png
+```
+
+Stress-only windows such as He/NLTE-sensitive features are visible in the
+selection provenance but are excluded from ordinary comparison fits unless
+`--include-stress-windows` is supplied. Windows with cautionary risks, such as
+DIB/telluric/model-sensitive regions, remain labelled in the JSON/CSV. The
+comparison plot is a stability diagnostic; it should not be read as "lowest
+raw χ² wins."
+
+## Example 4: high-resolution local sideband normalization
 
 Use `high_resolution_sideband_normalization.py` when you want to inspect a
 UVES-like, PEPSI-like, or other high-resolution line window with a local
@@ -221,14 +263,14 @@ the original and normalized line window. Use this pattern before local
 equivalent-width or line-profile diagnostics where broad full-spectrum
 polynomials would be the wrong mental model.
 
-## Example 4: first worked notebook
+## Example 5: first worked notebook
 
 The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
 example of the generic PHOENIX fitting workflow. It is not intended to be the
 final precision analysis for this spectrum, and it is not the full
 benchmark-validation path used for development testing.
 
-## Example 5: advanced X-SHOOTER multi-arm notebook
+## Example 6: advanced X-SHOOTER multi-arm notebook
 
 The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
 windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
@@ -239,7 +281,7 @@ several minutes on a normal workstation; progress messages are printed during
 cache construction, RV scanning, and local optimization so users can tell it is
 still working.
 
-## Example 6: XSL real-spectrum validation
+## Example 7: XSL real-spectrum validation
 
 The Figure 1 validation sample from Verro et al. (2022) is listed in
 `xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
@@ -284,7 +326,7 @@ current PHOENIX fit, and a very cool low-gravity supergiant. This distinction is
 important: a predictable model-physics mismatch is evidence about the model's
 domain, not automatically evidence that the numerical fitter is broken.
 
-## Example 7: publication-oriented X-SHOOTER UVB scaffold
+## Example 8: publication-oriented X-SHOOTER UVB scaffold
 
 Use `publication_quality_xshooter_uvb.py` only after the quickstart and
 validation examples are familiar. It is a conservative expert scaffold for
@@ -305,6 +347,16 @@ until they are validated, for example assumed resolution, missing formal
 uncertainties, unknown wavelength-frame metadata, artifact flags, unapplied
 archive bad-region overlap, or too few fitted pixels.
 
+The same run also records a generic diagnostic-window selection from the loaded
+wavelength coverage. This is broader than the UVB/Balmer scaffold: if a
+spectrum covers them, the selector can identify Paschen and Brackett hydrogen
+regions, Ca I/Ca II windows, Mg/Na metal-line checks, and cool-star molecular
+windows such as TiO and CO. These windows are advisory; Spyctres does not fit
+every combination by default. The catalog windows are stored in vacuum
+Angstrom, stellar-rest-frame coordinates; the selector converts them to each
+segment's wavelength medium, records any RV/padding used for the operational
+window, and exposes score components rather than a single unexplained ranking.
+
 The Balmer-core mask is intentionally treated as a sensitivity axis rather than
 a fixed truth. By default the JSON includes an audit-only grid for core
 half-widths of 0, 4, 6, 8, 10, and 12 A, recording how many fitted pixels remain
@@ -312,6 +364,23 @@ and which readiness flags appear. Use `--balmer-core-mask` to choose the
 baseline width shown in plots, and `--core-mask-grid` to change the audit grid.
 Only add `--run-core-mask-fit-grid` when you deliberately want the expensive
 PHOENIX fit repeated for every mask width.
+The grid also records an explicit information-retention penalty relative to
+the no-core-mask reference. This penalty is not added to the spectral χ²; it is
+a triage guardrail so a very wide core mask does not look attractive merely
+because it has discarded useful Balmer-wing pixels. The reported recommendation
+prefers the smallest nonzero mask that is not flagged excessive under
+`--min-core-mask-retained-fraction`.
+
+To save compact review artifacts for the mask grid and generic feature-window
+selection:
+
+```bash
+python examples/publication_quality_xshooter_uvb.py \
+  --output-json /tmp/spyctres_publication_xshooter_uvb.json \
+  --output-comparison-csv /tmp/spyctres_core_mask_summary.csv \
+  --output-comparison-plot /tmp/spyctres_core_mask_summary.png \
+  --output-diagnostic-window-csv /tmp/spyctres_diagnostic_windows.csv
+```
 
 After PHOENIX is configured, opt in to the baseline fit:
 
@@ -337,8 +406,11 @@ headless runs; `--output-plot` can be used independently to save the figure. If
 path relative to the JSON file and strips local cache/template paths by default.
 The default plot focuses on the wavelength span actually used in the fit and
 draws PHOENIX/model residuals only on fitted pixels; this avoids making masked
-or out-of-window data look as if they influenced the solution. Use
-`--plot-xlim all` when you deliberately want a full-segment mask/debug view.
+or out-of-window data look as if they influenced the solution. The
+continuum-adjusted model is also shown as a dashed red curve across explicitly
+excluded/shaded pixels, so masked line cores can be inspected visually without
+counting them in χ². Use `--plot-xlim all` when you deliberately want a
+full-segment mask/debug view.
 By default, the script also opens a companion zoomed-line diagnostic figure.
 `--line-groups auto` selects Balmer, Ca II, and Mg II 4481 lines that overlap
 fitted pixels, and adds He I only when the fitted temperature is hot enough for
@@ -446,7 +518,7 @@ by itself prove that the DIB identification is correct or that masking is the
 final scientific choice. Inspect the residuals, other Balmer lines, continuum
 placement, and LSF assumptions before drawing that conclusion.
 
-## Example 7: PEPSI legacy line-window validation
+## Example 9: PEPSI legacy line-window validation
 
 The `pepsi_legacy_linefit_validation.ipynb` notebook is a developer validation
 example for the PEPSI legacy line-window workflow. Use it to understand and

@@ -485,6 +485,40 @@ be overridden by expert users. The provenance also includes an
 `interpretation` block for examples and future GUIs, naming the intended
 quicklook/standard/diagnostic use, how to interpret `rv_kms`, any metadata-risk
 flags, and the recommended next step before treating a result as scientific.
+That provenance now also includes advisory diagnostic-window candidates selected
+from the loaded wavelength coverage. These are broad windows around features
+such as Balmer, Paschen, Brackett, Ca I/Ca II, Mg/Na, TiO, and CO; they help
+decide which quick follow-up checks are sensible for hot, intermediate, or cool
+stars without launching an expensive blind all-combinations fit. The catalog is
+defined in canonical vacuum Angstrom, stellar-rest-frame coordinates; selection
+converts those broad windows to each segment's declared wavelength medium and
+records the operational window, RV padding, score components, risk policies,
+and contiguous-coverage diagnostics in provenance.
+When you want to compare the influence of different feature families, use the
+bounded diagnostic-window comparison scaffold. It defaults to a dry run that
+writes a JSON/CSV/PNG plan without loading PHOENIX; actual fits require the
+explicit `--run-fits` flag:
+
+```bash
+python examples/diagnostic_window_comparison.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output-json /tmp/spyctres_windows.json \
+  --output-csv /tmp/spyctres_windows.csv \
+  --output-plot /tmp/spyctres_windows.png
+```
+
+The comparison policy is deliberately conservative: it runs only a small set of
+trusted baseline, role-balanced, single-window, and leave-one-out/family-out
+checks, records held-out windows as provenance, excludes stress-only windows by
+default, and warns that raw χ² should not be used as the sole model-selection
+criterion.
+For publication-oriented Balmer-window work, Spyctres treats line-core masking
+as an explicit sensitivity choice rather than a hidden fit parameter. The
+publication scaffold records the retained-pixel fraction and an
+information-loss penalty for each tested core-mask width. This penalty is not
+added to the spectral χ²; it exists to discourage choosing an overly wide mask
+just because discarded Balmer-wing pixels made the apparent fit easier.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,

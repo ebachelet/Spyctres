@@ -215,10 +215,11 @@
       "url": "https://doi.org/10.1093/mnras/stad2597",
       "validated_via": "MNRAS publisher paper, arXiv 2208.14974, and CapFit documentation",
       "validated_on": "2026-07-06",
-      "description": "Describes pPXF's separable optimization architecture and CapFit nonlinear least-squares method. It supports Spyctres' decision to solve multiplicative continuum coefficients exactly as a linear subproblem inside each nonlinear atmospheric-parameter evaluation while retaining SciPy's bounded least-squares optimizer for the small nonlinear parameter set.",
+      "description": "Describes pPXF's separable optimization architecture and CapFit nonlinear least-squares method. It supports Spyctres' decision to solve multiplicative continuum coefficients exactly as a linear subproblem inside each nonlinear atmospheric-parameter evaluation while retaining SciPy's bounded least-squares optimizer for the small nonlinear parameter set. The pPXF implementation also provides a useful precedent for keeping good-pixel masks explicit and for plotting the best-fitting model without implying masked pixels were used in the fit.",
       "affected_code": [
         "Spyctres/fitting.py:_solve_multiplicative_legendre",
-        "Spyctres/fitting.py:fit_phoenix_full_spectrum"
+        "Spyctres/fitting.py:fit_phoenix_full_spectrum",
+        "Spyctres/plotting.py:plot_fit_referee"
       ]
     },
     {
@@ -305,11 +306,97 @@
       "url": "https://doi.org/10.3847/0004-6256/151/6/144",
       "validated_via": "Published Astronomical Journal paper and SDSS ASPCAP documentation",
       "validated_on": "2026-07-06",
-      "description": "Documents ASPCAP/FERRE's use of 12 dispersed initial searches across stellar-parameter space and selection of the lowest-chi-square solution. Spyctres adopts the underlying lesson with a compact sparse-node coarse scan followed by a shared-cache local multistart, rather than copying the survey-specific number or parameter layout.",
+      "description": "Documents ASPCAP/FERRE's use of 12 dispersed initial searches across stellar-parameter space and selection of the lowest-chi-square solution; the SDSS pipeline documentation also records the surrounding practice of masking bad/sky-contaminated pixels and applying a small systematic error floor. Spyctres adopts the multistart lesson with a compact sparse-node coarse scan followed by shared-cache local multistart, and adopts the masking/error-floor lesson as explicit provenance rather than hidden preprocessing.",
       "affected_code": [
         "Spyctres/fitting.py:_coarse_physical_start_native_interp",
         "Spyctres/fitting.py:_build_local_multistarts",
-        "scripts/xsl_validation.py"
+        "scripts/xsl_validation.py",
+        "examples/publication_quality_xshooter_uvb.py"
+      ]
+    },
+    {
+      "id": "mashonkina2008_balmer_core_exclusion",
+      "citation": "Mashonkina, L. et al. (2008), Non-LTE line formation for heavy elements in four very metal-poor stars, Astronomy & Astrophysics, 478, 529-541.",
+      "doi": "10.1051/0004-6361:20078060",
+      "url": "https://doi.org/10.1051/0004-6361:20078060",
+      "validated_via": "A&A publisher page and DOI metadata; Balmer H-alpha/H-beta core-exclusion discussion inspected",
+      "validated_on": "2026-07-20",
+      "description": "Uses Balmer-line wings for stellar-parameter work while excluding the central core because classical model atmospheres do not reliably reproduce the core/inner-wing region; the excluded core half-width is reported as parameter dependent, with examples near 0.7-1.5 Angstrom at high spectral resolution. Spyctres uses this as scientific provenance for treating Balmer-core masks as explicit sensitivity choices and for penalizing overly large masks that discard useful wing information.",
+      "affected_code": [
+        "Spyctres/recipes.py:make_balmer_core_exclude_mask",
+        "examples/publication_quality_xshooter_uvb.py"
+      ]
+    },
+    {
+      "id": "nist_asd_v512",
+      "citation": "Kramida, A., Ralchenko, Y., Reader, J., and NIST ASD Team, NIST Atomic Spectra Database, Version 5.12, NIST Standard Reference Database 78.",
+      "doi": "10.18434/T4W30F",
+      "url": "https://www.nist.gov/pml/atomic-spectra-database",
+      "validated_via": "Official NIST Atomic Spectra Database page; version, DOI, and wavelength/transition scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Provides critically evaluated atomic wavelengths and transition data used as provenance for broad diagnostic windows around H, He, Ca, Mg, and Na features. Spyctres uses these wavelengths only for approximate feature-window selection and diagnostics, not as a replacement for detailed line measurement.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "gray_corbally2009_spectral_classification",
+      "citation": "Gray, R. O. & Corbally, C. J. (2009), Stellar Spectral Classification, Princeton University Press.",
+      "doi": "10.1515/9781400833368",
+      "url": "https://doi.org/10.1515/9781400833368",
+      "validated_via": "Crossref DOI record and publisher DOI landing page",
+      "validated_on": "2026-07-20",
+      "description": "A standard reference for MK stellar spectral classification and the use of hydrogen, helium, metal, and molecular features across spectral types. Spyctres uses it as broad scientific provenance for tagging diagnostic windows by hot-star, cool-star, temperature, gravity, metallicity, and molecular roles.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "cenarro2001_ca_triplet_indices",
+      "citation": "Cenarro, A. J. et al. (2001), Empirical calibration of the near-infrared Ca II triplet. I. The stellar library and index definition, Monthly Notices of the Royal Astronomical Society, 326, 959-980.",
+      "doi": "10.1046/j.1365-8711.2001.04688.x",
+      "url": "https://doi.org/10.1046/j.1365-8711.2001.04688.x",
+      "validated_via": "MNRAS publisher article; abstract and Ca II/Paschen index discussion inspected",
+      "validated_on": "2026-07-20",
+      "description": "Defines and calibrates near-IR Ca II triplet indices and explicitly discusses Paschen contamination and stellar-parameter sensitivity. Spyctres uses this as provenance for treating the Ca II triplet/Paschen region as a valuable but blended diagnostic window rather than a simple isolated Ca feature.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "meyer1998_hband_classification",
+      "citation": "Meyer, M. R., Edwards, S., Hinkle, K. H. & Strom, S. E. (1998), Near-Infrared Classification Spectroscopy: H-Band Spectra of Fundamental MK Standards, The Astrophysical Journal, 508, 397-409.",
+      "doi": "10.1086/306402",
+      "url": "https://doi.org/10.1086/306402",
+      "validated_via": "Publisher DOI metadata and institutional article page; H-band MK-standard classification scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Shows how H-band atomic and molecular features, including hydrogen-series diagnostics, can support spectral classification across MK standards. Spyctres uses this as provenance for the optional H-band Brackett diagnostic window in near-IR spectra.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "rayner2009_irtf_cool_stars",
+      "citation": "Rayner, J. T., Cushing, M. C. & Vacca, W. D. (2009), The Infrared Telescope Facility (IRTF) Spectral Library: Cool Stars, The Astrophysical Journal Supplement Series, 185, 289-432.",
+      "doi": "10.1088/0067-0049/185/2/289",
+      "url": "https://doi.org/10.1088/0067-0049/185/2/289",
+      "validated_via": "IRSA IRTF library overview and DOI metadata; wavelength coverage and cool-star classification scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Presents 0.8-5.0 micron spectra of cool stars with well-established MK classifications and preserved continuum shapes. Spyctres uses this as provenance for near-IR cool-star diagnostics, especially molecular TiO/CO windows that help separate late-type spectra from hot-star hydrogen-dominated cases.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "kleinmann_hall1986_kband_atlas",
+      "citation": "Kleinmann, S. G. & Hall, D. N. B. (1986), Spectra of late-type standard stars in the region 2.0-2.5 microns, The Astrophysical Journal Supplement Series, 62, 501.",
+      "doi": "10.1086/191149",
+      "url": "https://doi.org/10.1086/191149",
+      "validated_via": "IRTF-hosted atlas data page and DOI metadata; K-band late-type-star spectral-atlas scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Provides a classic K-band atlas of late-type standard stars covering the CO first-overtone bandhead region. Spyctres uses this as provenance for treating the 2.3 micron CO bandhead as a cool-star molecular diagnostic window.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
       ]
     }
   ]

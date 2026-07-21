@@ -40,6 +40,14 @@ requirements.
    archive/product masks, formal-error handling, wavelength-medium/frame
    metadata, and explicit resolution/LSF provenance. The ordinary readiness
    audit should decide whether a quick classification fit is safe to attempt.
+   The diagnostic-window selector should remain advisory and generic: it should
+   identify useful Balmer, Paschen, Brackett, Ca I/Ca II, Mg/Na, TiO, and CO
+   windows from wavelength coverage and simple data-quality scores, without
+   automatically launching expensive all-combinations fits. Catalog windows are
+   stored in canonical vacuum Angstrom, stellar-rest-frame coordinates and are
+   converted into operational per-segment windows at runtime; provenance should
+   keep score components, risk policies, RV padding, contiguous coverage, and
+   resolution-element estimates visible.
 
 3. **Real-spectrum validation.**
    Expand and maintain validation on real spectra, especially X-SHOOTER/XSL
@@ -65,9 +73,19 @@ requirements.
    `examples/publication_quality_xshooter_uvb.ipynb` provide an audit-first
    workflow with explicit Balmer segments, documented masks, publication
    readiness checks, a Balmer-core mask sensitivity audit grid, atomic JSON
-   checkpoints, and an opt-in baseline PHOENIX fit. The remaining work is to
-   add the fit-level systematic variants, per-line checks, injection/recovery,
-   profile scans, and final uncertainty tables.
+   checkpoints, generic diagnostic-window provenance, optional compact
+   mask-sensitivity CSV/PNG summaries, an explicit core-mask information-loss
+   penalty/recommendation, an opt-in baseline PHOENIX fit, and a separate
+   bounded diagnostic-window comparison scaffold. The comparison
+   scaffold plans trusted-baseline, role-balanced, single-window,
+   leave-one-out, and leave-one-family-out checks without ranking by raw
+   chi-square alone; expensive fits stay opt-in. The remaining work is to add
+   the fit-level systematic variants, per-line checks, common-evaluation
+   residuals for held-out predictive checks, injection/recovery, profile scans,
+   and final uncertainty tables. Before expanding the diagnostic-window catalog
+   substantially, add the planned early-type He/Mg/Si family, CH G-band,
+   cool-dwarf CaH/K I/FeH/VO family, and K-band Na I/Ca I family with explicit
+   model-support and risk policies.
 
 5. **Public API and reporting polish.**
    Keep refining structured result objects, quality reports, plotting, and

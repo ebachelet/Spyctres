@@ -212,6 +212,45 @@ def test_plot_fit_referee_visible_ylim_includes_excluded_line_core():
     ylo, yhi = axes[0, 0].get_ylim()
     assert ylo < float(np.nanmin(flux))
     assert yhi > float(np.nanmax(flux))
+    excluded_model_lines = [
+        line for line in axes[0, 0].lines
+        if line.get_label() == "continuum-adjusted model (excluded pixels)"
+    ]
+    assert len(excluded_model_lines) == 1
+    assert excluded_model_lines[0].get_linestyle() == "--"
+    y_excluded = excluded_model_lines[0].get_ydata()
+    assert np.isfinite(y_excluded[~used]).any()
+    fig.clf()
+
+
+def test_plot_fit_referee_can_hide_model_on_excluded_pixels():
+    wave = np.linspace(4840.0, 4882.0, 121)
+    flux = np.ones_like(wave)
+    model = np.ones_like(wave) * 0.98
+    used = np.abs(wave - 4861.3) > 5.0
+    segment = SpectrumSegment(
+        wave,
+        flux,
+        err=np.full(wave.size, 0.03),
+        mask=used,
+        name="masked_core",
+    )
+    result = PhoenixFitResult(
+        summary={"success": True, "chi2_red": 1.0},
+        models=(model,),
+        continuum_coefficients=(np.array([1.0, 0.0]),),
+        used_masks=(used,),
+        excluded_masks=(~used,),
+    )
+
+    fig, axes = plot_fit_referee(
+        result,
+        segment=segment,
+        show_model_on_excluded=False,
+    )
+
+    labels = [line.get_label() for line in axes[0, 0].lines]
+    assert "continuum-adjusted model (excluded pixels)" not in labels
     fig.clf()
 
 

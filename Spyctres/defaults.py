@@ -13,6 +13,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .diagnostic_windows import (
+    build_diagnostic_window_combinations,
+    select_diagnostic_windows,
+)
 from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
 from .preprocessing import (
     OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
@@ -536,6 +540,19 @@ def suggest_phoenix_fit_defaults(
     summary = _coverage_summary(segments)
     window = _choose_window(summary, mode)
     params = _parameter_defaults(window["label"], mode)
+    diagnostic_spectrum = SpectrumCollection(segments) if len(segments) > 1 else segments[0]
+    rv_padding = max(abs(params["bounds"][0][3]), abs(params["bounds"][1][3]))
+    diagnostic_selection = select_diagnostic_windows(
+        diagnostic_spectrum,
+        rv_kms=params["p0"][3],
+        rv_padding_kms=rv_padding,
+        max_windows=12,
+    )
+    diagnostic_combinations = build_diagnostic_window_combinations(
+        diagnostic_selection,
+        max_windows=6 if mode == "quicklook" else 8,
+        max_single_windows=4 if mode == "quicklook" else 6,
+    )
     telluric_overlaps = _telluric_catalog_overlaps(window["regions"])
     interpretation = _interpretation_policy(
         summary,
@@ -565,6 +582,9 @@ def suggest_phoenix_fit_defaults(
         ),
         "using broad PHOENIX classification bounds rather than the full grid",
         "using native_interp so RV shifting and LSF convolution happen before final resampling",
+        "identified {0} diagnostic feature window(s) from wavelength coverage for optional follow-up checks".format(
+            len(diagnostic_selection["selected"])
+        ),
     ]
     warnings = []
     if "unknown" in summary["wave_media"]:
@@ -622,6 +642,16 @@ def suggest_phoenix_fit_defaults(
         "science_case": science_case,
         "coverage": summary,
         "window": window,
+        "diagnostic_windows": {
+            "selection": diagnostic_selection,
+            "recommended_combinations": diagnostic_combinations,
+            "note": (
+                "Diagnostic windows are scored from wavelength coverage, "
+                "usable pixels, and a cheap contrast proxy. They are intended "
+                "for follow-up sanity checks and are not automatically fitted "
+                "as a blind all-combinations grid."
+            ),
+        },
         "telluric_catalog_policy": {
             "default_action": "warn_only",
             "feature_source": "broad_catalog_regions",

@@ -8,9 +8,9 @@ from Spyctres.io import SpectrumCollection, SpectrumSegment
 
 def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     segment = SpectrumSegment(
-        wave=np.linspace(3000.0, 5600.0, 100),
-        flux=np.ones(100),
-        err=np.full(100, 0.1),
+        wave=np.linspace(3000.0, 5600.0, 1000),
+        flux=np.ones(1000),
+        err=np.full(1000, 0.1),
         wave_medium="vacuum",
         observer_frame="barycentric",
         stellar_rest_status="observed",
@@ -28,6 +28,13 @@ def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     assert suggestion.fit_kwargs["bounds"][1][0] == pytest.approx(10000.0)
     assert not suggestion.warnings
     assert suggestion.provenance["window"]["label"] == "blue_optical_classification"
+    diagnostic_windows = suggestion.provenance["diagnostic_windows"]
+    selected_ids = {
+        item["id"] for item in diagnostic_windows["selection"]["selected"]
+    }
+    assert {"h_beta", "h_gamma", "h_delta"} <= selected_ids
+    assert "co_23um_bandhead" not in selected_ids
+    assert diagnostic_windows["recommended_combinations"]["expensive_fits_run"] is False
     interpretation = suggestion.provenance["interpretation"]
     assert interpretation["intended_use"] == "first_pass_classification"
     assert interpretation["rv_role"] == "candidate_stellar_rv"

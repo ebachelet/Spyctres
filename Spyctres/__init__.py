@@ -29,6 +29,23 @@ from .diagnostics import (
     annotate_nonstellar_features,
     diagnose_known_residual_windows,
 )
+from .diagnostic_windows import (
+    DEFAULT_DIAGNOSTIC_ROLES,
+    DIAGNOSTIC_WINDOW_CATALOG,
+    DiagnosticWindow,
+    build_diagnostic_window_combinations,
+    diagnostic_window_catalog,
+    fit_regions_from_combination,
+    format_diagnostic_window_table,
+    select_diagnostic_windows,
+)
+from .diagnostic_window_comparison import (
+    build_diagnostic_window_comparison_plan,
+    plot_diagnostic_window_comparison,
+    run_diagnostic_window_comparison,
+    write_diagnostic_window_comparison_csv,
+    write_diagnostic_window_comparison_json,
+)
 from .recipes import (
     normalize_segment_sidebands,
     normalize_segments_sidebands,
@@ -91,6 +108,14 @@ __all__ = [
     "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
     "KNOWN_RESIDUAL_WINDOWS", "annotate_nonstellar_features",
     "diagnose_known_residual_windows",
+    "DEFAULT_DIAGNOSTIC_ROLES", "DIAGNOSTIC_WINDOW_CATALOG",
+    "DiagnosticWindow", "build_diagnostic_window_combinations",
+    "diagnostic_window_catalog", "fit_regions_from_combination",
+    "format_diagnostic_window_table", "select_diagnostic_windows",
+    "build_diagnostic_window_comparison_plan",
+    "run_diagnostic_window_comparison", "plot_diagnostic_window_comparison",
+    "write_diagnostic_window_comparison_csv",
+    "write_diagnostic_window_comparison_json",
     "normalize_segment_sidebands", "normalize_segments_sidebands",
     "sdss_quicklook_resolution_assumption",
     "ExclusionMaskSpec", "archive_exclusion_masks",

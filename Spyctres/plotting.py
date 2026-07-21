@@ -841,6 +841,7 @@ def plot_fit_referee(
     xlim_mode="fit",
     flux_ylim_mode="robust",
     show_raw_model=True,
+    show_model_on_excluded=True,
     feature_regions=None,
 ):
     """
@@ -888,6 +889,12 @@ def plot_fit_referee(
         plots this can be visually misleading when the raw template units are
         far from the observed flux scale, so callers may set it False and show
         only the observed flux plus continuum-adjusted model.
+    show_model_on_excluded : bool, optional
+        If True, also draw the continuum-adjusted model over explicitly
+        excluded/shaded pixels as a dashed line. These pixels are not used in
+        the residual or chi-square panels; the dashed style is meant to make
+        that distinction visible while still letting users inspect whether a
+        masked line core or artifact would have been badly mismatched.
     feature_regions : sequence, optional
         Optional non-stellar/diagnostic regions to shade and label. Each item
         may be ``(label, wmin, wmax)``, ``(wmin, wmax)``, or a metadata mapping
@@ -1009,6 +1016,9 @@ def plot_fit_referee(
 
         model_corr_plot = np.full_like(model_corr, np.nan, dtype=float)
         model_corr_plot[used & finite_valid] = model_corr[used & finite_valid]
+        model_corr_excluded_plot = np.full_like(model_corr, np.nan, dtype=float)
+        explicit_excluded = excluded & finite_valid & (~used)
+        model_corr_excluded_plot[explicit_excluded] = model_corr[explicit_excluded]
         model_raw_plot = None
         if model_raw is not None:
             model_raw_plot = np.full_like(model_raw, np.nan, dtype=float)
@@ -1033,6 +1043,16 @@ def plot_fit_referee(
             lw=0.9,
             label="continuum-adjusted model (fitted pixels)",
         )
+        if show_model_on_excluded and np.any(explicit_excluded):
+            ax_flux.plot(
+                wave[sel],
+                model_corr_excluded_plot[sel],
+                color="tab:red",
+                lw=0.85,
+                ls="--",
+                alpha=0.75,
+                label="continuum-adjusted model (excluded pixels)",
+            )
         if continuum is not None:
             finite_cont = np.isfinite(continuum)
             continuum_range = (
@@ -1082,6 +1102,7 @@ def plot_fit_referee(
         if flux_ylim_mode == "visible":
             visible_values = [flux[display_mask]]
             visible_values.append(model_corr_plot[display_mask])
+            visible_values.append(model_corr_excluded_plot[display_mask])
             ylo, yhi = _expand_ylim_to_include(
                 ylo,
                 yhi,
