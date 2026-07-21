@@ -528,6 +528,11 @@ publication scaffold records the retained-pixel fraction and an
 information-loss penalty for each tested core-mask width. This penalty is not
 added to the spectral χ²; it exists to discourage choosing an overly wide mask
 just because discarded Balmer-wing pixels made the apparent fit easier.
+The scaffold also writes a bounded systematic-variant plan covering continuum
+degree, preparation normalization, Balmer-core mask width, resolution
+assumptions, and single-line/leave-one-line-out Balmer window sets. These
+variants are reported for review but are not run by default, keeping the public
+workflow lightweight and avoiding hidden fit grids.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,

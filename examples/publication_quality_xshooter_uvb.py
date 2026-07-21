@@ -170,6 +170,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--output-systematic-plan-csv",
+        default=None,
+        help=(
+            "Optional CSV table listing the planned fit-level systematic "
+            "variants. This is a plan/report only; expensive variant fits are "
+            "not run by default."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="If the output JSON already exists, print its status and exit.",
@@ -303,6 +312,39 @@ def build_parser():
     parser.add_argument("--logg-max", type=float, default=None)
     parser.add_argument("--rv-min", type=float, default=None)
     parser.add_argument("--rv-max", type=float, default=None)
+    parser.add_argument(
+        "--systematic-mdeg-grid",
+        default="1,2,3",
+        help=(
+            "Comma-separated continuum polynomial degrees to include in the "
+            "systematic-variant plan. Default: 1,2,3."
+        ),
+    )
+    parser.add_argument(
+        "--systematic-norm-modes",
+        default="poly,sideband",
+        help=(
+            "Comma-separated preparation normalization modes to include in "
+            "the systematic-variant plan. Allowed: poly,sideband."
+        ),
+    )
+    parser.add_argument(
+        "--systematic-resolution-scales",
+        default="0.9,1.0,1.1",
+        help=(
+            "Comma-separated multiplicative scales around --R for the "
+            "resolution systematic plan. Used only when --R is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--max-systematic-variants",
+        type=int,
+        default=12,
+        help=(
+            "Maximum planned fit-level systematic variants to list. This "
+            "keeps publication scaffolds bounded. Default: 12."
+        ),
+    )
     return parser
 
 
@@ -360,6 +402,84 @@ def _parse_core_mask_grid(value):
             raise ValueError("--core-mask-grid values must be finite and >= 0.")
         widths.append(float(width))
     return list(dict.fromkeys(widths))
+
+
+def _parse_int_grid(value, *, option_name):
+    value = "" if value is None else str(value).strip()
+    if not value:
+        return []
+    out = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parsed = int(item)
+        if parsed < 0:
+            raise ValueError("{0} values must be >= 0.".format(option_name))
+        out.append(parsed)
+    return list(dict.fromkeys(out))
+
+
+def _parse_positive_float_grid(value, *, option_name):
+    value = "" if value is None else str(value).strip()
+    if not value:
+        return []
+    out = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parsed = float(item)
+        if not np.isfinite(parsed) or parsed <= 0.0:
+            raise ValueError("{0} values must be finite and > 0.".format(option_name))
+        out.append(float(parsed))
+    return list(dict.fromkeys(out))
+
+
+def _parse_norm_modes(value):
+    value = "" if value is None else str(value).strip()
+    modes = [item.strip().lower() for item in value.split(",") if item.strip()]
+    allowed = {"poly", "sideband"}
+    bad = [item for item in modes if item not in allowed]
+    if bad:
+        raise ValueError(
+            "--systematic-norm-modes values must be drawn from poly,sideband; "
+            "got {0}.".format(",".join(bad))
+        )
+    return list(dict.fromkeys(modes))
+
+
+def _unique_float_values(values):
+    out = []
+    for value in values:
+        if value is None:
+            continue
+        value = float(value)
+        if not np.isfinite(value):
+            continue
+        if not any(abs(value - existing) <= 1e-9 for existing in out):
+            out.append(value)
+    return out
+
+
+def _safe_id_token(value):
+    text = str(value)
+    replacements = {
+        "α": "alpha",
+        "β": "beta",
+        "γ": "gamma",
+        "δ": "delta",
+        "Å": "A",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    keep = []
+    for char in text.lower():
+        if char.isalnum():
+            keep.append(char)
+        else:
+            keep.append("_")
+    return "_".join(part for part in "".join(keep).split("_") if part)
 
 
 def _single_segment(spectrum):
@@ -468,6 +588,367 @@ def _diagnostic_window_payload(segment):
     }
 
 
+def _systematic_window_variants(case):
+    windows = list(case.provenance.get("balmer_windows", ()))
+    labels = [str(item[0]) for item in windows]
+    variants = [
+        {
+            "window_set": "joint_balmer",
+            "window_labels": labels,
+            "rationale": (
+                "Baseline joint fit keeps all selected Balmer wings in one "
+                "likelihood, which is the preferred first publication check."
+            ),
+        }
+    ]
+    for label in labels:
+        variants.append(
+            {
+                "window_set": "single_{0}".format(_safe_id_token(label)),
+                "window_labels": [label],
+                "rationale": (
+                    "Single-line fit for line-specific model, mask, or "
+                    "continuum failures; compare against the joint Balmer fit."
+                ),
+            }
+        )
+    for label in labels:
+        retained = [item for item in labels if item != label]
+        if retained:
+            variants.append(
+                {
+                    "window_set": "leave_out_{0}".format(_safe_id_token(label)),
+                    "window_labels": retained,
+                    "rationale": (
+                        "Leave-one-line-out stability check; large parameter "
+                        "shifts identify a line that should be inspected "
+                        "before publication use."
+                    ),
+                }
+            )
+    return variants
+
+
+def _variant_record(
+    *,
+    variant_id,
+    category,
+    label,
+    baseline_args,
+    preparation_overrides=None,
+    fit_overrides=None,
+    window_labels=None,
+    rationale,
+    executable=True,
+    skip_reasons=None,
+):
+    preparation_overrides = dict(preparation_overrides or {})
+    fit_overrides = dict(fit_overrides or {})
+    skip_reasons = list(skip_reasons or ())
+    if not executable and not skip_reasons:
+        skip_reasons = ["not_executable_without_additional_validation"]
+    return {
+        "id": variant_id,
+        "category": category,
+        "label": label,
+        "status": "planned_not_run" if executable else "not_planned_for_execution",
+        "requires_phoenix": bool(executable),
+        "run_by_default": False,
+        "executable_now": bool(executable),
+        "skip_reasons": skip_reasons,
+        "baseline_context": {
+            "norm_mode": baseline_args["norm_mode"],
+            "mdeg": int(baseline_args["mdeg"]),
+            "balmer_core_mask_A": baseline_args["balmer_core_mask_A"],
+            "resolution_R": baseline_args["resolution_R"],
+            "window_set": "joint_balmer",
+        },
+        "preparation_overrides": preparation_overrides,
+        "fit_overrides": fit_overrides,
+        "window_labels": list(window_labels or ()),
+        "rationale": rationale,
+        "interpretation": (
+            "Run only after the baseline fit is understood. Compare parameter "
+            "shifts, residual flags, and common-window diagnostics; do not "
+            "treat lower chi-square alone as proof that the variant is better."
+        ),
+    }
+
+
+def _build_systematic_variant_plan(args, case, *, core_mask_recommendation=None):
+    """Return a bounded, auditable fit-systematics plan.
+
+    This is intentionally a plan by default, not another hidden expensive fit
+    loop.  The listed variants are the first checks a reviewer would expect
+    before publication-style parameter claims: continuum degree, preparation
+    normalization, core-mask choice, resolution assumption, and line-window
+    sensitivity.
+    """
+    max_variants = int(args.max_systematic_variants)
+    if max_variants < 1:
+        raise ValueError("--max-systematic-variants must be >= 1.")
+
+    mdeg_values = _parse_int_grid(
+        args.systematic_mdeg_grid,
+        option_name="--systematic-mdeg-grid",
+    )
+    norm_modes = _parse_norm_modes(args.systematic_norm_modes)
+    resolution_scales = _parse_positive_float_grid(
+        args.systematic_resolution_scales,
+        option_name="--systematic-resolution-scales",
+    )
+
+    recommended_core = None
+    if isinstance(core_mask_recommendation, dict):
+        recommended_core = core_mask_recommendation.get(
+            "recommended_core_mask_halfwidth_A"
+        )
+    core_values = _unique_float_values(
+        [
+            float(args.balmer_core_mask),
+            recommended_core,
+            0.0,
+        ]
+    )
+
+    baseline = {
+        "norm_mode": str(args.norm_mode),
+        "mdeg": int(args.mdeg),
+        "balmer_core_mask_A": float(args.balmer_core_mask),
+        "resolution_R": None if args.resolution_R is None else float(args.resolution_R),
+    }
+
+    variants = [
+        _variant_record(
+            variant_id="baseline",
+            category="baseline",
+            label="Current baseline configuration",
+            baseline_args=baseline,
+            preparation_overrides={
+                "norm_mode": baseline["norm_mode"],
+                "balmer_core_mask_A": baseline["balmer_core_mask_A"],
+            },
+            fit_overrides={
+                "mdeg": baseline["mdeg"],
+                "resolution_R": baseline["resolution_R"],
+            },
+            window_labels=[item[0] for item in case.provenance.get("balmer_windows", ())],
+            rationale=(
+                "Reference point for all systematic comparisons. This is the "
+                "configuration used by --run-baseline-fit."
+            ),
+        )
+    ]
+
+    for mdeg in mdeg_values:
+        if int(mdeg) == baseline["mdeg"]:
+            continue
+        variants.append(
+            _variant_record(
+                variant_id="continuum_mdeg_{0}".format(mdeg),
+                category="continuum_degree",
+                label="Continuum degree mdeg={0}".format(mdeg),
+                baseline_args=baseline,
+                fit_overrides={"mdeg": int(mdeg)},
+                window_labels=[
+                    item[0] for item in case.provenance.get("balmer_windows", ())
+                ],
+                rationale=(
+                    "Tests whether the stellar parameters are being driven by "
+                    "the multiplicative continuum flexibility rather than "
+                    "line physics."
+                ),
+            )
+        )
+
+    for mode in norm_modes:
+        if mode == baseline["norm_mode"]:
+            continue
+        variants.append(
+            _variant_record(
+                variant_id="normalization_{0}".format(mode),
+                category="preprocessing_normalization",
+                label="Preparation normalization: {0}".format(mode),
+                baseline_args=baseline,
+                preparation_overrides={"norm_mode": mode},
+                window_labels=[
+                    item[0] for item in case.provenance.get("balmer_windows", ())
+                ],
+                rationale=(
+                    "Checks sensitivity to leaving continuum structure for "
+                    "the global multiplicative polynomial versus applying "
+                    "explicit local sideband normalization first."
+                ),
+            )
+        )
+
+    for width in core_values:
+        if abs(width - baseline["balmer_core_mask_A"]) <= 1e-9:
+            continue
+        variants.append(
+            _variant_record(
+                variant_id="balmer_core_mask_{0:g}A".format(width),
+                category="balmer_core_mask",
+                label="Balmer-core mask half-width {0:g} A".format(width),
+                baseline_args=baseline,
+                preparation_overrides={"balmer_core_mask_A": float(width)},
+                window_labels=[
+                    item[0] for item in case.provenance.get("balmer_windows", ())
+                ],
+                rationale=(
+                    "Checks whether the inferred parameters are sensitive to "
+                    "how aggressively NLTE/model-sensitive Balmer cores are "
+                    "excluded while preserving wing information."
+                ),
+            )
+        )
+
+    if args.resolution_R is None:
+        variants.append(
+            _variant_record(
+                variant_id="resolution_scale_unavailable",
+                category="resolution_assumption",
+                label="Resolution/LSF variants unavailable",
+                baseline_args=baseline,
+                rationale=(
+                    "Resolution systematics require an explicit baseline --R "
+                    "or validated segment LSF metadata. The reader must not "
+                    "invent publication-quality resolution assumptions."
+                ),
+                executable=False,
+                skip_reasons=["missing_explicit_or_validated_resolution"],
+            )
+        )
+    else:
+        R0 = float(args.resolution_R)
+        for scale in resolution_scales:
+            if abs(float(scale) - 1.0) <= 1e-9:
+                continue
+            variants.append(
+                _variant_record(
+                    variant_id="resolution_scale_{0:g}".format(scale),
+                    category="resolution_assumption",
+                    label="Resolution R={0:g} ({1:g}x baseline)".format(
+                        R0 * float(scale),
+                        float(scale),
+                    ),
+                    baseline_args=baseline,
+                    fit_overrides={"resolution_R": float(R0 * float(scale))},
+                    window_labels=[
+                        item[0] for item in case.provenance.get("balmer_windows", ())
+                    ],
+                    rationale=(
+                        "Tests sensitivity to the assumed constant resolving "
+                        "power. This is a bounded approximation, not "
+                        "wavelength-dependent LSF modelling."
+                    ),
+                )
+            )
+
+    for window_variant in _systematic_window_variants(case):
+        if window_variant["window_set"] == "joint_balmer":
+            continue
+        variants.append(
+            _variant_record(
+                variant_id="window_set_{0}".format(window_variant["window_set"]),
+                category="fit_windows",
+                label="Window set: {0}".format(window_variant["window_set"]),
+                baseline_args=baseline,
+                preparation_overrides={"window_set": window_variant["window_set"]},
+                window_labels=window_variant["window_labels"],
+                rationale=window_variant["rationale"],
+            )
+        )
+
+    truncated = len(variants) > max_variants
+    variants = variants[:max_variants]
+    return {
+        "schema_version": 1,
+        "status": "planned",
+        "default_execution": "not_run",
+        "max_variants": int(max_variants),
+        "truncated": bool(truncated),
+        "variant_policy": {
+            "purpose": (
+                "Bounded fit-level systematic plan for publication-oriented "
+                "work. It records what should be varied before treating "
+                "stellar parameters as defensible."
+            ),
+            "not_raw_chi2_ranked": True,
+            "expensive_fits_are_opt_in": True,
+            "compare_using": [
+                "parameter_shifts",
+                "quality_flags",
+                "referee_plots",
+                "held_out_residuals",
+                "common_window_residuals",
+            ],
+        },
+        "dimensions": {
+            "continuum_degrees": mdeg_values,
+            "preparation_norm_modes": norm_modes,
+            "core_mask_halfwidths_A": core_values,
+            "resolution_scales": (
+                [] if args.resolution_R is None else resolution_scales
+            ),
+            "window_sets": _systematic_window_variants(case),
+        },
+        "baseline": baseline,
+        "variants": variants,
+        "questions_before_execution": [
+            "Is the assumed constant R validated for this spectrum and slit/setup?",
+            "Should sideband normalization be trusted for this target's continuum shape?",
+            "Do individual Balmer lines show artifacts, emission, DIB/telluric overlap, or NLTE-sensitive cores?",
+            "Which parameter shift threshold should trigger manual review for this observing program?",
+        ],
+    }
+
+
+def _write_systematic_variant_plan_csv(path, plan):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "id",
+        "category",
+        "label",
+        "status",
+        "executable_now",
+        "run_by_default",
+        "window_labels",
+        "preparation_overrides",
+        "fit_overrides",
+        "skip_reasons",
+        "rationale",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in plan.get("variants", ()):
+            writer.writerow(
+                {
+                    "id": row.get("id"),
+                    "category": row.get("category"),
+                    "label": row.get("label"),
+                    "status": row.get("status"),
+                    "executable_now": row.get("executable_now"),
+                    "run_by_default": row.get("run_by_default"),
+                    "window_labels": ";".join(row.get("window_labels", ())),
+                    "preparation_overrides": json.dumps(
+                        row.get("preparation_overrides") or {},
+                        sort_keys=True,
+                    ),
+                    "fit_overrides": json.dumps(
+                        row.get("fit_overrides") or {},
+                        sort_keys=True,
+                    ),
+                    "skip_reasons": ";".join(row.get("skip_reasons", ())),
+                    "rationale": row.get("rationale"),
+                }
+            )
+
+
 def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks):
     generic_windows = _diagnostic_window_payload(segment)
     return {
@@ -522,6 +1003,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         "publication_readiness": None,
         "core_mask_sensitivity": None,
         "core_mask_sensitivity_recommendation": None,
+        "systematic_variant_plan": _build_systematic_variant_plan(args, case),
         "baseline_fit": None,
     }
 
@@ -1043,6 +1525,11 @@ def main(argv=None):
     payload["core_mask_sensitivity_recommendation"] = core_mask_result[
         "recommendation"
     ]
+    payload["systematic_variant_plan"] = _build_systematic_variant_plan(
+        args,
+        case,
+        core_mask_recommendation=payload["core_mask_sensitivity_recommendation"],
+    )
     _write_core_mask_comparison_csv(
         args.output_comparison_csv,
         payload["core_mask_sensitivity"],
@@ -1050,6 +1537,10 @@ def main(argv=None):
     _write_core_mask_comparison_plot(
         args.output_comparison_plot,
         payload["core_mask_sensitivity"],
+    )
+    _write_systematic_variant_plan_csv(
+        args.output_systematic_plan_csv,
+        payload["systematic_variant_plan"],
     )
     _atomic_write_json(output_path, payload)
 

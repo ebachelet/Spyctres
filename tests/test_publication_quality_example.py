@@ -10,6 +10,7 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     comparison_csv = tmp_path / "core_mask_summary.csv"
     comparison_plot = tmp_path / "core_mask_summary.png"
     window_csv = tmp_path / "diagnostic_windows.csv"
+    systematic_csv = tmp_path / "systematic_plan.csv"
     cmd = [
         sys.executable,
         "examples/publication_quality_xshooter_uvb.py",
@@ -21,6 +22,8 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
         str(comparison_plot),
         "--output-diagnostic-window-csv",
         str(window_csv),
+        "--output-systematic-plan-csv",
+        str(systematic_csv),
         "--force",
     ]
 
@@ -62,6 +65,25 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert recommendation["status"] == "evaluated"
     assert recommendation["recommended_core_mask_halfwidth_A"] is not None
     assert all(item["fit"] is None for item in sensitivity)
+    plan = payload["systematic_variant_plan"]
+    assert plan["status"] == "planned"
+    assert plan["variant_policy"]["expensive_fits_are_opt_in"] is True
+    variant_categories = {item["category"] for item in plan["variants"]}
+    assert {
+        "baseline",
+        "continuum_degree",
+        "preprocessing_normalization",
+        "balmer_core_mask",
+        "resolution_assumption",
+        "fit_windows",
+    } <= variant_categories
+    assert any(
+        item["id"] == "resolution_scale_unavailable"
+        and "missing_explicit_or_validated_resolution" in item["skip_reasons"]
+        for item in plan["variants"]
+    )
+    assert any(item["id"].startswith("window_set_single_") for item in plan["variants"])
     assert comparison_csv.exists()
     assert comparison_plot.exists()
     assert window_csv.exists()
+    assert systematic_csv.exists()

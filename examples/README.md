@@ -383,6 +383,13 @@ because it has discarded useful Balmer-wing pixels. The reported recommendation
 prefers the smallest nonzero mask that is not flagged excessive under
 `--min-core-mask-retained-fraction`.
 
+The same JSON also includes a bounded fit-level systematic-variant plan. This
+plan lists the first variants to run after the baseline is understood:
+continuum polynomial degree, preparation normalization mode, Balmer-core mask
+choice, resolution assumptions, and single-line/leave-one-line-out Balmer
+window sets. It is deliberately not executed by default, so the example remains
+cheap and does not launch a hidden grid of PHOENIX fits.
+
 To save compact review artifacts for the mask grid and generic feature-window
 selection:
 
@@ -391,7 +398,8 @@ python examples/publication_quality_xshooter_uvb.py \
   --output-json /tmp/spyctres_publication_xshooter_uvb.json \
   --output-comparison-csv /tmp/spyctres_core_mask_summary.csv \
   --output-comparison-plot /tmp/spyctres_core_mask_summary.png \
-  --output-diagnostic-window-csv /tmp/spyctres_diagnostic_windows.csv
+  --output-diagnostic-window-csv /tmp/spyctres_diagnostic_windows.csv \
+  --output-systematic-plan-csv /tmp/spyctres_systematic_plan.csv
 ```
 
 After PHOENIX is configured, opt in to the baseline fit:
@@ -407,7 +415,9 @@ This remains a scaffold rather than a final publication pipeline. The saved
 JSON lists the follow-up checks still required before publication claims:
 per-line and joint Balmer comparisons, leave-one-line-out tests, continuum and
 mask variants, resolution/LSF variants, synthetic injection/recovery, and final
-uncertainty accounting. The paired
+uncertainty accounting. The first four categories are now represented in the
+saved systematic-variant plan; injection/recovery and final uncertainty tables
+remain later steps. The paired
 `publication_quality_xshooter_uvb.ipynb` notebook is a no-output notebook that
 drives the same script with `RUN_BASELINE_FIT = False` by default.
 
