@@ -388,7 +388,10 @@ plan lists the first variants to run after the baseline is understood:
 continuum polynomial degree, preparation normalization mode, Balmer-core mask
 choice, resolution assumptions, and single-line/leave-one-line-out Balmer
 window sets. It is deliberately not executed by default, so the example remains
-cheap and does not launch a hidden grid of PHOENIX fits.
+cheap and does not launch a hidden grid of PHOENIX fits. Once the baseline has
+been inspected, add `--run-systematic-variants` to execute a small priority
+subset with atomic JSON checkpoints after each variant; use
+`--systematic-variant-ids` for explicit reviewer-requested variants.
 
 The scaffold also writes cheap per-line Balmer diagnostics into the JSON:
 sideband coverage, line-depth and equivalent-width proxies, masked-core
@@ -423,13 +426,26 @@ python examples/publication_quality_xshooter_uvb.py \
   --output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv
 ```
 
+To run a bounded subset of the saved systematic plan after a successful
+baseline fit:
+
+```bash
+python examples/publication_quality_xshooter_uvb.py \
+  --run-baseline-fit \
+  --run-systematic-variants \
+  --max-systematic-run-variants 2 \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-systematic-results-csv /tmp/spyctres_systematic_results.csv
+```
+
 This remains a scaffold rather than a final publication pipeline. The saved
 JSON lists the follow-up checks still required before publication claims:
 per-line and joint Balmer comparisons, leave-one-line-out tests, continuum and
 mask variants, resolution/LSF variants, synthetic injection/recovery, and final
 uncertainty accounting. The first four categories are now represented in the
-saved systematic-variant plan, and the baseline fit produces per-line residual
-summaries; injection/recovery and final uncertainty tables remain later steps. The paired
+saved systematic-variant plan, selected variants can be executed explicitly,
+and the baseline fit produces per-line residual summaries; injection/recovery
+and final uncertainty tables remain later steps. The paired
 `publication_quality_xshooter_uvb.ipynb` notebook is a no-output notebook that
 drives the same script with `RUN_BASELINE_FIT = False` by default.
 

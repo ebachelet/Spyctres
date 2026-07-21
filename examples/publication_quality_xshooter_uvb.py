@@ -27,6 +27,15 @@ python examples/publication_quality_xshooter_uvb.py \
   --run-baseline-fit \
   --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
   --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png
+
+Optional bounded systematic-variant run
+---------------------------------------
+python examples/publication_quality_xshooter_uvb.py \
+  --run-baseline-fit \
+  --run-systematic-variants \
+  --max-systematic-run-variants 2 \
+  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-systematic-results-csv /tmp/spyctres_systematic_results.csv
 """
 
 from __future__ import annotations
@@ -126,7 +135,12 @@ def build_parser():
             "--run-baseline-fit "
             "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
             "--output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png "
-            "--output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv"
+            "--output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv\n\n"
+            "  python examples/publication_quality_xshooter_uvb.py "
+            "--run-baseline-fit --run-systematic-variants "
+            "--max-systematic-run-variants 2 "
+            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
+            "--output-systematic-results-csv /tmp/spyctres_systematic_results.csv"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -190,6 +204,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--output-systematic-results-csv",
+        default=None,
+        help=(
+            "Optional CSV table summarizing executed fit-level systematic "
+            "variants. Requires --run-systematic-variants."
+        ),
+    )
+    parser.add_argument(
         "--output-balmer-line-csv",
         default=None,
         help=(
@@ -223,6 +245,15 @@ def build_parser():
         help=(
             "Run a baseline native-grid PHOENIX fit on the Balmer-window "
             "segments. Default: False, so the scaffold can run without PHOENIX."
+        ),
+    )
+    parser.add_argument(
+        "--run-systematic-variants",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "After a successful --run-baseline-fit, execute a bounded subset "
+            "of the planned systematic variants. Default: false."
         ),
     )
     parser.add_argument(
@@ -371,6 +402,33 @@ def build_parser():
         help=(
             "Maximum planned fit-level systematic variants to list. This "
             "keeps publication scaffolds bounded. Default: 12."
+        ),
+    )
+    parser.add_argument(
+        "--systematic-variant-ids",
+        default=None,
+        help=(
+            "Comma-separated variant IDs to execute when "
+            "--run-systematic-variants is set. Default: choose a small "
+            "priority subset from the plan."
+        ),
+    )
+    parser.add_argument(
+        "--max-systematic-run-variants",
+        type=int,
+        default=4,
+        help=(
+            "Maximum number of systematic variants to execute in one run when "
+            "--systematic-variant-ids is not supplied. Default: 4."
+        ),
+    )
+    parser.add_argument(
+        "--skip-existing-systematic-variants",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Skip already completed systematic variants in the current JSON "
+            "checkpoint. Default: true."
         ),
     )
     return parser
@@ -1720,6 +1778,461 @@ def _write_systematic_variant_plan_csv(path, plan):
             )
 
 
+def _parse_id_list(value):
+    value = "" if value is None else str(value).strip()
+    if not value:
+        return []
+    return list(
+        dict.fromkeys(item.strip() for item in value.split(",") if item.strip())
+    )
+
+
+def _variant_priority_key(variant):
+    """Return a stable priority for default bounded systematic execution.
+
+    The default execution set is intentionally small.  It first tests one
+    preprocessing/continuum choice, then core-mask sensitivity, then the most
+    informative single-line Balmer checks.  Resolution variants enter the
+    default queue only when the user supplied a baseline ``--R``.
+    """
+    variant_id = str(variant.get("id", ""))
+    category = str(variant.get("category", ""))
+    category_priority = {
+        "preprocessing_normalization": 0,
+        "balmer_core_mask": 1,
+        "continuum_degree": 2,
+        "resolution_assumption": 3,
+        "fit_windows": 4,
+    }.get(category, 99)
+    id_priority = {
+        "normalization_sideband": 0,
+        "balmer_core_mask_4A": 0,
+        "continuum_mdeg_1": 0,
+        "continuum_mdeg_3": 1,
+        "resolution_scale_0.9": 0,
+        "resolution_scale_1.1": 1,
+        "window_set_single_hgamma": 0,
+        "window_set_single_hbeta": 1,
+        "window_set_single_hdelta": 2,
+    }.get(variant_id, 20)
+    if variant_id.startswith("window_set_single_"):
+        id_priority = min(id_priority, 10)
+    elif variant_id.startswith("window_set_leave_out_"):
+        id_priority = min(id_priority, 15)
+    return (category_priority, id_priority, variant_id)
+
+
+def _selected_systematic_variants(plan, args):
+    variants = list(plan.get("variants", ()))
+    by_id = {str(item.get("id")): item for item in variants}
+    requested_ids = _parse_id_list(args.systematic_variant_ids)
+    if requested_ids:
+        missing = [variant_id for variant_id in requested_ids if variant_id not in by_id]
+        if missing:
+            raise ValueError(
+                "--systematic-variant-ids contains unknown IDs: {0}. "
+                "Check --output-systematic-plan-csv or the JSON plan first.".format(
+                    ", ".join(missing)
+                )
+            )
+        return [by_id[variant_id] for variant_id in requested_ids]
+
+    max_variants = int(args.max_systematic_run_variants)
+    if max_variants < 1:
+        raise ValueError("--max-systematic-run-variants must be >= 1.")
+    candidates = [
+        item
+        for item in variants
+        if item.get("id") != "baseline" and bool(item.get("executable_now"))
+    ]
+    candidates.sort(key=_variant_priority_key)
+    return candidates[:max_variants]
+
+
+def _namespace_with_overrides(args, variant):
+    data = vars(args).copy()
+    preparation = dict(variant.get("preparation_overrides") or {})
+    fit = dict(variant.get("fit_overrides") or {})
+    if "norm_mode" in preparation:
+        data["norm_mode"] = preparation["norm_mode"]
+    if "balmer_core_mask_A" in preparation:
+        data["balmer_core_mask"] = preparation["balmer_core_mask_A"]
+    if "mdeg" in fit:
+        data["mdeg"] = fit["mdeg"]
+    if "resolution_R" in fit:
+        data["resolution_R"] = fit["resolution_R"]
+    return argparse.Namespace(**data)
+
+
+def _segment_label(segment):
+    return str(segment.meta.get("line_label", segment.name))
+
+
+def _filter_collection_by_labels(collection, exclude_masks, labels):
+    labels = [str(label) for label in labels or ()]
+    if not labels:
+        return collection, tuple(exclude_masks)
+    wanted = set(labels)
+    selected = [
+        (index, segment)
+        for index, segment in enumerate(collection.segments)
+        if _segment_label(segment) in wanted
+    ]
+    if not selected:
+        raise ValueError(
+            "Systematic window variant requested labels with no matching "
+            "segments: {0}".format(", ".join(labels))
+        )
+    label_order = {label: index for index, label in enumerate(labels)}
+    selected.sort(
+        key=lambda item: label_order.get(_segment_label(item[1]), 10**6)
+    )
+    indices = [index for index, _segment in selected]
+    segments = [segment for _index, segment in selected]
+    weights = np.asarray(collection.weights, dtype=float)[indices]
+    collection_i = collection.copy(
+        segments=segments,
+        weights=weights,
+        meta={
+            **dict(collection.meta),
+            "systematic_window_subset_labels": labels,
+        },
+        name="{0}_{1}".format(
+            collection.name or "xshooter_uvb_publication_balmer_windows",
+            "_".join(_safe_id_token(label) for label in labels),
+        ),
+    )
+    return collection_i, tuple(exclude_masks)
+
+
+def _prepare_systematic_variant_inputs(args, source_segment, variant):
+    variant_args = _namespace_with_overrides(args, variant)
+    core_mask = float(variant_args.balmer_core_mask)
+    _case_i, collection_i, exclude_masks_i = _prepare_balmer_collection(
+        variant_args,
+        source_segment,
+        core_mask_halfwidth=core_mask,
+    )
+    return (variant_args,) + _filter_collection_by_labels(
+        collection_i,
+        exclude_masks_i,
+        variant.get("window_labels"),
+    )
+
+
+def _fit_summary_for_systematic_record(fit_payload):
+    if not isinstance(fit_payload, dict):
+        return {
+            "success": None,
+            "teff": None,
+            "feh": None,
+            "logg": None,
+            "rv_kms": None,
+            "chi2_red": None,
+            "quality_flags": [],
+        }
+    return {
+        "success": fit_payload.get("success"),
+        "teff": _finite_or_none(fit_payload.get("teff")),
+        "feh": _finite_or_none(fit_payload.get("feh")),
+        "logg": _finite_or_none(fit_payload.get("logg")),
+        "rv_kms": _finite_or_none(fit_payload.get("rv_kms")),
+        "chi2_red": _finite_or_none(fit_payload.get("chi2_red")),
+        "quality_flags": list(fit_payload.get("quality_flags") or ()),
+    }
+
+
+def _parameter_spread(records):
+    summary = {}
+    for key in ("teff", "feh", "logg", "rv_kms", "chi2_red"):
+        values = [
+            _finite_or_none((record.get("fit_summary") or {}).get(key))
+            for record in records
+            if record.get("status") == "ok"
+        ]
+        values = [value for value in values if value is not None]
+        if values:
+            arr = np.asarray(values, dtype=float)
+            summary[key] = {
+                "n": int(arr.size),
+                "min": float(np.nanmin(arr)),
+                "max": float(np.nanmax(arr)),
+                "range": float(np.nanmax(arr) - np.nanmin(arr)),
+                "std": float(np.nanstd(arr)),
+            }
+        else:
+            summary[key] = {
+                "n": 0,
+                "min": None,
+                "max": None,
+                "range": None,
+                "std": None,
+            }
+    return summary
+
+
+def _systematic_results_summary(records, *, requested_ids):
+    counts = {}
+    for record in records:
+        status = str(record.get("status", "unknown"))
+        counts[status] = counts.get(status, 0) + 1
+    if not records:
+        status = "no_variants_selected"
+    elif counts.get("error"):
+        status = "completed_with_errors"
+    elif counts.get("fit_failed"):
+        status = "completed_with_fit_failures"
+    elif counts.get("ok"):
+        status = "completed"
+    else:
+        status = "completed_no_successful_fits"
+    flags = sorted(
+        {
+            flag
+            for record in records
+            for flag in (record.get("fit_summary") or {}).get("quality_flags", ())
+        }
+    )
+    return {
+        "schema_version": 1,
+        "status": status,
+        "n_requested": int(len(requested_ids)),
+        "n_records": int(len(records)),
+        "status_counts": counts,
+        "parameter_spread_ok_variants": _parameter_spread(records),
+        "quality_flags_seen": flags,
+        "interpretation": (
+            "Fit-level systematic variants are sensitivity checks. Compare "
+            "parameter shifts, per-line residual diagnostics, and quality "
+            "flags; do not rank configurations by in-fit chi-square alone."
+        ),
+    }
+
+
+def _run_one_systematic_variant(
+    args,
+    source_segment,
+    variant,
+    *,
+    fit_runner=None,
+):
+    if fit_runner is None:
+        fit_runner = _run_baseline_fit
+    started = time.monotonic()
+    variant_id = str(variant.get("id"))
+    if variant_id == "baseline":
+        return {
+            "variant_id": variant_id,
+            "category": variant.get("category"),
+            "status": "skipped",
+            "skip_reasons": ["baseline_fit_recorded_separately"],
+            "elapsed_s": 0.0,
+        }
+    if not bool(variant.get("executable_now")):
+        return {
+            "variant_id": variant_id,
+            "category": variant.get("category"),
+            "status": "skipped",
+            "skip_reasons": list(variant.get("skip_reasons") or ()),
+            "elapsed_s": 0.0,
+        }
+
+    try:
+        variant_args, collection_i, exclude_masks_i = _prepare_systematic_variant_inputs(
+            args,
+            source_segment,
+            variant,
+        )
+        ordinary_i, publication_i = _run_readiness(
+            variant_args,
+            collection_i,
+            exclude_masks_i,
+        )
+        fit_payload, fit_result = fit_runner(
+            variant_args,
+            collection_i,
+            exclude_masks_i,
+            output_plot=None,
+            return_result=True,
+            fit_label="systematic {0}".format(variant_id),
+        )
+        residuals = _balmer_model_residual_diagnostics(
+            collection_i,
+            fit_result,
+            core_mask_halfwidth=float(variant_args.balmer_core_mask),
+        )
+        fit_summary = _fit_summary_for_systematic_record(fit_payload)
+        status = "ok" if fit_summary.get("success") else "fit_failed"
+        return {
+            "variant_id": variant_id,
+            "category": variant.get("category"),
+            "label": variant.get("label"),
+            "status": status,
+            "elapsed_s": float(time.monotonic() - started),
+            "preparation_overrides": dict(variant.get("preparation_overrides") or {}),
+            "fit_overrides": dict(variant.get("fit_overrides") or {}),
+            "window_labels": list(variant.get("window_labels") or ()),
+            "ordinary_readiness": ordinary_i,
+            "publication_readiness": publication_i,
+            "fit_summary": fit_summary,
+            "fit": fit_payload,
+            "line_residual_diagnostics": residuals,
+        }
+    except Exception as exc:  # pragma: no cover - defensive checkpoint path.
+        return {
+            "variant_id": variant_id,
+            "category": variant.get("category"),
+            "label": variant.get("label"),
+            "status": "error",
+            "error": "{0}: {1}".format(type(exc).__name__, exc),
+            "elapsed_s": float(time.monotonic() - started),
+            "preparation_overrides": dict(variant.get("preparation_overrides") or {}),
+            "fit_overrides": dict(variant.get("fit_overrides") or {}),
+            "window_labels": list(variant.get("window_labels") or ()),
+        }
+
+
+def _write_systematic_variant_results_csv(path, results):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "variant_id",
+        "category",
+        "status",
+        "success",
+        "teff",
+        "feh",
+        "logg",
+        "rv_kms",
+        "chi2_red",
+        "n_residual_lines",
+        "residual_quality_flags",
+        "quality_flags",
+        "elapsed_s",
+        "error",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for record in results.get("records", ()):
+            fit_summary = record.get("fit_summary") or {}
+            residuals = record.get("line_residual_diagnostics") or {}
+            residual_summary = residuals.get("summary") or {}
+            writer.writerow(
+                {
+                    "variant_id": record.get("variant_id"),
+                    "category": record.get("category"),
+                    "status": record.get("status"),
+                    "success": fit_summary.get("success"),
+                    "teff": fit_summary.get("teff"),
+                    "feh": fit_summary.get("feh"),
+                    "logg": fit_summary.get("logg"),
+                    "rv_kms": fit_summary.get("rv_kms"),
+                    "chi2_red": fit_summary.get("chi2_red"),
+                    "n_residual_lines": residual_summary.get("n_evaluated_lines"),
+                    "residual_quality_flags": ";".join(
+                        residual_summary.get("quality_flags") or ()
+                    ),
+                    "quality_flags": ";".join(fit_summary.get("quality_flags") or ()),
+                    "elapsed_s": record.get("elapsed_s"),
+                    "error": record.get("error"),
+                }
+            )
+
+
+def _skipped_systematic_results(status, reason):
+    return {
+        "schema_version": 1,
+        "status": status,
+        "reason": reason,
+        "n_requested": 0,
+        "n_records": 0,
+        "status_counts": {},
+        "requested_variant_ids": [],
+        "parameter_spread_ok_variants": _parameter_spread([]),
+        "quality_flags_seen": [],
+        "records": [],
+    }
+
+
+def _run_selected_systematic_variants(
+    args,
+    source_segment,
+    plan,
+    output_path,
+    payload,
+    *,
+    fit_runner=None,
+):
+    if fit_runner is None:
+        fit_runner = _run_baseline_fit
+    selected = _selected_systematic_variants(plan, args)
+    requested_ids = [str(item.get("id")) for item in selected]
+    existing_results = payload.get("systematic_variant_results") or {}
+    records = list(existing_results.get("records") or [])
+    completed_ids = {
+        str(record.get("variant_id"))
+        for record in records
+        if record.get("status") in {"ok", "fit_failed", "skipped"}
+    }
+
+    for index, variant in enumerate(selected, start=1):
+        variant_id = str(variant.get("id"))
+        if args.skip_existing_systematic_variants and variant_id in completed_ids:
+            print(
+                "Skipping completed systematic variant {0}/{1}: {2}".format(
+                    index,
+                    len(selected),
+                    variant_id,
+                ),
+                flush=True,
+            )
+            continue
+        print(
+            "Running systematic variant {0}/{1}: {2}".format(
+                index,
+                len(selected),
+                variant_id,
+            ),
+            flush=True,
+        )
+        record = _run_one_systematic_variant(
+            args,
+            source_segment,
+            variant,
+            fit_runner=fit_runner,
+        )
+        records = [
+            old
+            for old in records
+            if str(old.get("variant_id")) != variant_id
+        ]
+        records.append(record)
+        payload["systematic_variant_results"] = {
+            **_systematic_results_summary(records, requested_ids=requested_ids),
+            "requested_variant_ids": requested_ids,
+            "records": records,
+        }
+        _atomic_write_json(output_path, payload)
+        print(
+            "Systematic variant {0}: status={1}".format(
+                variant_id,
+                record.get("status"),
+            ),
+            flush=True,
+        )
+
+    results = {
+        **_systematic_results_summary(records, requested_ids=requested_ids),
+        "requested_variant_ids": requested_ids,
+        "records": records,
+    }
+    payload["systematic_variant_results"] = results
+    return results
+
+
 def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks):
     generic_windows = _diagnostic_window_payload(segment)
     return {
@@ -1780,6 +2293,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         "core_mask_sensitivity": None,
         "core_mask_sensitivity_recommendation": None,
         "systematic_variant_plan": _build_systematic_variant_plan(args, case),
+        "systematic_variant_results": None,
         "baseline_fit": None,
         "baseline_line_residual_diagnostics": None,
     }
@@ -2036,9 +2550,10 @@ def _run_baseline_fit(
     *,
     output_plot=None,
     return_result=False,
+    fit_label="baseline",
 ):
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, collection, exclude_masks)
-    print("Running baseline native-grid PHOENIX fit...", flush=True)
+    print("Running {0} native-grid PHOENIX fit...".format(fit_label), flush=True)
     result = fit_stellar_spectrum(
         collection,
         model="phoenix",
@@ -2366,7 +2881,46 @@ def main(argv=None):
             for key in ("success", "teff", "feh", "logg", "rv_kms", "chi2_red")
         }
         print(json.dumps(summary, indent=2), flush=True)
+        if args.run_systematic_variants:
+            if not payload["baseline_fit"].get("success"):
+                print(
+                    "Skipping systematic variants because the baseline fit failed.",
+                    flush=True,
+                )
+                payload["systematic_variant_results"] = _skipped_systematic_results(
+                    "skipped_baseline_failed",
+                    "Systematic variants require a successful baseline fit.",
+                )
+            else:
+                payload["systematic_variant_results"] = (
+                    _run_selected_systematic_variants(
+                        args,
+                        segment,
+                        payload["systematic_variant_plan"],
+                        output_path,
+                        payload,
+                    )
+                )
+            _write_systematic_variant_results_csv(
+                args.output_systematic_results_csv,
+                payload["systematic_variant_results"],
+            )
+            _atomic_write_json(output_path, payload)
     else:
+        if args.run_systematic_variants:
+            print(
+                "Skipping systematic variants: add --run-baseline-fit first.",
+                flush=True,
+            )
+            payload["systematic_variant_results"] = _skipped_systematic_results(
+                "skipped_requires_run_baseline_fit",
+                "Add --run-baseline-fit before executing fit-level systematic variants.",
+            )
+            _write_systematic_variant_results_csv(
+                args.output_systematic_results_csv,
+                payload["systematic_variant_results"],
+            )
+            _atomic_write_json(output_path, payload)
         print(
             "Audit-only run complete. Add --run-baseline-fit after PHOENIX "
             "configuration is ready.",

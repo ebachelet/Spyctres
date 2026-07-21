@@ -532,7 +532,10 @@ The scaffold also writes a bounded systematic-variant plan covering continuum
 degree, preparation normalization, Balmer-core mask width, resolution
 assumptions, and single-line/leave-one-line-out Balmer window sets. These
 variants are reported for review but are not run by default, keeping the public
-workflow lightweight and avoiding hidden fit grids.
+workflow lightweight and avoiding hidden fit grids. After a successful baseline
+fit, `--run-systematic-variants` executes a small priority subset with atomic
+JSON checkpoints after each variant; use `--systematic-variant-ids` to run a
+specific reviewer-requested subset.
 It also records cheap observed-profile diagnostics for each Balmer line:
 sideband coverage, mask fractions, line-depth and equivalent-width proxies,
 wing asymmetry, and DIB overlaps. These identify lines needing review before
