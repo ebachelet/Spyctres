@@ -536,7 +536,10 @@ workflow lightweight and avoiding hidden fit grids.
 It also records cheap observed-profile diagnostics for each Balmer line:
 sideband coverage, mask fractions, line-depth and equivalent-width proxies,
 wing asymmetry, and DIB overlaps. These identify lines needing review before
-running expensive variants; they are not calibrated line measurements.
+running expensive variants; they are not calibrated line measurements. When an
+opt-in baseline PHOENIX fit is run, the scaffold adds per-line model-residual
+diagnostics that keep fitted-pixel residuals separate from masked/core overplot
+checks.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,

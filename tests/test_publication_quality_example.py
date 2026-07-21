@@ -1,7 +1,25 @@
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import numpy as np
+
+from Spyctres.io import SpectrumCollection, SpectrumSegment
+from Spyctres.results import PhoenixFitResult
+
+
+def _load_publication_example_module():
+    root = Path(__file__).resolve().parents[1]
+    module_path = root / "examples" / "publication_quality_xshooter_uvb.py"
+    spec = importlib.util.spec_from_file_location(
+        "publication_quality_xshooter_uvb_test_module",
+        module_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
@@ -42,6 +60,7 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     payload = json.loads(output_json.read_text())
     assert payload["workflow"] == "publication_quality_xshooter_uvb_scaffold"
     assert payload["baseline_fit"] is None
+    assert payload["baseline_line_residual_diagnostics"] is None
     assert payload["ordinary_readiness"]["n_fit_candidate"] > 0
     assert "publication_readiness" in payload
     assert "balmer_windows" in payload["analysis_design"]
@@ -103,3 +122,59 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert window_csv.exists()
     assert systematic_csv.exists()
     assert line_csv.exists()
+
+
+def test_balmer_model_residual_diagnostics_from_reconstructed_result(tmp_path):
+    module = _load_publication_example_module()
+    wave = np.linspace(4310.0, 4370.0, 301)
+    center = 4340.5
+    flux = 1.0 - 0.25 * np.exp(-0.5 * ((wave - center) / 7.0) ** 2)
+    err = np.full_like(wave, 0.02)
+    model = flux.copy()
+    model += 0.01
+    model[wave > center + 8.0] += 0.02
+    used = np.abs(wave - center) > 5.0
+    excluded = ~used
+    segment = SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=err,
+        mask=np.ones_like(wave, dtype=bool),
+        name="Hγ",
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        meta={
+            "line_label": "Hγ",
+            "line_center_data": center,
+            "line_center_vac": 4340.47,
+        },
+    )
+    collection = SpectrumCollection([segment])
+    result = PhoenixFitResult(
+        summary={"success": True, "chi2_red": 1.0},
+        models=(model,),
+        used_masks=(used,),
+        excluded_masks=(excluded,),
+    )
+
+    diagnostics = module._balmer_model_residual_diagnostics(
+        collection,
+        result,
+        core_mask_halfwidth=5.0,
+    )
+
+    assert diagnostics["status"] == "computed"
+    assert diagnostics["summary"]["n_evaluated_lines"] == 1
+    row = diagnostics["lines"][0]
+    assert row["diagnostic_type"] == "model_residuals"
+    assert row["used_residuals"]["n_pixels"] == int(np.count_nonzero(used))
+    assert row["used_residuals"]["chi2_red_proxy"] is not None
+    assert row["wing_residual_asymmetry_fraction"] is not None
+    assert "core_model_only_not_fitted" in row["quality_flags"]
+
+    csv_path = tmp_path / "balmer_residuals.csv"
+    module._write_balmer_model_residual_csv(csv_path, diagnostics)
+    header = csv_path.read_text().splitlines()[0]
+    assert "used_chi2_red_proxy" in header
+    assert "wing_residual_asymmetry_fraction" in header

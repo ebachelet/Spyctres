@@ -18,7 +18,8 @@ python examples/publication_quality_xshooter_uvb.py \
 
 Optional review artifacts can also be written as CSV/PNG tables, including
 core-mask sensitivity, generic diagnostic windows, systematic-variant plans,
-and per-line Balmer observed-profile diagnostics.
+per-line Balmer observed-profile diagnostics, and baseline-fit Balmer residual
+diagnostics when ``--run-baseline-fit`` is enabled.
 
 Example baseline fit after PHOENIX is configured
 ------------------------------------------------
@@ -124,7 +125,8 @@ def build_parser():
             "  python examples/publication_quality_xshooter_uvb.py "
             "--run-baseline-fit "
             "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
-            "--output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png"
+            "--output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png "
+            "--output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -194,6 +196,14 @@ def build_parser():
             "Optional CSV table of cheap per-line Balmer observed-profile "
             "diagnostics: sideband coverage, line-depth proxies, wing "
             "asymmetry, mask fractions, and known DIB overlaps."
+        ),
+    )
+    parser.add_argument(
+        "--output-balmer-residual-csv",
+        default=None,
+        help=(
+            "Optional CSV table of per-line Balmer model-residual diagnostics "
+            "after --run-baseline-fit. Requires reconstructed model arrays."
         ),
     )
     parser.add_argument(
@@ -971,6 +981,365 @@ def _write_balmer_line_diagnostic_csv(path, diagnostics):
             )
 
 
+def _optional_bool_array_tuple(value, n_segments):
+    if value is None:
+        return tuple(None for _index in range(n_segments))
+    items = tuple(value)
+    out = []
+    for index in range(n_segments):
+        if index >= len(items) or items[index] is None:
+            out.append(None)
+        else:
+            out.append(np.asarray(items[index], dtype=bool))
+    return tuple(out)
+
+
+def _result_model_mask_arrays(result, *, n_segments):
+    models = getattr(result, "models", None)
+    used_masks = getattr(result, "used_masks", None)
+    excluded_masks = getattr(result, "excluded_masks", None)
+    if isinstance(result, dict):
+        models = result.get("models", models)
+        used_masks = result.get("used_masks", used_masks)
+        excluded_masks = result.get("excluded_masks", excluded_masks)
+    if models is None:
+        return None, None, None
+    model_items = tuple(models)
+    if len(model_items) < n_segments:
+        return None, None, None
+    return (
+        tuple(np.asarray(item, dtype=float) for item in model_items[:n_segments]),
+        _optional_bool_array_tuple(used_masks, n_segments),
+        _optional_bool_array_tuple(excluded_masks, n_segments),
+    )
+
+
+def _residual_metric_block(residual, flux, model, err=None):
+    residual = np.asarray(residual, dtype=float)
+    flux = np.asarray(flux, dtype=float)
+    model = np.asarray(model, dtype=float)
+    good = np.isfinite(residual) & np.isfinite(flux) & np.isfinite(model)
+    if err is not None:
+        err = np.asarray(err, dtype=float)
+        good &= np.isfinite(err)
+    if np.count_nonzero(good) == 0:
+        return {
+            "n_pixels": 0,
+            "median_fractional_residual": None,
+            "rms_fractional_residual": None,
+            "median_abs_sigma": None,
+            "chi2_red_proxy": None,
+            "max_abs_sigma": None,
+        }
+    residual = residual[good]
+    flux = flux[good]
+    model = model[good]
+    scale = max(
+        abs(float(np.nanmedian(flux))),
+        abs(float(np.nanmedian(model))),
+        1e-30,
+    )
+    block = {
+        "n_pixels": int(residual.size),
+        "median_fractional_residual": float(np.nanmedian(residual) / scale),
+        "rms_fractional_residual": float(np.sqrt(np.nanmean(residual**2)) / scale),
+        "median_abs_sigma": None,
+        "chi2_red_proxy": None,
+        "max_abs_sigma": None,
+    }
+    if err is not None:
+        err = err[good]
+        good_err = np.isfinite(err) & (err > 0.0)
+        if np.count_nonzero(good_err) > 0:
+            sigma = residual[good_err] / err[good_err]
+            block["median_abs_sigma"] = float(np.nanmedian(np.abs(sigma)))
+            block["chi2_red_proxy"] = float(np.nanmean(sigma**2))
+            block["max_abs_sigma"] = float(np.nanmax(np.abs(sigma)))
+    return block
+
+
+def _balmer_model_residual_diagnostics(
+    collection,
+    result,
+    *,
+    core_mask_halfwidth,
+    min_pixels=3,
+):
+    """Return per-line residual summaries from a reconstructed PHOENIX fit.
+
+    This is the model-facing companion to ``_balmer_line_diagnostics``.  It
+    intentionally distinguishes pixels used by the fit from masked/core pixels:
+    the former summarize the likelihood region, while the latter show where
+    the overplotted model should be read as an extrapolated diagnostic only.
+    """
+    segments = list(collection.segments)
+    models, used_masks, excluded_masks = _result_model_mask_arrays(
+        result,
+        n_segments=len(segments),
+    )
+    if models is None:
+        return {
+            "schema_version": 1,
+            "status": "skipped_no_reconstructed_model",
+            "method": "balmer_model_residual_diagnostics",
+            "lines": [],
+            "summary": None,
+            "reason": (
+                "Per-line model residual diagnostics require reconstructed "
+                "model arrays from fit_stellar_spectrum(..., reconstruct=True)."
+            ),
+        }
+
+    core_mask_halfwidth = float(core_mask_halfwidth)
+    if not np.isfinite(core_mask_halfwidth) or core_mask_halfwidth < 0.0:
+        core_mask_halfwidth = 0.0
+    min_pixels = int(min_pixels)
+    if min_pixels < 1:
+        raise ValueError("min_pixels must be >= 1.")
+
+    rows = []
+    for index, segment in enumerate(segments):
+        wave = np.asarray(segment.wave, dtype=float)
+        flux = np.asarray(segment.flux, dtype=float)
+        model = np.asarray(models[index], dtype=float)
+        if wave.shape != flux.shape or wave.shape != model.shape:
+            rows.append(
+                {
+                    "segment_index": int(index),
+                    "segment_name": segment.name,
+                    "line_label": segment.meta.get("line_label", segment.name),
+                    "status": "shape_mismatch",
+                    "quality_flags": ["model_shape_mismatch"],
+                }
+            )
+            continue
+        err = None if segment.err is None else np.asarray(segment.err, dtype=float)
+        segment_mask = np.asarray(
+            getattr(segment, "mask", np.ones(wave.shape, dtype=bool)),
+            dtype=bool,
+        )
+        valid = segment_mask & np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model)
+        if err is not None and err.shape == wave.shape:
+            valid &= np.isfinite(err) & (err > 0.0)
+        else:
+            err = None
+
+        used = used_masks[index]
+        if used is None or used.shape != wave.shape:
+            used = valid.copy()
+        else:
+            used = valid & used
+        excluded = excluded_masks[index]
+        if excluded is None or excluded.shape != wave.shape:
+            excluded = np.zeros(wave.shape, dtype=bool)
+        else:
+            excluded = valid & excluded
+
+        center = _finite_or_none(segment.meta.get("line_center_data"))
+        if center is None:
+            core = np.zeros(wave.shape, dtype=bool)
+            blue_wing = np.zeros(wave.shape, dtype=bool)
+            red_wing = np.zeros(wave.shape, dtype=bool)
+        else:
+            core = valid & (np.abs(wave - center) <= core_mask_halfwidth)
+            blue_wing = used & (wave < center - core_mask_halfwidth)
+            red_wing = used & (wave > center + core_mask_halfwidth)
+
+        residual = flux - model
+        used_block = _residual_metric_block(
+            residual[used],
+            flux[used],
+            model[used],
+            None if err is None else err[used],
+        )
+        core_block = _residual_metric_block(
+            residual[core],
+            flux[core],
+            model[core],
+            None if err is None else err[core],
+        )
+        excluded_block = _residual_metric_block(
+            residual[excluded],
+            flux[excluded],
+            model[excluded],
+            None if err is None else err[excluded],
+        )
+        blue_block = _residual_metric_block(
+            residual[blue_wing],
+            flux[blue_wing],
+            model[blue_wing],
+            None if err is None else err[blue_wing],
+        )
+        red_block = _residual_metric_block(
+            residual[red_wing],
+            flux[red_wing],
+            model[red_wing],
+            None if err is None else err[red_wing],
+        )
+        wing_residual_asymmetry = None
+        if (
+            blue_block["median_fractional_residual"] is not None
+            and red_block["median_fractional_residual"] is not None
+        ):
+            wing_residual_asymmetry = float(
+                red_block["median_fractional_residual"]
+                - blue_block["median_fractional_residual"]
+            )
+
+        flags = []
+        if used_block["n_pixels"] < min_pixels:
+            flags.append("insufficient_used_pixels")
+        if (
+            used_block["chi2_red_proxy"] is not None
+            and used_block["chi2_red_proxy"] > 9.0
+        ):
+            flags.append("line_high_chi2_proxy")
+        if (
+            used_block["median_abs_sigma"] is not None
+            and used_block["median_abs_sigma"] > 3.0
+        ):
+            flags.append("line_large_median_abs_sigma")
+        if (
+            used_block["rms_fractional_residual"] is not None
+            and used_block["rms_fractional_residual"] > 0.10
+        ):
+            flags.append("line_large_fractional_rms")
+        if wing_residual_asymmetry is not None and abs(wing_residual_asymmetry) > 0.05:
+            flags.append("line_wing_residual_asymmetry")
+        if int(np.count_nonzero(core & excluded)) > 0:
+            flags.append("core_model_only_not_fitted")
+
+        rows.append(
+            {
+                "segment_index": int(index),
+                "segment_name": segment.name,
+                "line_label": segment.meta.get("line_label", segment.name),
+                "line_center_data_A": center,
+                "status": "ok",
+                "diagnostic_type": "model_residuals",
+                "n_valid_pixels": int(np.count_nonzero(valid)),
+                "n_used_pixels": int(np.count_nonzero(used)),
+                "n_excluded_pixels": int(np.count_nonzero(excluded)),
+                "n_core_pixels": int(np.count_nonzero(core)),
+                "n_core_excluded_pixels": int(np.count_nonzero(core & excluded)),
+                "used_residuals": used_block,
+                "masked_or_excluded_residuals": excluded_block,
+                "core_residuals_model_only": core_block,
+                "blue_wing_used_residuals": blue_block,
+                "red_wing_used_residuals": red_block,
+                "wing_residual_asymmetry_fraction": wing_residual_asymmetry,
+                "quality_flags": flags,
+                "interpretation": (
+                    "Model-residual diagnostic for this line. Used-pixel "
+                    "metrics summarize fitted pixels; core/excluded metrics "
+                    "are model-overplot checks only when those pixels were "
+                    "masked from the likelihood."
+                ),
+            }
+        )
+
+    ok_rows = [row for row in rows if row.get("status") == "ok"]
+    chi2_values = [
+        row["used_residuals"]["chi2_red_proxy"]
+        for row in ok_rows
+        if row["used_residuals"].get("chi2_red_proxy") is not None
+    ]
+    rms_values = [
+        row["used_residuals"]["rms_fractional_residual"]
+        for row in ok_rows
+        if row["used_residuals"].get("rms_fractional_residual") is not None
+    ]
+    flags = sorted(
+        {
+            flag
+            for row in rows
+            for flag in row.get("quality_flags", ())
+        }
+    )
+    return {
+        "schema_version": 1,
+        "status": "computed" if ok_rows else "no_evaluable_lines",
+        "method": "balmer_model_residual_diagnostics",
+        "core_mask_halfwidth_A": float(core_mask_halfwidth),
+        "summary": {
+            "n_lines": int(len(rows)),
+            "n_evaluated_lines": int(len(ok_rows)),
+            "mean_used_chi2_red_proxy": (
+                None if not chi2_values else float(np.nanmean(chi2_values))
+            ),
+            "max_used_rms_fractional_residual": (
+                None if not rms_values else float(np.nanmax(rms_values))
+            ),
+            "quality_flags": flags,
+        },
+        "lines": rows,
+        "interpretation": (
+            "Per-line residual diagnostics from the reconstructed baseline "
+            "PHOENIX model. They identify line-specific failures and masked "
+            "regions requiring visual review; they are not final uncertainty "
+            "estimates."
+        ),
+    }
+
+
+def _write_balmer_model_residual_csv(path, diagnostics):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "line_label",
+        "segment_name",
+        "status",
+        "n_valid_pixels",
+        "n_used_pixels",
+        "n_excluded_pixels",
+        "n_core_pixels",
+        "n_core_excluded_pixels",
+        "used_chi2_red_proxy",
+        "used_median_abs_sigma",
+        "used_rms_fractional_residual",
+        "core_rms_fractional_residual",
+        "masked_rms_fractional_residual",
+        "wing_residual_asymmetry_fraction",
+        "quality_flags",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in diagnostics.get("lines", ()):
+            used = row.get("used_residuals") or {}
+            core = row.get("core_residuals_model_only") or {}
+            masked = row.get("masked_or_excluded_residuals") or {}
+            writer.writerow(
+                {
+                    "line_label": row.get("line_label"),
+                    "segment_name": row.get("segment_name"),
+                    "status": row.get("status"),
+                    "n_valid_pixels": row.get("n_valid_pixels"),
+                    "n_used_pixels": row.get("n_used_pixels"),
+                    "n_excluded_pixels": row.get("n_excluded_pixels"),
+                    "n_core_pixels": row.get("n_core_pixels"),
+                    "n_core_excluded_pixels": row.get("n_core_excluded_pixels"),
+                    "used_chi2_red_proxy": used.get("chi2_red_proxy"),
+                    "used_median_abs_sigma": used.get("median_abs_sigma"),
+                    "used_rms_fractional_residual": used.get(
+                        "rms_fractional_residual"
+                    ),
+                    "core_rms_fractional_residual": core.get(
+                        "rms_fractional_residual"
+                    ),
+                    "masked_rms_fractional_residual": masked.get(
+                        "rms_fractional_residual"
+                    ),
+                    "wing_residual_asymmetry_fraction": row.get(
+                        "wing_residual_asymmetry_fraction"
+                    ),
+                    "quality_flags": ";".join(row.get("quality_flags", ())),
+                }
+            )
+
+
 def _diagnostic_window_payload(segment):
     selection = select_diagnostic_windows(segment, max_windows=12)
     combinations = build_diagnostic_window_combinations(
@@ -1412,6 +1781,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         "core_mask_sensitivity_recommendation": None,
         "systematic_variant_plan": _build_systematic_variant_plan(args, case),
         "baseline_fit": None,
+        "baseline_line_residual_diagnostics": None,
     }
 
 
@@ -1659,7 +2029,14 @@ def _fit_kwargs_from_args(args, collection, exclude_masks):
     )
 
 
-def _run_baseline_fit(args, collection, exclude_masks, *, output_plot=None):
+def _run_baseline_fit(
+    args,
+    collection,
+    exclude_masks,
+    *,
+    output_plot=None,
+    return_result=False,
+):
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, collection, exclude_masks)
     print("Running baseline native-grid PHOENIX fit...", flush=True)
     result = fit_stellar_spectrum(
@@ -1687,12 +2064,15 @@ def _run_baseline_fit(args, collection, exclude_masks, *, output_plot=None):
             figsize_per_segment=(15.0, 5.4),
         )
         plot_paths.update(getattr(fig, "spyctres_generated_files", {}) or {})
-    return result.to_dict(
+    payload = result.to_dict(
         include_arrays=False,
         plot_paths=plot_paths or None,
         relative_to=Path(args.output_json).parent,
         include_local_paths=False,
     )
+    if return_result:
+        return payload, result
+    return payload
 
 
 def _summarize_core_mask_variant(width, ordinary, publication, fit_payload=None):
@@ -1956,11 +2336,24 @@ def main(argv=None):
     _atomic_write_json(output_path, payload)
 
     if args.run_baseline_fit:
-        payload["baseline_fit"] = _run_baseline_fit(
+        baseline_payload, baseline_result = _run_baseline_fit(
             args,
             collection,
             exclude_masks,
             output_plot=args.output_plot,
+            return_result=True,
+        )
+        payload["baseline_fit"] = baseline_payload
+        payload["baseline_line_residual_diagnostics"] = (
+            _balmer_model_residual_diagnostics(
+                collection,
+                baseline_result,
+                core_mask_halfwidth=float(args.balmer_core_mask),
+            )
+        )
+        _write_balmer_model_residual_csv(
+            args.output_balmer_residual_csv,
+            payload["baseline_line_residual_diagnostics"],
         )
         payload["status"] = (
             "baseline_fit_completed_needs_publication_systematics"

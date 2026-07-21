@@ -395,6 +395,10 @@ sideband coverage, line-depth and equivalent-width proxies, masked-core
 fractions, blue/red wing asymmetry, and known DIB overlaps. These are
 observed-profile sanity checks only. They tell you which Balmer lines deserve
 visual or fitted follow-up; they are not calibrated atmospheric measurements.
+After an opt-in baseline PHOENIX fit, the scaffold also records per-line
+model-residual diagnostics. These separate fitted pixels from masked/core
+pixels, so the model over a masked Balmer core is clearly labelled as an
+overplot check rather than part of the likelihood.
 
 To save compact review artifacts for the mask grid and generic feature-window
 selection:
@@ -415,7 +419,8 @@ After PHOENIX is configured, opt in to the baseline fit:
 python examples/publication_quality_xshooter_uvb.py \
   --run-baseline-fit \
   --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
-  --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png
+  --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png \
+  --output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv
 ```
 
 This remains a scaffold rather than a final publication pipeline. The saved
@@ -423,8 +428,8 @@ JSON lists the follow-up checks still required before publication claims:
 per-line and joint Balmer comparisons, leave-one-line-out tests, continuum and
 mask variants, resolution/LSF variants, synthetic injection/recovery, and final
 uncertainty accounting. The first four categories are now represented in the
-saved systematic-variant plan; injection/recovery and final uncertainty tables
-remain later steps. The paired
+saved systematic-variant plan, and the baseline fit produces per-line residual
+summaries; injection/recovery and final uncertainty tables remain later steps. The paired
 `publication_quality_xshooter_uvb.ipynb` notebook is a no-output notebook that
 drives the same script with `RUN_BASELINE_FIT = False` by default.
 
