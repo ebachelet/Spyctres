@@ -79,13 +79,14 @@ requirements.
    bounded diagnostic-window comparison scaffold. The comparison
    scaffold plans trusted-baseline, role-balanced, single-window,
    leave-one-out, and leave-one-family-out checks without ranking by raw
-   chi-square alone; expensive fits stay opt-in. The remaining work is to add
-   the fit-level systematic variants, per-line checks, common-evaluation
-   residuals for held-out predictive checks, injection/recovery, profile scans,
-   and final uncertainty tables. Before expanding the diagnostic-window catalog
-   substantially, add the planned early-type He/Mg/Si family, CH G-band,
-   cool-dwarf CaH/K I/FeH/VO family, and K-band Na I/Ca I family with explicit
-   model-support and risk policies.
+   chi-square alone; expensive fits stay opt-in. It now includes a first
+   held-out residual proxy when reconstructed model arrays are available. The
+   remaining work is to add fit-level systematic variants, per-line checks,
+   stronger common-evaluation residual summaries, injection/recovery, profile
+   scans, and final uncertainty tables. Before expanding the diagnostic-window
+   catalog substantially, add the planned early-type He/Mg/Si family, CH
+   G-band, cool-dwarf CaH/K I/FeH/VO family, and K-band Na I/Ca I family with
+   explicit model-support and risk policies.
 
 5. **Public API and reporting polish.**
    Keep refining structured result objects, quality reports, plotting, and

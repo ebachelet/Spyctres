@@ -23,6 +23,7 @@ from .diagnostic_windows import (
     build_diagnostic_window_combinations,
     select_diagnostic_windows,
 )
+from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
 from .results import PhoenixFitResult
 
 
@@ -166,6 +167,8 @@ def run_diagnostic_window_comparison(
     spectrum,
     *,
     run_fits=False,
+    evaluate_heldout=True,
+    holdout_min_pixels=3,
     fit_callable=None,
     fit_call_kwargs=None,
     base_fit_kwargs=None,
@@ -192,10 +195,12 @@ def run_diagnostic_window_comparison(
         "skipped_comparisons": plan["skipped_comparisons"],
         "run_policy": {
             "run_fits": bool(run_fits),
+            "evaluate_heldout": bool(evaluate_heldout),
+            "holdout_min_pixels": int(holdout_min_pixels),
             "fit_callable": _callable_name(fit_callable),
             "regions_overridden_per_comparison": True,
             "held_out_evaluation": (
-                "metadata_only_unless_common_evaluation_residuals_are_added"
+                "computed_on_valid_unfitted_pixels_when_reconstructed_models_exist"
             ),
         },
         "fit_records": [],
@@ -241,6 +246,19 @@ def run_diagnostic_window_comparison(
             )
             record["result_summary"] = _result_summary(result_payload)
             record["quality_flags"] = list(result_payload.get("quality_flags", ()))
+            if evaluate_heldout:
+                record["held_out_evaluation"] = evaluate_diagnostic_window_holdout(
+                    spectrum,
+                    result,
+                    comparison,
+                    selected_windows=plan["selection"]["selected"],
+                    min_pixels=holdout_min_pixels,
+                )
+            else:
+                record["held_out_evaluation"] = {
+                    "status": "skipped",
+                    "reason": "evaluate_heldout_false",
+                }
             record["result"] = result_payload
         except Exception as exc:  # pragma: no cover - exercised by tests indirectly
             record["fit_status"] = "error"
@@ -268,6 +286,103 @@ def run_diagnostic_window_comparison(
         payload["status"] = "fits_completed"
     payload["run_policy"]["fit_callable"] = _callable_name(fit_callable)
     return _json_native(payload)
+
+
+def evaluate_diagnostic_window_holdout(
+    spectrum,
+    result,
+    comparison,
+    *,
+    selected_windows,
+    min_pixels=3,
+):
+    """Score selected-but-held-out windows using reconstructed model arrays.
+
+    The metric is intentionally modest: it evaluates valid pixels inside
+    windows that were selected by the diagnostic catalog but not included in
+    the current fit combination.  Pixels already used by the fit or explicitly
+    excluded remain out of the evaluation.  This is a predictive sanity check,
+    not a replacement for final publication validation.
+    """
+    held_out_ids = list(comparison.get("held_out_window_ids", ()))
+    if not held_out_ids:
+        return {
+            "status": "no_held_out_windows",
+            "method": "valid_unfitted_window_residuals",
+            "windows": [],
+            "overall": None,
+        }
+
+    segments = _as_segments(spectrum)
+    models, used_masks, excluded_masks = _model_mask_arrays_from_result(
+        result,
+        n_segments=len(segments),
+    )
+    if models is None:
+        return {
+            "status": "skipped_no_reconstructed_model",
+            "reason": (
+                "Held-out residual scoring requires reconstructed model arrays. "
+                "Run comparison fits with reconstruct=True."
+            ),
+            "method": "valid_unfitted_window_residuals",
+            "windows": [],
+            "overall": None,
+        }
+
+    selected_by_id = {record["id"]: dict(record) for record in selected_windows}
+    min_pixels = int(min_pixels)
+    if min_pixels < 1:
+        raise ValueError("min_pixels must be >= 1.")
+
+    rows = []
+    for window_id in held_out_ids:
+        record = selected_by_id.get(window_id)
+        if record is None:
+            rows.append(
+                {
+                    "window_id": window_id,
+                    "status": "missing_selection_record",
+                    "n_pixels": 0,
+                }
+            )
+            continue
+        rows.append(
+            _evaluate_one_heldout_window(
+                segments,
+                models,
+                used_masks,
+                excluded_masks,
+                record,
+                min_pixels=min_pixels,
+            )
+        )
+
+    evaluated = [row for row in rows if row.get("status") == "ok"]
+    overall = _summarize_heldout_rows(evaluated)
+    if evaluated:
+        status = "ok"
+    elif rows:
+        status = "no_evaluable_held_out_pixels"
+    else:
+        status = "no_held_out_windows"
+    return _json_native(
+        {
+            "status": status,
+            "method": "valid_unfitted_window_residuals",
+            "coordinate_policy": (
+                "Uses each diagnostic window's operational region from the "
+                "selection step. The model is the reconstructed continuum-"
+                "adjusted model from the fit; the continuum is not refit on "
+                "held-out windows."
+            ),
+            "min_pixels": int(min_pixels),
+            "n_held_out_windows": int(len(held_out_ids)),
+            "n_evaluated_windows": int(len(evaluated)),
+            "overall": overall,
+            "windows": rows,
+        }
+    )
 
 
 def write_diagnostic_window_comparison_json(path, payload):
@@ -309,6 +424,11 @@ def write_diagnostic_window_comparison_csv(path, payload):
         "regions_A",
         "estimated_usable_pixels",
         "held_out_window_ids",
+        "heldout_status",
+        "heldout_n_evaluated_windows",
+        "heldout_n_pixels",
+        "heldout_mean_chi2_red_proxy",
+        "heldout_median_abs_sigma",
         "fit_status",
         "success",
         "teff",
@@ -324,6 +444,8 @@ def write_diagnostic_window_comparison_csv(path, payload):
         for row in rows:
             comparison = row.get("comparison", row)
             summary = row.get("result_summary") or {}
+            heldout = row.get("held_out_evaluation") or {}
+            heldout_overall = heldout.get("overall") or {}
             writer.writerow(
                 {
                     "comparison_index": comparison.get("comparison_index"),
@@ -340,6 +462,17 @@ def write_diagnostic_window_comparison_csv(path, payload):
                     ),
                     "held_out_window_ids": ";".join(
                         comparison.get("held_out_window_ids", ())
+                    ),
+                    "heldout_status": heldout.get("status"),
+                    "heldout_n_evaluated_windows": heldout.get(
+                        "n_evaluated_windows"
+                    ),
+                    "heldout_n_pixels": heldout_overall.get("n_pixels"),
+                    "heldout_mean_chi2_red_proxy": heldout_overall.get(
+                        "mean_chi2_red_proxy"
+                    ),
+                    "heldout_median_abs_sigma": heldout_overall.get(
+                        "median_abs_sigma"
                     ),
                     "fit_status": row.get("fit_status"),
                     "success": summary.get("success"),
@@ -391,6 +524,7 @@ def plot_diagnostic_window_comparison(payload, savepath=None):
     feh = _summary_array(records, "feh")
     rv = _summary_array(records, "rv_kms")
     chi2 = _summary_array(records, "chi2_red")
+    heldout_chi2 = _heldout_overall_array(records, "mean_chi2_red_proxy")
     has_fit_values = any(
         np.any(np.isfinite(values)) for values in (teff, logg, feh, rv, chi2)
     )
@@ -405,8 +539,19 @@ def plot_diagnostic_window_comparison(payload, savepath=None):
     )
     axes = np.atleast_1d(axes)
 
-    if np.any(np.isfinite(chi2)):
-        axes[0].plot(x, chi2, marker="o", color="tab:red")
+    if np.any(np.isfinite(chi2)) or np.any(np.isfinite(heldout_chi2)):
+        if np.any(np.isfinite(chi2)):
+            axes[0].plot(x, chi2, marker="o", color="tab:red", label="fit χ²ν")
+        if np.any(np.isfinite(heldout_chi2)):
+            axes[0].plot(
+                x,
+                heldout_chi2,
+                marker="s",
+                ls="--",
+                color="tab:purple",
+                label="held-out χ² proxy",
+            )
+        axes[0].legend(frameon=False, fontsize=8)
         axes[0].set_ylabel("χ²ν")
     else:
         axes[0].bar(x, nfit, color="0.55")
@@ -514,6 +659,175 @@ def _comparison_record(combo, records, *, all_selected, candidate_index):
             ),
         },
     }
+
+
+def _evaluate_one_heldout_window(
+    segments,
+    models,
+    used_masks,
+    excluded_masks,
+    record,
+    *,
+    min_pixels,
+):
+    chunks = []
+    segment_rows = []
+    for contribution in record.get("segment_contributions", ()):
+        index = int(contribution.get("segment_index", -1))
+        if index < 0 or index >= len(segments):
+            continue
+        region = contribution.get("operational_region_A")
+        if not _valid_region(region):
+            continue
+        seg = segments[index]
+        wave = np.asarray(seg.wave, dtype=float)
+        flux = np.asarray(seg.flux, dtype=float)
+        model = np.asarray(models[index], dtype=float)
+        if wave.shape != flux.shape or wave.shape != model.shape:
+            continue
+        valid = np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model)
+        mask = np.asarray(getattr(seg, "mask", np.ones(wave.size, dtype=bool)), dtype=bool)
+        if mask.shape == wave.shape:
+            valid &= mask
+        used = used_masks[index]
+        if used is not None:
+            valid &= ~used
+        excluded = excluded_masks[index]
+        if excluded is not None:
+            valid &= ~excluded
+        lo, hi = sorted((float(region[0]), float(region[1])))
+        inside = valid & (wave >= lo) & (wave <= hi)
+        n_pixels = int(np.count_nonzero(inside))
+        segment_rows.append(
+            {
+                "segment": getattr(seg, "name", None),
+                "segment_index": int(index),
+                "region_A": [lo, hi],
+                "n_pixels": n_pixels,
+            }
+        )
+        if n_pixels <= 0:
+            continue
+        err = None if getattr(seg, "err", None) is None else np.asarray(seg.err, dtype=float)
+        if err is not None and err.shape == wave.shape:
+            err_i = err[inside]
+        else:
+            err_i = None
+        chunks.append(
+            {
+                "flux": flux[inside],
+                "model": model[inside],
+                "err": err_i,
+            }
+        )
+
+    n_total = int(sum(len(chunk["flux"]) for chunk in chunks))
+    if n_total < min_pixels:
+        return {
+            "window_id": record.get("id"),
+            "label": record.get("label"),
+            "status": "insufficient_pixels",
+            "n_pixels": n_total,
+            "min_pixels": int(min_pixels),
+            "segments": segment_rows,
+        }
+
+    flux = np.concatenate([chunk["flux"] for chunk in chunks])
+    model = np.concatenate([chunk["model"] for chunk in chunks])
+    residual = flux - model
+    scale = max(abs(float(np.nanmedian(flux))), 1e-30)
+    rms_fraction = float(np.sqrt(np.nanmean(residual**2)) / scale)
+    median_fraction = float(np.nanmedian(residual) / scale)
+    mad_fraction = float(1.4826 * np.nanmedian(np.abs(residual - np.nanmedian(residual))) / scale)
+
+    err_chunks = [
+        chunk["err"]
+        for chunk in chunks
+        if chunk["err"] is not None and len(chunk["err"]) == len(chunk["flux"])
+    ]
+    if err_chunks:
+        err = np.concatenate(err_chunks)
+        good_err = np.isfinite(err) & (err > 0.0)
+        if np.count_nonzero(good_err) >= min_pixels and err.size == residual.size:
+            sigma = residual[good_err] / err[good_err]
+        else:
+            sigma = np.array([], dtype=float)
+    else:
+        sigma = np.array([], dtype=float)
+    if sigma.size:
+        chi2_proxy = float(np.nanmean(sigma**2))
+        median_abs_sigma = float(np.nanmedian(np.abs(sigma)))
+        mad_sigma = float(1.4826 * np.nanmedian(np.abs(sigma - np.nanmedian(sigma))))
+    else:
+        chi2_proxy = None
+        median_abs_sigma = None
+        mad_sigma = None
+
+    flags = []
+    if chi2_proxy is not None and chi2_proxy > 9.0:
+        flags.append("heldout_high_chi2_proxy")
+    if median_abs_sigma is not None and median_abs_sigma > 3.0:
+        flags.append("heldout_large_median_abs_sigma")
+    if rms_fraction > 0.10:
+        flags.append("heldout_large_fractional_rms")
+    return {
+        "window_id": record.get("id"),
+        "label": record.get("label"),
+        "status": "ok",
+        "n_pixels": n_total,
+        "segments": segment_rows,
+        "chi2_red_proxy": chi2_proxy,
+        "median_abs_sigma": median_abs_sigma,
+        "mad_sigma": mad_sigma,
+        "rms_fraction": rms_fraction,
+        "median_fractional_residual": median_fraction,
+        "mad_fractional_residual": mad_fraction,
+        "feature_families": list(record.get("feature_family", ())),
+        "risk_tags": list(record.get("risk_tags", ())),
+        "quality_flags": flags,
+    }
+
+
+def _summarize_heldout_rows(rows):
+    if not rows:
+        return None
+    n_pixels = int(sum(int(row.get("n_pixels", 0)) for row in rows))
+    chi2 = _finite_values(row.get("chi2_red_proxy") for row in rows)
+    med_abs = _finite_values(row.get("median_abs_sigma") for row in rows)
+    rms_frac = _finite_values(row.get("rms_fraction") for row in rows)
+    flags = sorted(
+        {
+            flag
+            for row in rows
+            for flag in row.get("quality_flags", ())
+        }
+    )
+    return {
+        "n_pixels": n_pixels,
+        "n_windows": int(len(rows)),
+        "mean_chi2_red_proxy": None if not chi2 else float(np.nanmean(chi2)),
+        "max_chi2_red_proxy": None if not chi2 else float(np.nanmax(chi2)),
+        "median_abs_sigma": None if not med_abs else float(np.nanmedian(med_abs)),
+        "max_rms_fraction": None if not rms_frac else float(np.nanmax(rms_frac)),
+        "quality_flags": flags,
+        "interpretation": (
+            "Held-out metrics are residual summaries on valid pixels that were "
+            "not used by this comparison fit. They are useful for stability "
+            "triage but are not a calibrated publication likelihood."
+        ),
+    }
+
+
+def _finite_values(values):
+    out = []
+    for value in values:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            out.append(value)
+    return out
 
 
 def _combination_skip_reasons(
@@ -626,6 +940,49 @@ def _regions_for_fit(comparison):
     ]
 
 
+def _as_segments(spectrum):
+    if isinstance(spectrum, SpectrumSegment):
+        return [spectrum]
+    if isinstance(spectrum, SpectrumCollection):
+        return list(spectrum.segments)
+    if isinstance(spectrum, (list, tuple)):
+        return list(spectrum)
+    coerced = coerce_spectrum(spectrum, warn_unknown=False)
+    if isinstance(coerced, SpectrumCollection):
+        return list(coerced.segments)
+    return [coerced]
+
+
+def _model_mask_arrays_from_result(result, *, n_segments):
+    models = getattr(result, "models", None)
+    used_masks = getattr(result, "used_masks", None)
+    excluded_masks = getattr(result, "excluded_masks", None)
+    if isinstance(result, Mapping):
+        models = result.get("models", models)
+        used_masks = result.get("used_masks", used_masks)
+        excluded_masks = result.get("excluded_masks", excluded_masks)
+    if models is None:
+        return None, None, None
+    model_items = tuple(models)
+    if len(model_items) < n_segments:
+        return None, None, None
+    models = tuple(np.asarray(item, dtype=float) for item in model_items[:n_segments])
+
+    def _optional_masks(value):
+        if value is None:
+            return tuple(None for _index in range(n_segments))
+        items = tuple(value)
+        out = []
+        for index in range(n_segments):
+            if index >= len(items) or items[index] is None:
+                out.append(None)
+            else:
+                out.append(np.asarray(items[index], dtype=bool))
+        return tuple(out)
+
+    return models, _optional_masks(used_masks), _optional_masks(excluded_masks)
+
+
 def _as_result_payload(result):
     if isinstance(result, PhoenixFitResult):
         return result.to_dict(include_arrays=False)
@@ -656,6 +1013,21 @@ def _summary_array(records, key):
         summary = record.get("result_summary") or {}
         try:
             value = float(summary.get(key))
+        except (TypeError, ValueError):
+            value = np.nan
+        if not np.isfinite(value):
+            value = np.nan
+        values.append(value)
+    return np.asarray(values, dtype=float)
+
+
+def _heldout_overall_array(records, key):
+    values = []
+    for record in records:
+        heldout = record.get("held_out_evaluation") or {}
+        overall = heldout.get("overall") or {}
+        try:
+            value = float(overall.get(key))
         except (TypeError, ValueError):
             value = np.nan
         if not np.isfinite(value):

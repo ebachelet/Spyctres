@@ -7,12 +7,14 @@ import numpy as np
 
 from Spyctres.diagnostic_window_comparison import (
     build_diagnostic_window_comparison_plan,
+    evaluate_diagnostic_window_holdout,
     plot_diagnostic_window_comparison,
     run_diagnostic_window_comparison,
     write_diagnostic_window_comparison_csv,
     write_diagnostic_window_comparison_json,
 )
 from Spyctres.io import SpectrumSegment
+from Spyctres.results import PhoenixFitResult
 
 
 def _segment(wave_medium="air"):
@@ -114,6 +116,83 @@ def test_run_comparison_executes_fake_fit_with_regions():
     assert all(item["fit_status"] == "ok" for item in payload["fit_records"])
     assert payload["fit_records"][0]["result_summary"]["success"] is True
     assert payload["fit_records"][0]["quality_flags"] == ["synthetic"]
+    assert payload["fit_records"][0]["held_out_evaluation"]["status"] == (
+        "skipped_no_reconstructed_model"
+    )
+
+
+def test_run_comparison_scores_held_out_windows_with_reconstructed_models():
+    segment = _segment()
+
+    def fake_fit(spectrum, **kwargs):
+        used = np.zeros(spectrum.wave.size, dtype=bool)
+        for lo, hi in kwargs["regions"]:
+            used |= (spectrum.wave >= lo) & (spectrum.wave <= hi)
+        model = np.asarray(spectrum.flux, dtype=float) * 0.99
+        return PhoenixFitResult(
+            summary={
+                "success": True,
+                "teff": 7100.0,
+                "logg": 4.1,
+                "feh": -0.1,
+                "rv_kms": 2.0,
+                "chi2_red": 1.5,
+                "quality_flags": [],
+            },
+            models=(model,),
+            used_masks=(used,),
+            excluded_masks=(np.zeros(spectrum.wave.size, dtype=bool),),
+            continuum_coefficients=(np.array([1.0, 0.0]),),
+        )
+
+    payload = run_diagnostic_window_comparison(
+        segment,
+        run_fits=True,
+        fit_callable=fake_fit,
+        max_comparisons=3,
+        holdout_min_pixels=3,
+    )
+
+    evaluations = [
+        item["held_out_evaluation"]
+        for item in payload["fit_records"]
+        if item["held_out_evaluation"]["status"] == "ok"
+    ]
+    assert evaluations
+    assert evaluations[0]["overall"]["n_pixels"] > 0
+    assert evaluations[0]["overall"]["mean_chi2_red_proxy"] is not None
+    assert any(row["status"] == "ok" for row in evaluations[0]["windows"])
+
+
+def test_evaluate_diagnostic_window_holdout_can_be_called_directly():
+    segment = _segment()
+    plan = build_diagnostic_window_comparison_plan(
+        segment,
+        max_comparisons=2,
+    )
+    comparison = next(
+        item for item in plan["planned_comparisons"] if item["held_out_window_ids"]
+    )
+    used = np.zeros(segment.wave.size, dtype=bool)
+    for lo, hi in comparison["regions_for_fit_A"]:
+        used |= (segment.wave >= lo) & (segment.wave <= hi)
+    result = PhoenixFitResult(
+        summary={"success": True, "chi2_red": 1.0},
+        models=(segment.flux * 0.995,),
+        used_masks=(used,),
+        excluded_masks=(np.zeros(segment.wave.size, dtype=bool),),
+    )
+
+    heldout = evaluate_diagnostic_window_holdout(
+        segment,
+        result,
+        comparison,
+        selected_windows=plan["selection"]["selected"],
+    )
+
+    assert heldout["status"] == "ok"
+    assert heldout["n_evaluated_windows"] >= 1
+    assert heldout["overall"]["n_pixels"] > 0
 
 
 def test_comparison_outputs_are_json_csv_and_plot_friendly(tmp_path):
@@ -131,7 +210,9 @@ def test_comparison_outputs_are_json_csv_and_plot_friendly(tmp_path):
     plt.close(fig)
     loaded = json.loads(json_path.read_text())
     assert loaded["operation"] == "run_diagnostic_window_comparison"
-    assert csv_path.read_text().splitlines()[0].startswith("comparison_index")
+    header = csv_path.read_text().splitlines()[0]
+    assert header.startswith("comparison_index")
+    assert "heldout_mean_chi2_red_proxy" in header
     assert plot_path.exists()
 
 

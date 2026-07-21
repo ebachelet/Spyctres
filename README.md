@@ -512,7 +512,11 @@ The comparison policy is deliberately conservative: it runs only a small set of
 trusted baseline, role-balanced, single-window, and leave-one-out/family-out
 checks, records held-out windows as provenance, excludes stress-only windows by
 default, and warns that raw χ² should not be used as the sole model-selection
-criterion.
+criterion. When comparison fits are run with reconstructed model arrays, the
+runner also scores selected-but-held-out windows on valid pixels that were not
+used by that fit. These held-out residuals are reported as proxy diagnostics
+beside the in-window χ²; they are a generalization check, not a calibrated
+publication likelihood.
 For publication-oriented Balmer-window work, Spyctres treats line-core masking
 as an explicit sensitivity choice rather than a hidden fit parameter. The
 publication scaffold records the retained-pixel fraction and an

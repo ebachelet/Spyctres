@@ -218,7 +218,9 @@ python examples/diagnostic_window_comparison.py \
 ```
 
 To launch actual PHOENIX fits for a bounded subset of those combinations, opt
-in explicitly:
+in explicitly. By default, fit runs reconstruct the model and score
+selected-but-held-out windows on valid pixels that were not used by each
+comparison fit:
 
 ```bash
 python examples/diagnostic_window_comparison.py \
@@ -231,6 +233,12 @@ python examples/diagnostic_window_comparison.py \
   --output-csv /tmp/spyctres_windows_fit.csv \
   --output-plot /tmp/spyctres_windows_fit.png
 ```
+
+Use `--no-evaluate-heldout` only when you are doing scalar timing checks and do
+not need the extra reconstructed-model pass. The held-out χ² proxy is useful
+for asking whether a fit trained on one set of broad features generalizes to
+other selected features, but it is still a diagnostic, not a final publication
+likelihood.
 
 Stress-only windows such as He/NLTE-sensitive features are visible in the
 selection provenance but are excluded from ordinary comparison fits unless
