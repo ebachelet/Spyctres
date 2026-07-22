@@ -477,6 +477,11 @@ calibration-interpretation table that labels readiness, core-mask sensitivity,
 window-set sensitivity, and same-model recovery as acceptable, borderline,
 blocking, or not yet evaluated. Those labels are triage guidance with explicit
 thresholds; they are not calibrated final uncertainties.
+The Markdown and JSON summary also include suggested next commands for the
+current checkpoint state, such as a baseline run, bounded core-mask/window-set
+variants, or a small same-model injection/recovery check. Suggested commands
+write fresh follow-up checkpoints so a reviewed JSON file is not overwritten by
+accident.
 
 This remains a scaffold rather than a final publication pipeline. The saved
 JSON lists the follow-up checks still required before publication claims:

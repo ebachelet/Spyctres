@@ -61,6 +61,7 @@ import argparse
 import csv
 import json
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -3482,7 +3483,348 @@ def _build_calibration_interpretation(payload, rows):
     }
 
 
-def _build_publication_comparison_summary(payload):
+def _path_with_suffix(path, suffix, extension=None):
+    """Return a sibling path with an added suffix and optional new extension."""
+    path = Path(path)
+    new_extension = path.suffix if extension is None else str(extension)
+    if new_extension and not new_extension.startswith("."):
+        new_extension = ".{0}".format(new_extension)
+    return str(path.with_name("{0}{1}{2}".format(path.stem, suffix, new_extension)))
+
+
+def _shell_join_multiline(parts):
+    if len(parts) <= 3:
+        return " ".join(shlex.quote(str(part)) for part in parts)
+
+    def quote(part):
+        return shlex.quote(str(part))
+
+    lines = ["{0} {1}".format(quote(parts[0]), quote(parts[1]))]
+    index = 2
+    while index < len(parts):
+        token = str(parts[index])
+        if (
+            token.startswith("--")
+            and index + 1 < len(parts)
+            and not str(parts[index + 1]).startswith("--")
+        ):
+            lines.append("  {0} {1}".format(quote(parts[index]), quote(parts[index + 1])))
+            index += 2
+        else:
+            lines.append("  {0}".format(quote(parts[index])))
+            index += 1
+    return " \\\n".join(lines)
+
+
+def _append_option(parts, flag, value):
+    if value is None:
+        return
+    parts.extend([flag, str(value)])
+
+
+def _publication_replay_parts(args):
+    """Return the scientific settings worth carrying into suggested commands."""
+    if args is None:
+        return [str(EXAMPLE_UVB), "--instrument", "xshooter"]
+
+    defaults = build_parser().parse_args([])
+    parts = [str(args.spectrum)]
+    _append_option(parts, "--instrument", getattr(args, "instrument", "xshooter"))
+    _append_option(parts, "--phoenix-dir", getattr(args, "phoenix_dir", None))
+    if getattr(args, "allow_assumed_resolution", False):
+        parts.append("--allow-assumed-resolution")
+
+    replay_if_changed = (
+        ("balmer_window_mode", "--balmer-window-mode"),
+        ("norm_mode", "--norm-mode"),
+        ("balmer_core_mask", "--balmer-core-mask"),
+        ("archive_mask_policy", "--archive-mask-policy"),
+        ("resolution_R", "--R"),
+        ("baseline_defaults_mode", "--baseline-defaults-mode"),
+        ("max_nfev", "--max-nfev"),
+        ("rv_grid_n", "--rv-grid-n"),
+        ("multistart", "--multistart"),
+        ("mdeg", "--mdeg"),
+        ("teff", "--teff"),
+        ("feh", "--feh"),
+        ("logg", "--logg"),
+        ("rv", "--rv"),
+        ("teff_min", "--teff-min"),
+        ("teff_max", "--teff-max"),
+        ("feh_min", "--feh-min"),
+        ("feh_max", "--feh-max"),
+        ("logg_min", "--logg-min"),
+        ("logg_max", "--logg-max"),
+        ("rv_min", "--rv-min"),
+        ("rv_max", "--rv-max"),
+    )
+    for attr, flag in replay_if_changed:
+        value = getattr(args, attr, None)
+        default = getattr(defaults, attr, None)
+        if value != default:
+            _append_option(parts, flag, value)
+    return parts
+
+
+def _summary_artifact_paths(output_json, suffix):
+    return {
+        "md": _path_with_suffix(output_json, "{0}_summary".format(suffix), ".md"),
+        "csv": _path_with_suffix(output_json, "{0}_summary".format(suffix), ".csv"),
+        "plot": _path_with_suffix(output_json, "{0}_summary".format(suffix), ".png"),
+    }
+
+
+def _publication_command(
+    args,
+    output_json,
+    *,
+    extra_parts=(),
+    output_plot=None,
+    systematic_csv=None,
+    injection_csv=None,
+    include_summary_outputs=True,
+):
+    parts = ["python", "examples/publication_quality_xshooter_uvb.py"]
+    parts.extend(_publication_replay_parts(args))
+    parts.extend(extra_parts)
+    parts.extend(["--output-json", str(output_json)])
+    _append_option(parts, "--output-plot", output_plot)
+    _append_option(parts, "--output-systematic-results-csv", systematic_csv)
+    _append_option(parts, "--output-injection-recovery-csv", injection_csv)
+    if include_summary_outputs:
+        paths = _summary_artifact_paths(output_json, "")
+        parts.extend(
+            [
+                "--output-publication-summary-md",
+                paths["md"],
+                "--output-publication-summary-csv",
+                paths["csv"],
+                "--output-publication-summary-plot",
+                paths["plot"],
+            ]
+        )
+    return _shell_join_multiline(parts)
+
+
+def _planned_variant_ids(payload, *, category, limit=2):
+    plan = payload.get("systematic_variant_plan") or {}
+    variants = [
+        item
+        for item in plan.get("variants") or ()
+        if item.get("category") == category
+        and item.get("id") != "baseline"
+        and bool(item.get("executable_now", True))
+    ]
+    variants.sort(key=_variant_priority_key)
+    return [str(item.get("id")) for item in variants[: int(limit)] if item.get("id")]
+
+
+def _check_by_scope(calibration, scope):
+    for item in calibration.get("checks") or ():
+        if item.get("scope") == scope:
+            return item
+    return None
+
+
+def _recommended_next_actions(args, payload, summary):
+    """Translate the current checkpoint state into bounded next commands.
+
+    The commands deliberately write new JSON checkpoints derived from
+    ``--output-json``.  At present the scaffold reruns the baseline when adding
+    expensive follow-up checks; fresh paths prevent accidental overwrites of a
+    reviewed checkpoint.
+    """
+    base_json = (
+        str(getattr(args, "output_json"))
+        if args is not None and getattr(args, "output_json", None) is not None
+        else "/tmp/spyctres_publication_xshooter_uvb.json"
+    )
+    calibration = summary.get("calibration_interpretation") or {}
+    actions = []
+
+    def add(action, priority, reason, *, command=None, status="recommended", expensive=False):
+        record = {
+            "priority": int(priority),
+            "action": action,
+            "status": status,
+            "reason": reason,
+            "requires_phoenix": bool(expensive),
+            "expensive": bool(expensive),
+            "writes_new_checkpoint": bool(command),
+            "checkpoint_policy": (
+                "Suggested commands write a fresh checkpoint and rerun from the "
+                "input spectrum; they do not mutate the current reviewed JSON."
+                if command
+                else None
+            ),
+            "command": command,
+        }
+        actions.append(record)
+
+    if not summary.get("baseline_available", False):
+        output_json = _path_with_suffix(base_json, "_baseline", ".json")
+        add(
+            "run_baseline_fit",
+            1,
+            "No baseline PHOENIX fit is present, so parameter-stability checks are not interpretable yet.",
+            command=_publication_command(
+                args,
+                output_json,
+                extra_parts=("--run-baseline-fit",),
+                output_plot=_path_with_suffix(output_json, "_referee", ".png"),
+            ),
+            expensive=True,
+        )
+        return actions
+
+    publication = payload.get("publication_readiness") or {}
+    blockers = list(publication.get("blockers") or ())
+    if blockers:
+        add(
+            "review_publication_readiness_blockers",
+            1,
+            "Publication-readiness blockers remain: {0}.".format(", ".join(blockers)),
+            status="manual_review_required",
+            expensive=False,
+        )
+
+    core_check = _check_by_scope(calibration, "core_mask_fit_sensitivity")
+    if core_check is None or core_check.get("assessment") == "not_evaluated":
+        variant_ids = _planned_variant_ids(
+            payload,
+            category="balmer_core_mask",
+            limit=2,
+        )
+        if variant_ids:
+            output_json = _path_with_suffix(base_json, "_coremask_variants", ".json")
+            add(
+                "run_core_mask_fit_sensitivity",
+                2,
+                "The audit grid is useful, but at least one fitted Balmer-core mask variant is still needed before publication-style claims.",
+                command=_publication_command(
+                    args,
+                    output_json,
+                    extra_parts=(
+                        "--run-baseline-fit",
+                        "--run-systematic-variants",
+                        "--systematic-variant-ids",
+                        ",".join(variant_ids),
+                    ),
+                    systematic_csv=_path_with_suffix(
+                        output_json,
+                        "_systematics",
+                        ".csv",
+                    ),
+                ),
+                expensive=True,
+            )
+        else:
+            add(
+                "inspect_core_mask_variant_plan",
+                2,
+                "No executable Balmer-core mask variants are present in the current systematic plan.",
+                status="manual_review_required",
+                expensive=False,
+            )
+    elif core_check.get("assessment") in {"blocking", "borderline"}:
+        add(
+            "review_core_mask_sensitivity",
+            2,
+            core_check.get("detail") or "Core-mask fit sensitivity is not yet acceptable.",
+            status="manual_review_required",
+            expensive=False,
+        )
+
+    window_check = _check_by_scope(calibration, "window_set_fit_sensitivity")
+    if window_check is None or window_check.get("assessment") == "not_evaluated":
+        variant_ids = _planned_variant_ids(payload, category="fit_windows", limit=2)
+        if variant_ids:
+            output_json = _path_with_suffix(base_json, "_windowset_variants", ".json")
+            add(
+                "run_window_set_sensitivity",
+                3,
+                "Run at least one single-line or leave-one-line-out Balmer fit to see whether the joint solution is dominated by one window.",
+                command=_publication_command(
+                    args,
+                    output_json,
+                    extra_parts=(
+                        "--run-baseline-fit",
+                        "--run-systematic-variants",
+                        "--systematic-variant-ids",
+                        ",".join(variant_ids),
+                    ),
+                    systematic_csv=_path_with_suffix(
+                        output_json,
+                        "_systematics",
+                        ".csv",
+                    ),
+                ),
+                expensive=True,
+            )
+        else:
+            add(
+                "inspect_window_variant_plan",
+                3,
+                "No executable window-set variants are present in the current systematic plan.",
+                status="manual_review_required",
+                expensive=False,
+            )
+    elif window_check.get("assessment") in {"blocking", "borderline"}:
+        add(
+            "review_window_set_sensitivity",
+            3,
+            window_check.get("detail") or "Window-set fit sensitivity is not yet acceptable.",
+            status="manual_review_required",
+            expensive=False,
+        )
+
+    recovery_check = _check_by_scope(calibration, "same_model_recovery")
+    if recovery_check is None or recovery_check.get("assessment") == "not_evaluated":
+        output_json = _path_with_suffix(base_json, "_injection_recovery", ".json")
+        add(
+            "run_same_model_injection_recovery",
+            4,
+            "Same-model synthetic recovery has not been run; use a small bounded trial set before treating random-noise recovery as understood.",
+            command=_publication_command(
+                args,
+                output_json,
+                extra_parts=(
+                    "--run-baseline-fit",
+                    "--run-injection-recovery",
+                    "--injection-recovery-trials",
+                    "3",
+                ),
+                injection_csv=_path_with_suffix(
+                    output_json,
+                    "_injection_recovery",
+                    ".csv",
+                ),
+            ),
+            expensive=True,
+        )
+    elif recovery_check.get("assessment") in {"blocking", "borderline"}:
+        add(
+            "review_same_model_recovery",
+            4,
+            recovery_check.get("detail") or "Same-model recovery is not yet acceptable.",
+            status="manual_review_required",
+            expensive=False,
+        )
+
+    if not actions:
+        add(
+            "share_summary_for_review",
+            5,
+            "All currently summarized publication checks are acceptable; share the Markdown/CSV/PNG summary with the reviewer and move to real reference-star validation.",
+            status="ready_for_review",
+            expensive=False,
+        )
+
+    actions.sort(key=lambda item: (int(item["priority"]), str(item["action"])))
+    return actions
+
+
+def _build_publication_comparison_summary(payload, args=None):
     baseline_fit = payload.get("baseline_fit")
     baseline_available = isinstance(baseline_fit, dict)
     rows = []
@@ -3611,7 +3953,7 @@ def _build_publication_comparison_summary(payload):
         )
     recommendations.extend(calibration.get("recommendations") or ())
 
-    return {
+    summary = {
         "schema_version": 1,
         "status": status,
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -3632,6 +3974,12 @@ def _build_publication_comparison_summary(payload):
             "blockers should be reviewed before scientific claims."
         ),
     }
+    summary["recommended_next_actions"] = _recommended_next_actions(
+        args,
+        payload,
+        summary,
+    )
+    return summary
 
 
 def _write_publication_summary_csv(path, summary):
@@ -3820,6 +4168,34 @@ def _write_publication_summary_markdown(path, summary):
     content.extend(
         [
             "",
+            "## Suggested next commands",
+            "",
+            (
+                "These are bounded follow-up suggestions generated from the "
+                "current checkpoint state. Commands write fresh checkpoints "
+                "derived from the current `--output-json` path."
+            ),
+            "",
+        ]
+    )
+    next_actions = summary.get("recommended_next_actions") or ()
+    if next_actions:
+        for action in next_actions:
+            content.append(
+                "- `{0}` ({1}): {2}".format(
+                    action.get("action"),
+                    action.get("status"),
+                    action.get("reason"),
+                )
+            )
+            command = action.get("command")
+            if command:
+                content.extend(["", "```bash", command, "```", ""])
+    else:
+        content.append("- No suggested next command.")
+    content.extend(
+        [
+            "",
             "## Calibration interpretation",
             "",
             "Overall assessment: `{0}`".format(
@@ -3928,7 +4304,7 @@ def _write_publication_summary_plot(path, summary):
 
 
 def _write_publication_summary_outputs(args, payload):
-    summary = _build_publication_comparison_summary(payload)
+    summary = _build_publication_comparison_summary(payload, args=args)
     payload["publication_summary"] = summary
     _write_publication_summary_csv(args.output_publication_summary_csv, summary)
     _write_publication_summary_markdown(args.output_publication_summary_md, summary)

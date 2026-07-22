@@ -75,6 +75,10 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert payload["publication_summary"]["status"] == "summary_ready_no_baseline_fit"
     assert payload["publication_summary"]["comparison_rows"] == []
     assert "baseline_not_run" in payload["publication_summary"]["headline_flags"]
+    next_actions = payload["publication_summary"]["recommended_next_actions"]
+    assert next_actions[0]["action"] == "run_baseline_fit"
+    assert "--run-baseline-fit" in next_actions[0]["command"]
+    assert "_baseline.json" in next_actions[0]["command"]
     assert payload["ordinary_readiness"]["n_fit_candidate"] > 0
     assert "publication_readiness" in payload
     assert "balmer_windows" in payload["analysis_design"]
@@ -140,6 +144,7 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert summary_csv.exists()
     assert summary_plot.exists()
     assert "Spyctres publication workflow summary" in summary_md.read_text()
+    assert "Suggested next commands" in summary_md.read_text()
     assert "delta_teff" in summary_csv.read_text().splitlines()[0]
 
 
@@ -265,12 +270,164 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
     assert (tmp_path / "summary" / "publication.png").exists()
     md_text = (tmp_path / "summary" / "publication.md").read_text()
     assert "Calibration interpretation" in md_text
+    assert "Suggested next commands" in md_text
     assert "Systematic variants" in md_text
     assert "Injection/recovery" in md_text
     csv_text = (tmp_path / "summary" / "publication.csv").read_text()
     assert "sensitivity_assessment" in csv_text.splitlines()[0]
     assert "continuum_mdeg_1" in csv_text
     assert "trial_1" in csv_text
+
+
+def test_publication_summary_recommends_baseline_command(tmp_path):
+    module = _load_publication_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "--output-json",
+            str(tmp_path / "publication.json"),
+        ]
+    )
+    payload = {
+        "publication_readiness": {
+            "publication_ready": False,
+            "blockers": ["base_fit_readiness_failed"],
+        },
+        "baseline_fit": None,
+        "systematic_variant_results": None,
+        "injection_recovery": None,
+    }
+
+    summary = module._build_publication_comparison_summary(payload, args=args)
+    actions = summary["recommended_next_actions"]
+
+    assert [item["action"] for item in actions] == ["run_baseline_fit"]
+    command = actions[0]["command"]
+    assert "--run-baseline-fit" in command
+    assert str(tmp_path / "publication_baseline.json") in command
+    assert str(tmp_path / "publication.json") not in command
+    assert actions[0]["writes_new_checkpoint"] is True
+
+
+def test_publication_summary_recommends_window_set_command(tmp_path):
+    module = _load_publication_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "--output-json",
+            str(tmp_path / "publication_fit.json"),
+        ]
+    )
+    payload = {
+        "publication_readiness": {"publication_ready": True, "blockers": []},
+        "per_line_balmer_diagnostics": {"core_mask_halfwidth_A": 4.0},
+        "core_mask_sensitivity": [
+            {
+                "core_mask_halfwidth_A": 0.0,
+                "n_fit_candidate": 1000,
+                "information_retention_fraction": 1.0,
+                "excessive_core_mask": False,
+            },
+            {
+                "core_mask_halfwidth_A": 4.0,
+                "n_fit_candidate": 930,
+                "information_retention_fraction": 0.93,
+                "excessive_core_mask": False,
+                "recommended_core_mask": True,
+            },
+        ],
+        "core_mask_sensitivity_recommendation": {
+            "recommended_core_mask_halfwidth_A": 4.0,
+        },
+        "baseline_fit": {
+            "success": True,
+            "teff": 9000.0,
+            "feh": 0.0,
+            "logg": 3.0,
+            "rv_kms": 0.0,
+            "chi2_red": 1.0,
+            "quality_flags": [],
+        },
+        "baseline_line_residual_diagnostics": None,
+        "systematic_variant_plan": {
+            "variants": [
+                {
+                    "id": "balmer_core_mask_4A",
+                    "category": "balmer_core_mask",
+                    "executable_now": True,
+                },
+                {
+                    "id": "window_set_single_hgamma",
+                    "category": "fit_windows",
+                    "executable_now": True,
+                },
+                {
+                    "id": "window_set_single_hbeta",
+                    "category": "fit_windows",
+                    "executable_now": True,
+                },
+            ],
+        },
+        "systematic_variant_results": {
+            "status": "completed",
+            "records": [
+                {
+                    "variant_id": "balmer_core_mask_4A",
+                    "category": "balmer_core_mask",
+                    "label": "Balmer-core mask half-width 4 A",
+                    "status": "ok",
+                    "fit": {
+                        "success": True,
+                        "teff": 9040.0,
+                        "feh": 0.0,
+                        "logg": 3.01,
+                        "rv_kms": 0.2,
+                        "chi2_red": 1.0,
+                        "quality_flags": [],
+                    },
+                }
+            ],
+        },
+        "injection_recovery": {
+            "status": "completed_all_recovered",
+            "records": [
+                {
+                    "trial_index": 1,
+                    "status": "ok",
+                    "fit_summary": {
+                        "success": True,
+                        "recovered": {
+                            "teff": 9001.0,
+                            "feh": 0.0,
+                            "logg": 3.0,
+                            "rv_kms": 0.0,
+                        },
+                        "delta": {
+                            "teff": 1.0,
+                            "feh": 0.0,
+                            "logg": 0.0,
+                            "rv_kms": 0.0,
+                        },
+                        "chi2_red": 1.0,
+                        "quality_flags": [],
+                        "all_passed": True,
+                    },
+                }
+            ],
+        },
+    }
+
+    summary = module._build_publication_comparison_summary(payload, args=args)
+    actions = {
+        item["action"]: item
+        for item in summary["recommended_next_actions"]
+    }
+
+    assert "run_window_set_sensitivity" in actions
+    command = actions["run_window_set_sensitivity"]["command"]
+    assert "--run-systematic-variants" in command
+    assert "--systematic-variant-ids" in command
+    assert "window_set_single_hgamma,window_set_single_hbeta" in command
+    assert str(tmp_path / "publication_fit_windowset_variants.json") in command
+    assert str(tmp_path / "publication_fit.json") not in command
 
 
 def test_calibration_interpretation_flags_core_mask_and_window_sensitivity():

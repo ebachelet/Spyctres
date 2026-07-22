@@ -560,6 +560,9 @@ labels readiness, Balmer-core mask sensitivity, window-set sensitivity, and
 same-model recovery as acceptable, borderline, blocking, or not yet evaluated.
 These labels are triage aids with explicit thresholds, not final calibrated
 uncertainties.
+The Markdown/JSON summary also includes bounded suggested next commands. These
+commands write fresh follow-up checkpoints derived from the current
+`--output-json` path rather than mutating a previously reviewed checkpoint.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,

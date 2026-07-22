@@ -94,7 +94,10 @@ requirements.
    residual proxies and same-window residual summaries when reconstructed
    model arrays are available, so users can compare parameter stability and
    residual behaviour without treating raw in-fit chi-square as a winner
-   selector. The remaining work is to interpret/calibrate the selected
+   selector. The publication summary now includes bounded suggested next
+   commands for the current checkpoint state, writing fresh follow-up JSON
+   products instead of mutating reviewed checkpoints. The remaining work is to
+   interpret/calibrate the selected
    systematic variants and same-model recovery behaviour on real spectra, add
    external reference-star recovery validation, profile scans, and final
    uncertainty tables. The first diagnostic-window catalog
@@ -113,6 +116,13 @@ requirements.
    wavelength-dependent LSF fitting, compression/MOPED-style acceleration,
    posterior samplers, alternative atmosphere backends, a GUI, and publication
    SED/arm-scaling modes.
+
+7. **Final pre-beta audit.**
+   Before treating Spyctres as stable enough for broader collaborator use,
+   run a whole-package audit: public API compatibility, source-distribution and
+   package-data checks, Django/server-side plotting compatibility with
+   non-interactive Matplotlib backends, example clarity and ordering, notebook
+   reproducibility, and a final pass over README/setup instructions.
 
 ## New publication-readiness gate
 
