@@ -53,7 +53,11 @@ requirements.
 3. **Real-spectrum validation.**
    Expand and maintain validation on real spectra, especially X-SHOOTER/XSL
    reference spectra and bundled examples. Stress/peculiar targets should remain
-   separated from ordinary recovery statistics.
+   separated from ordinary recovery statistics. The XSL validation plotting
+   companion should produce reviewer-facing Markdown/CSV/PNG recovery summaries
+   from saved checkpoints without rerunning PHOENIX. After the XSL reference
+   path is stable, add clean and dirty SDSS and UVES-POP spectra to the
+   cross-instrument validation queue.
 
 4. **Publication-oriented X-SHOOTER UVB workflow.**
    Add a separate expert workflow, not a replacement for

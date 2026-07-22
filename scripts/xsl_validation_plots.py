@@ -8,6 +8,7 @@ python scripts/xsl_validation_plots.py /tmp/xsl_validation_results.json \
 """
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -25,6 +26,28 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from Spyctres import plot_xsl_validation_payload
+
+
+REFERENCE_RECOVERY_THRESHOLDS = {
+    "teff": {
+        "label": "Teff",
+        "unit": "K",
+        "acceptable_abs_delta": 250.0,
+        "review_abs_delta": 500.0,
+    },
+    "logg": {
+        "label": "logg",
+        "unit": "dex",
+        "acceptable_abs_delta": 0.5,
+        "review_abs_delta": 1.0,
+    },
+    "feh": {
+        "label": "[Fe/H]",
+        "unit": "dex",
+        "acceptable_abs_delta": 0.3,
+        "review_abs_delta": 0.6,
+    },
+}
 
 
 def build_parser():
@@ -92,6 +115,32 @@ def build_parser():
         default=None,
         help="Optional cap on the number of rendered targets.",
     )
+    parser.add_argument(
+        "--no-target-plots",
+        action="store_true",
+        help=(
+            "Skip per-target observed/model plots. Useful when only compact "
+            "reference-recovery summary artifacts are requested."
+        ),
+    )
+    parser.add_argument(
+        "--output-summary-md",
+        default=None,
+        help=(
+            "Optional Markdown reference-recovery summary comparing fitted "
+            "parameters to manifest/literature values."
+        ),
+    )
+    parser.add_argument(
+        "--output-summary-csv",
+        default=None,
+        help="Optional CSV table of per-target reference-recovery deltas.",
+    )
+    parser.add_argument(
+        "--output-summary-plot",
+        default=None,
+        help="Optional compact PNG/SVG/PDF plot of reference-recovery deltas.",
+    )
     return parser
 
 
@@ -149,6 +198,484 @@ def _finite_float(value, default):
     if not math.isfinite(out):
         return float(default)
     return out
+
+
+def _finite_or_none(value):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out):
+        return None
+    return out
+
+
+def _format_value(value):
+    value = _finite_or_none(value)
+    if value is None:
+        return "—"
+    if abs(value) >= 100:
+        return "{0:.1f}".format(value)
+    if abs(value) >= 10:
+        return "{0:.2f}".format(value)
+    return "{0:.4g}".format(value)
+
+
+def _assessment_from_delta(delta, thresholds):
+    value = _finite_or_none(delta)
+    if value is None:
+        return "not_evaluated"
+    abs_delta = abs(value)
+    if abs_delta <= float(thresholds["acceptable_abs_delta"]):
+        return "acceptable"
+    if abs_delta <= float(thresholds["review_abs_delta"]):
+        return "borderline"
+    return "needs_review"
+
+
+def _worst_assessment(values):
+    rank = {
+        "diagnostic_only": 0,
+        "acceptable": 1,
+        "borderline": 2,
+        "not_evaluated": 3,
+        "needs_review": 4,
+    }
+    ranked = [value for value in values if value in rank]
+    if not ranked:
+        return "not_evaluated"
+    return max(ranked, key=lambda value: rank[value])
+
+
+def _median(values):
+    values = sorted(value for value in values if value is not None)
+    n_values = len(values)
+    if not n_values:
+        return None
+    mid = n_values // 2
+    if n_values % 2:
+        return float(values[mid])
+    return float(0.5 * (values[mid - 1] + values[mid]))
+
+
+def _quality_flags(row):
+    report = row.get("quality_report") or {}
+    if isinstance(report, dict):
+        flags = report.get("quality_flags") or report.get("flags") or ()
+    else:
+        flags = ()
+    return [str(flag) for flag in flags]
+
+
+def _reference_recovery_row(row):
+    reference = row.get("reference") or {}
+    fit = row.get("fit") or {}
+    delta_payload = row.get("delta") or {}
+    status = str(row.get("status", "unknown") or "unknown")
+    statistics_group = str(
+        row.get("statistics_group", "diagnostic_only") or "diagnostic_only"
+    )
+    ordinary = statistics_group == "ordinary_recovery"
+    out = {
+        "xsl_id": row.get("xsl_id"),
+        "star_name": row.get("star_name"),
+        "spectral_type": row.get("spectral_type"),
+        "validation_role": row.get("validation_role", "unknown"),
+        "statistics_group": statistics_group,
+        "status": status,
+        "enters_ordinary_recovery_statistics": bool(ordinary and status == "ok"),
+        "quality_flags": _quality_flags(row),
+    }
+    assessments = []
+    for key in ("teff", "logg", "feh"):
+        ref = _finite_or_none(reference.get(key))
+        value = _finite_or_none(fit.get(key))
+        delta = _finite_or_none(delta_payload.get(key))
+        if delta is None and ref is not None and value is not None:
+            delta = value - ref
+        assessment = (
+            _assessment_from_delta(delta, REFERENCE_RECOVERY_THRESHOLDS[key])
+            if ordinary and status == "ok"
+            else "diagnostic_only"
+        )
+        out["{0}_ref".format(key)] = ref
+        out["{0}_fit".format(key)] = value
+        out["delta_{0}".format(key)] = delta
+        out["{0}_assessment".format(key)] = assessment
+        assessments.append(assessment)
+    out["recovery_assessment"] = (
+        _worst_assessment(assessments)
+        if ordinary and status == "ok"
+        else "diagnostic_only"
+    )
+    if status == "unsupported_physics":
+        out["recovery_assessment"] = "diagnostic_only"
+    return out
+
+
+def build_reference_recovery_summary(payload):
+    """Build a compact, role-aware XSL/reference-star recovery summary."""
+    rows = [
+        _reference_recovery_row(row)
+        for row in payload.get("results", [])
+        if isinstance(row, dict)
+    ]
+    ordinary = [
+        row
+        for row in rows
+        if row["enters_ordinary_recovery_statistics"]
+    ]
+    ordinary_assessment = _worst_assessment(
+        row.get("recovery_assessment") for row in ordinary
+    )
+    if not ordinary:
+        status = "summary_ready_no_ordinary_reference_fits"
+        claim_status = "no_standard_reference_recovery"
+        plain = (
+            "No successful ordinary standard-reference targets are available. "
+            "Stress, peculiar, diagnostic, and unsupported targets are listed "
+            "but excluded from recovery statistics."
+        )
+    elif ordinary_assessment == "not_evaluated":
+        status = "summary_ready_reference_recovery_not_evaluated"
+        claim_status = "standard_reference_recovery_not_evaluated"
+        plain = (
+            "Successful ordinary standard-reference targets are present, but "
+            "their reference-parameter deltas could not be evaluated. Check "
+            "the validation manifest reference values before interpreting "
+            "this as a recovery pass."
+        )
+    elif ordinary_assessment == "needs_review":
+        status = "summary_ready_reference_recovery_needs_review"
+        claim_status = "reference_recovery_needs_review"
+        plain = (
+            "At least one ordinary XSL/reference-star recovery exceeds the "
+            "provisional review thresholds. Inspect the per-target plots, "
+            "metadata, masks, and PHOENIX applicability before using the "
+            "configuration as a clean reference demonstration."
+        )
+    elif ordinary_assessment == "borderline":
+        status = "summary_ready_reference_recovery_borderline"
+        claim_status = "reference_recovery_borderline"
+        plain = (
+            "Ordinary reference-star recovery is borderline under the "
+            "provisional thresholds. This is useful validation evidence, but "
+            "not yet a clean pass."
+        )
+    else:
+        status = "summary_ready_reference_recovery_acceptable"
+        claim_status = "reference_recovery_acceptable_for_current_thresholds"
+        plain = (
+            "Ordinary reference-star recovery is acceptable under the current "
+            "provisional thresholds. This supports moving to additional "
+            "reference stars and cross-instrument validation."
+        )
+
+    stats = {"count": int(len(ordinary))}
+    for key in ("teff", "logg", "feh"):
+        deltas = [row.get("delta_{0}".format(key)) for row in ordinary]
+        stats[key] = {
+            "median_delta": _median(deltas),
+            "median_absolute_delta": _median(
+                [None if value is None else abs(value) for value in deltas]
+            ),
+            "max_absolute_delta": (
+                None
+                if not [value for value in deltas if value is not None]
+                else float(max(abs(value) for value in deltas if value is not None))
+            ),
+        }
+
+    diagnostic_rows = [
+        row for row in rows if not row["enters_ordinary_recovery_statistics"]
+    ]
+    recommendations = []
+    if status == "summary_ready_no_ordinary_reference_fits":
+        recommendations.append(
+            "Run at least one validation_role=standard XSL reference target successfully."
+        )
+    if status == "summary_ready_reference_recovery_not_evaluated":
+        recommendations.append(
+            "Populate reference Teff/logg/[Fe/H] values for ordinary standard targets before claiming parameter recovery."
+        )
+    if status == "summary_ready_reference_recovery_needs_review":
+        recommendations.append(
+            "Inspect ordinary targets with recovery_assessment=needs_review before promoting this workflow."
+        )
+    if diagnostic_rows:
+        recommendations.append(
+            "Keep diagnostic/stress/unsupported targets separate from ordinary recovery statistics."
+        )
+    recommendations.append(
+        "Next cross-instrument validation should include the user's clean and dirty SDSS and UVES-POP spectra."
+    )
+
+    return {
+        "schema_version": 1,
+        "status": status,
+        "claim_status": claim_status,
+        "plain_language_summary": plain,
+        "thresholds": REFERENCE_RECOVERY_THRESHOLDS,
+        "statistics_policy": (
+            "Only status='ok' rows with statistics_group='ordinary_recovery' "
+            "enter ordinary reference-recovery statistics. Stress, peculiar, "
+            "diagnostic, and unsupported targets are displayed but excluded."
+        ),
+        "ordinary_recovery_statistics": stats,
+        "validation_role_summary": payload.get("validation_role_summary") or {},
+        "rows": rows,
+        "ordinary_rows": ordinary,
+        "diagnostic_or_stress_rows": diagnostic_rows,
+        "recommendations": recommendations,
+    }
+
+
+def _markdown_table(columns, rows):
+    if not rows:
+        return "_No rows available._\n"
+    lines = [
+        "| " + " | ".join(label for _key, label in columns) + " |",
+        "| " + " | ".join("---" for _key, _label in columns) + " |",
+    ]
+    for row in rows:
+        values = []
+        for key, _label in columns:
+            value = row.get(key)
+            if isinstance(value, (list, tuple)):
+                value = ", ".join(str(item) for item in value)
+            elif isinstance(value, (int, float)):
+                value = _format_value(value)
+            elif value is None or value == "":
+                value = "—"
+            values.append(str(value).replace("|", "\\|"))
+        lines.append("| " + " | ".join(values) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def write_reference_recovery_summary_csv(path, summary):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "xsl_id",
+        "star_name",
+        "spectral_type",
+        "validation_role",
+        "statistics_group",
+        "status",
+        "enters_ordinary_recovery_statistics",
+        "recovery_assessment",
+        "teff_ref",
+        "teff_fit",
+        "delta_teff",
+        "teff_assessment",
+        "logg_ref",
+        "logg_fit",
+        "delta_logg",
+        "logg_assessment",
+        "feh_ref",
+        "feh_fit",
+        "delta_feh",
+        "feh_assessment",
+        "quality_flags",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in summary.get("rows", ()):
+            writer.writerow(
+                {
+                    **{key: row.get(key) for key in columns if key != "quality_flags"},
+                    "quality_flags": ";".join(row.get("quality_flags") or ()),
+                }
+            )
+
+
+def write_reference_recovery_summary_markdown(path, summary):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stats = summary.get("ordinary_recovery_statistics") or {}
+    columns = [
+        ("xsl_id", "id"),
+        ("spectral_type", "type"),
+        ("validation_role", "role"),
+        ("status", "status"),
+        ("recovery_assessment", "assessment"),
+        ("teff_ref", "Teff ref"),
+        ("teff_fit", "Teff fit"),
+        ("delta_teff", "ΔTeff"),
+        ("logg_ref", "logg ref"),
+        ("logg_fit", "logg fit"),
+        ("delta_logg", "Δlogg"),
+        ("feh_ref", "[Fe/H] ref"),
+        ("feh_fit", "[Fe/H] fit"),
+        ("delta_feh", "Δ[Fe/H]"),
+    ]
+    stat_rows = []
+    for key, label in (("teff", "Teff"), ("logg", "logg"), ("feh", "[Fe/H]")):
+        entry = stats.get(key) or {}
+        stat_rows.append(
+            {
+                "parameter": label,
+                "median_delta": entry.get("median_delta"),
+                "median_absolute_delta": entry.get("median_absolute_delta"),
+                "max_absolute_delta": entry.get("max_absolute_delta"),
+            }
+        )
+    stat_columns = [
+        ("parameter", "parameter"),
+        ("median_delta", "median Δ"),
+        ("median_absolute_delta", "median abs Δ"),
+        ("max_absolute_delta", "max abs Δ"),
+    ]
+    content = [
+        "# Spyctres XSL reference-recovery summary",
+        "",
+        "Status: `{0}`".format(summary.get("status")),
+        "",
+        "Claim status: `{0}`".format(summary.get("claim_status")),
+        "",
+        summary.get("plain_language_summary", ""),
+        "",
+        "Statistics policy: {0}".format(summary.get("statistics_policy")),
+        "",
+        "## Recommendations",
+        "",
+    ]
+    recommendations = summary.get("recommendations") or ()
+    if recommendations:
+        content.extend("- {0}".format(item) for item in recommendations)
+    else:
+        content.append("- No summary-level recommendations.")
+    content.extend(
+        [
+            "",
+            "## Ordinary recovery statistics",
+            "",
+            "Ordinary standard-reference count: `{0}`".format(stats.get("count", 0)),
+            "",
+            _markdown_table(stat_columns, stat_rows),
+            "",
+            "## Ordinary standard-reference rows",
+            "",
+            _markdown_table(columns, summary.get("ordinary_rows") or ()),
+            "",
+            "## Diagnostic/stress/unsupported rows",
+            "",
+            _markdown_table(columns, summary.get("diagnostic_or_stress_rows") or ()),
+            "",
+        ]
+    )
+    path.write_text("\n".join(content), encoding="utf-8")
+
+
+def plot_reference_recovery_summary(summary, savepath=None):
+    """Plot compact reference-recovery deltas for ordinary validation targets."""
+    rows = list(summary.get("ordinary_rows") or ())
+    if not rows:
+        rows = [
+            row for row in summary.get("rows", ()) if row.get("status") == "ok"
+        ]
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(12.0, 8.0),
+        sharex=True,
+        constrained_layout=True,
+    )
+    axes = list(axes)
+    if not rows:
+        for ax in axes:
+            ax.axis("off")
+        axes[0].text(
+            0.5,
+            0.5,
+            "No successful XSL reference-recovery rows to plot.",
+            ha="center",
+            va="center",
+            transform=axes[0].transAxes,
+        )
+    else:
+        labels = [str(row.get("xsl_id") or index) for index, row in enumerate(rows)]
+        x = list(range(len(rows)))
+        colors = {
+            "acceptable": "tab:green",
+            "borderline": "tab:orange",
+            "needs_review": "tab:red",
+            "diagnostic_only": "0.6",
+            "not_evaluated": "0.7",
+        }
+        for ax, key, ylabel in zip(
+            axes,
+            ("teff", "logg", "feh"),
+            ("ΔTeff [K]", "Δlogg [dex]", "Δ[Fe/H] [dex]"),
+        ):
+            values = [
+                _finite_or_none(row.get("delta_{0}".format(key))) for row in rows
+            ]
+            heights = [0.0 if value is None else value for value in values]
+            bar_colors = [
+                colors.get(row.get("{0}_assessment".format(key)), "0.5")
+                for row in rows
+            ]
+            ax.axhline(0.0, color="0.25", lw=0.8)
+            threshold = REFERENCE_RECOVERY_THRESHOLDS[key]
+            ax.axhline(
+                threshold["acceptable_abs_delta"],
+                color="tab:green",
+                ls=":",
+                lw=0.8,
+                alpha=0.75,
+            )
+            ax.axhline(
+                -threshold["acceptable_abs_delta"],
+                color="tab:green",
+                ls=":",
+                lw=0.8,
+                alpha=0.75,
+            )
+            ax.axhline(
+                threshold["review_abs_delta"],
+                color="tab:red",
+                ls="--",
+                lw=0.8,
+                alpha=0.75,
+            )
+            ax.axhline(
+                -threshold["review_abs_delta"],
+                color="tab:red",
+                ls="--",
+                lw=0.8,
+                alpha=0.75,
+            )
+            ax.bar(x, heights, color=bar_colors, alpha=0.85)
+            ax.set_ylabel(ylabel)
+            ax.grid(axis="y", alpha=0.25)
+        axes[-1].set_xticks(x)
+        axes[-1].set_xticklabels(labels, rotation=35, ha="right")
+    fig.suptitle("XSL reference-star recovery summary")
+    if savepath is not None:
+        savepath = Path(savepath)
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(savepath, dpi=160)
+    return fig, axes
+
+
+def write_reference_recovery_summary_outputs(
+    summary,
+    *,
+    output_md=None,
+    output_csv=None,
+    output_plot=None,
+):
+    write_reference_recovery_summary_markdown(output_md, summary)
+    write_reference_recovery_summary_csv(output_csv, summary)
+    if output_plot is not None:
+        fig, _axes = plot_reference_recovery_summary(summary, savepath=output_plot)
+        plt.close(fig)
 
 
 def iter_validation_plot_rows(
@@ -259,21 +786,58 @@ def main(argv=None):
         output_dir = str(results_path.with_name(results_path.stem + "_plots"))
 
     payload = load_validation_results(results_path)
-    images = render_validation_plots(
-        payload,
-        output_dir=output_dir,
-        output_pdf=args.output_pdf,
-        scale_mode=args.scale_mode,
-        image_format=args.format,
-        dpi=args.dpi,
-        xsl_ids=args.xsl_id,
-        statuses=args.status or ("ok",),
-        max_targets=args.max_targets,
-    )
-    print("Rendered {0} XSL validation plot(s).".format(len(images)), flush=True)
-    print("Image directory: {0}".format(os.path.abspath(output_dir)), flush=True)
-    if args.output_pdf:
-        print("PDF: {0}".format(os.path.abspath(args.output_pdf)), flush=True)
+    if (
+        args.output_summary_md is not None
+        or args.output_summary_csv is not None
+        or args.output_summary_plot is not None
+    ):
+        summary = build_reference_recovery_summary(payload)
+        write_reference_recovery_summary_outputs(
+            summary,
+            output_md=args.output_summary_md,
+            output_csv=args.output_summary_csv,
+            output_plot=args.output_summary_plot,
+        )
+        print(
+            "Reference-recovery summary: {0}".format(summary["status"]),
+            flush=True,
+        )
+        if args.output_summary_md:
+            print(
+                "Summary Markdown: {0}".format(
+                    os.path.abspath(args.output_summary_md)
+                ),
+                flush=True,
+            )
+        if args.output_summary_csv:
+            print(
+                "Summary CSV: {0}".format(os.path.abspath(args.output_summary_csv)),
+                flush=True,
+            )
+        if args.output_summary_plot:
+            print(
+                "Summary plot: {0}".format(
+                    os.path.abspath(args.output_summary_plot)
+                ),
+                flush=True,
+            )
+
+    if not args.no_target_plots:
+        images = render_validation_plots(
+            payload,
+            output_dir=output_dir,
+            output_pdf=args.output_pdf,
+            scale_mode=args.scale_mode,
+            image_format=args.format,
+            dpi=args.dpi,
+            xsl_ids=args.xsl_id,
+            statuses=args.status or ("ok",),
+            max_targets=args.max_targets,
+        )
+        print("Rendered {0} XSL validation plot(s).".format(len(images)), flush=True)
+        print("Image directory: {0}".format(os.path.abspath(output_dir)), flush=True)
+        if args.output_pdf:
+            print("PDF: {0}".format(os.path.abspath(args.output_pdf)), flush=True)
     return 0
 
 

@@ -318,6 +318,19 @@ one global display scale per star. Use `--scale-mode per_segment` only for
 line-shape debugging, because that mode independently median-normalizes each
 arm and should not be read as an arm-to-arm flux comparison.
 
+To produce compact reviewer-facing recovery summaries from the same JSON,
+write Markdown/CSV/PNG summary artifacts. These compare fitted values against
+the manifest/literature reference parameters, keep standard targets separate
+from diagnostic/stress targets, and do not rerun PHOENIX:
+
+```bash
+python scripts/xsl_validation_plots.py /tmp/xsl_validation_results.json \
+  --no-target-plots \
+  --output-summary-md /tmp/xsl_reference_recovery_summary.md \
+  --output-summary-csv /tmp/xsl_reference_recovery_summary.csv \
+  --output-summary-plot /tmp/xsl_reference_recovery_summary.png
+```
+
 The DR3 paper identifies the stellar-rest-frame wavelengths as air wavelengths,
 which is therefore the reader and runner default. The runner uses 4000--9000 A
 by default, excludes the published dichroic-contamination region, and records

@@ -38,6 +38,40 @@ def _payload():
     }
 
 
+def _summary_payload():
+    return {
+        "validation_role_summary": {
+            "ordinary_recovery_count": 1,
+            "diagnostic_or_stress_count": 1,
+        },
+        "results": [
+            {
+                "xsl_id": "XSTD",
+                "star_name": "standard",
+                "spectral_type": "G2V",
+                "validation_role": "standard",
+                "statistics_group": "ordinary_recovery",
+                "status": "ok",
+                "reference": {"teff": 5770.0, "logg": 4.4, "feh": 0.0},
+                "fit": {"teff": 5800.0, "logg": 4.45, "feh": 0.05},
+                "delta": {"teff": 30.0, "logg": 0.05, "feh": 0.05},
+                "quality_report": {"quality_flags": ["minor_flag"]},
+            },
+            {
+                "xsl_id": "XSTRESS",
+                "star_name": "stress",
+                "spectral_type": "C",
+                "validation_role": "carbon_star",
+                "statistics_group": "diagnostic_only",
+                "status": "ok",
+                "reference": {"teff": 3500.0, "logg": 1.0, "feh": -0.5},
+                "fit": {"teff": 7000.0, "logg": 4.0, "feh": 0.5},
+                "delta": {"teff": 3500.0, "logg": 3.0, "feh": 1.0},
+            },
+        ],
+    }
+
+
 def test_render_validation_plots_writes_png_and_pdf(tmp_path):
     output_dir = tmp_path / "plots"
     output_pdf = tmp_path / "plots.pdf"
@@ -72,3 +106,71 @@ def test_main_defaults_to_sibling_plot_directory(tmp_path):
 
     assert status == 0
     assert (tmp_path / "xsl_results_plots" / "X0001_G2V.png").exists()
+
+
+def test_reference_recovery_summary_excludes_stress_from_ordinary_stats():
+    summary = xsl_validation_plots.build_reference_recovery_summary(_summary_payload())
+
+    assert summary["status"] == "summary_ready_reference_recovery_acceptable"
+    assert summary["claim_status"] == "reference_recovery_acceptable_for_current_thresholds"
+    assert summary["ordinary_recovery_statistics"]["count"] == 1
+    assert summary["ordinary_recovery_statistics"]["teff"]["median_delta"] == 30.0
+    assert len(summary["ordinary_rows"]) == 1
+    assert len(summary["diagnostic_or_stress_rows"]) == 1
+    assert summary["diagnostic_or_stress_rows"][0]["recovery_assessment"] == "diagnostic_only"
+    assert any("SDSS and UVES-POP" in item for item in summary["recommendations"])
+
+
+def test_reference_recovery_summary_flags_standard_outlier():
+    payload = _summary_payload()
+    payload["results"][0]["fit"]["teff"] = 6600.0
+    payload["results"][0]["delta"]["teff"] = 830.0
+
+    summary = xsl_validation_plots.build_reference_recovery_summary(payload)
+
+    assert summary["status"] == "summary_ready_reference_recovery_needs_review"
+    assert summary["claim_status"] == "reference_recovery_needs_review"
+    assert summary["ordinary_rows"][0]["recovery_assessment"] == "needs_review"
+
+
+def test_reference_recovery_summary_missing_reference_is_not_acceptable():
+    payload = _summary_payload()
+    payload["results"][0]["reference"] = {}
+    payload["results"][0]["delta"] = {}
+
+    summary = xsl_validation_plots.build_reference_recovery_summary(payload)
+
+    assert summary["status"] == "summary_ready_reference_recovery_not_evaluated"
+    assert summary["claim_status"] == "standard_reference_recovery_not_evaluated"
+    assert summary["ordinary_rows"][0]["recovery_assessment"] == "not_evaluated"
+
+
+def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
+    results = tmp_path / "xsl_results.json"
+    md = tmp_path / "summary" / "xsl_summary.md"
+    csv_path = tmp_path / "summary" / "xsl_summary.csv"
+    plot = tmp_path / "summary" / "xsl_summary.png"
+    results.write_text(json.dumps(_summary_payload()), encoding="utf-8")
+
+    status = xsl_validation_plots.main(
+        [
+            str(results),
+            "--no-target-plots",
+            "--output-summary-md",
+            str(md),
+            "--output-summary-csv",
+            str(csv_path),
+            "--output-summary-plot",
+            str(plot),
+        ]
+    )
+
+    assert status == 0
+    assert md.exists()
+    assert csv_path.exists()
+    assert plot.exists()
+    md_text = md.read_text(encoding="utf-8")
+    assert "Spyctres XSL reference-recovery summary" in md_text
+    assert "Diagnostic/stress/unsupported rows" in md_text
+    csv_header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+    assert "recovery_assessment" in csv_header

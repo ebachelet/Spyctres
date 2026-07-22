@@ -59,7 +59,10 @@ scientific than smoke tests.
 - `xsl_validation.py` runs batch validation against locally downloaded XSL DR3
   spectra using the manifest roles and validation budgets.
 - `xsl_validation_plots.py` renders saved XSL validation JSON payloads into
-  classification plots for inspection and review.
+  classification plots for inspection and review. It can also write compact
+  Markdown/CSV/PNG reference-recovery summaries from the same JSON without
+  rerunning PHOENIX, keeping standard recovery targets separate from
+  diagnostic/stress/unsupported targets.
 - `diagnostic_window_audit.py` runs the PHOENIX-free diagnostic-window selector
   over a manifest, such as the bundled XSL Figure 1 validation manifest, and
   writes role-aware JSON/CSV summaries plus an optional top-window heatmap. Use
