@@ -481,6 +481,10 @@ calibration-interpretation table that labels readiness, core-mask sensitivity,
 window-set sensitivity, and same-model recovery as acceptable, borderline,
 blocking, or not yet evaluated. Those labels are triage guidance with explicit
 thresholds; they are not calibrated final uncertainties.
+The same summary includes a plain-language publication-stability verdict. If
+single-window Balmer fits, mask variants, recovery trials, or readiness checks
+disagree, it explicitly labels the run as diagnostic/exploratory rather than
+publication-stable.
 The Markdown and JSON summary also include suggested next commands for the
 current checkpoint state, such as a baseline run, bounded core-mask/window-set
 variants, or a small same-model injection/recovery check. Suggested commands

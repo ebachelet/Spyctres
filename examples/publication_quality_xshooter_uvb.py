@@ -3484,6 +3484,123 @@ def _build_calibration_interpretation(payload, rows):
     }
 
 
+def _build_publication_stability_interpretation(payload, rows, calibration):
+    """Return a plain-language verdict for the current publication scaffold.
+
+    This intentionally interprets already-computed checks only.  It does not
+    alter the fit, choose a model, or rescue an unstable result.
+    """
+    baseline_fit = payload.get("baseline_fit")
+    baseline_available = isinstance(baseline_fit, dict)
+    checks = list(calibration.get("checks") or ())
+    blocking_checks = [
+        dict(check) for check in checks if check.get("assessment") == "blocking"
+    ]
+    borderline_checks = [
+        dict(check) for check in checks if check.get("assessment") == "borderline"
+    ]
+    missing_checks = [
+        dict(check) for check in checks if check.get("assessment") == "not_evaluated"
+    ]
+    unstable_rows = [
+        {
+            "source_id": row.get("source_id"),
+            "label": row.get("label"),
+            "sensitivity_scope": row.get("sensitivity_scope"),
+            "sensitivity_assessment": row.get("sensitivity_assessment"),
+            "sensitivity_reasons": list(row.get("sensitivity_reasons") or ()),
+            "delta_teff": row.get("delta_teff"),
+            "delta_feh": row.get("delta_feh"),
+            "delta_logg": row.get("delta_logg"),
+            "delta_rv_kms": row.get("delta_rv_kms"),
+            "delta_chi2_red": row.get("delta_chi2_red"),
+        }
+        for row in rows
+        if row.get("source_kind") != "baseline"
+        and row.get("sensitivity_assessment") in {"blocking", "borderline"}
+    ]
+
+    if not baseline_available:
+        claim_status = "not_evaluated_baseline_missing"
+        plain = (
+            "No baseline PHOENIX fit is present yet. Use the audit products to "
+            "inspect masks and metadata, then run the baseline before judging "
+            "parameter stability."
+        )
+        guidance = (
+            "Do not quote stellar parameters from this checkpoint; it is an "
+            "audit scaffold only."
+        )
+    elif blocking_checks:
+        claim_status = "exploratory_not_publication_stable"
+        plain = (
+            "The scaffold is behaving as designed: it found one or more "
+            "blocking publication-stability checks. Treat the current fitted "
+            "parameters as diagnostic/exploratory rather than publication-grade."
+        )
+        guidance = (
+            "Inspect the limiting checks and referee plots before changing "
+            "model assumptions. A lower chi-square in one window is not enough "
+            "to promote the result."
+        )
+    elif borderline_checks or missing_checks:
+        claim_status = "exploratory_needs_additional_checks"
+        plain = (
+            "No blocking instability is summarized, but at least one check is "
+            "borderline or not yet evaluated. The result is still a candidate "
+            "classification/diagnostic fit, not a calibrated publication fit."
+        )
+        guidance = (
+            "Run the suggested bounded follow-up checks, then regenerate the "
+            "summary before using parameters scientifically."
+        )
+    elif calibration.get("overall_assessment") == "acceptable":
+        claim_status = "current_scaffold_checks_passed"
+        plain = (
+            "The currently summarized scaffold checks are acceptable. This is "
+            "a readiness signal for reviewer inspection, not an external "
+            "validation against reference-star literature."
+        )
+        guidance = (
+            "Share the summary and proceed to real reference-star validation "
+            "before broader claims."
+        )
+    else:
+        claim_status = "not_evaluated"
+        plain = (
+            "Publication stability cannot be interpreted from the current "
+            "checkpoint because the required calibration summary is incomplete."
+        )
+        guidance = "Run or regenerate the publication summary after the needed checks."
+
+    if unstable_rows:
+        worst_scopes = sorted(
+            {
+                str(row.get("sensitivity_scope"))
+                for row in unstable_rows
+                if row.get("sensitivity_scope")
+            }
+        )
+    else:
+        worst_scopes = []
+
+    return {
+        "schema_version": 1,
+        "claim_status": claim_status,
+        "plain_language_summary": plain,
+        "user_guidance": guidance,
+        "limiting_checks": blocking_checks + borderline_checks,
+        "missing_checks": missing_checks,
+        "unstable_fit_rows": unstable_rows,
+        "dominant_instability_scopes": worst_scopes,
+        "interpretation": (
+            "Plain-language interpretation of already-computed publication "
+            "readiness, mask, window-set, and recovery checks. This is a "
+            "reporting layer only and does not alter the likelihood."
+        ),
+    }
+
+
 def _path_with_suffix(path, suffix, extension=None):
     """Return a sibling path with an added suffix and optional new extension."""
     path = Path(path)
@@ -3916,6 +4033,11 @@ def _build_publication_comparison_summary(payload, args=None):
     calibration = _build_calibration_interpretation(payload, rows)
     for flag in calibration.get("headline_flags") or ():
         headline_flags.add(flag)
+    stability = _build_publication_stability_interpretation(
+        payload,
+        rows,
+        calibration,
+    )
 
     if not baseline_available:
         status = "summary_ready_no_baseline_fit"
@@ -3965,6 +4087,7 @@ def _build_publication_comparison_summary(payload, args=None):
         "comparison_rows": rows,
         "max_abs_parameter_shifts": _max_abs_shift_by_kind(rows),
         "calibration_interpretation": calibration,
+        "publication_stability_interpretation": stability,
         "systematic_variant_status": systematic.get("status"),
         "injection_recovery_status": injection.get("status"),
         "recommendations": recommendations,
@@ -4108,6 +4231,7 @@ def _write_publication_summary_markdown(path, summary):
         if row.get("source_kind") == "injection_recovery_trial"
     ]
     calibration = summary.get("calibration_interpretation") or {}
+    stability = summary.get("publication_stability_interpretation") or {}
     param_columns = [
         ("source_id", "id"),
         ("status", "status"),
@@ -4129,6 +4253,17 @@ def _write_publication_summary_markdown(path, summary):
         ("item", "item"),
         ("assessment", "assessment"),
         ("detail", "detail"),
+    ]
+    stability_row_columns = [
+        ("source_id", "id"),
+        ("sensitivity_scope", "scope"),
+        ("sensitivity_assessment", "assessment"),
+        ("delta_teff", "ΔTeff"),
+        ("delta_feh", "Δ[Fe/H]"),
+        ("delta_logg", "Δlogg"),
+        ("delta_rv_kms", "ΔRV"),
+        ("delta_chi2_red", "Δχ²ν"),
+        ("sensitivity_reasons", "reason"),
     ]
     line_columns = [
         ("source_id", "id"),
@@ -4166,6 +4301,33 @@ def _write_publication_summary_markdown(path, summary):
         content.extend("- {0}".format(item) for item in recommendations)
     else:
         content.append("- No immediate summary-level recommendation.")
+    content.extend(
+        [
+            "",
+            "## Publication-stability interpretation",
+            "",
+            "Claim status: `{0}`".format(
+                stability.get("claim_status", "not_evaluated")
+            ),
+            "",
+            stability.get(
+                "plain_language_summary",
+                "No publication-stability interpretation is available.",
+            ),
+            "",
+            "Guidance: {0}".format(
+                stability.get("user_guidance", "Regenerate the summary.")
+            ),
+            "",
+            "### Limiting fit rows",
+            "",
+            _markdown_table(
+                stability_row_columns,
+                stability.get("unstable_fit_rows") or (),
+            ),
+            "",
+        ]
+    )
     content.extend(
         [
             "",

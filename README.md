@@ -564,6 +564,9 @@ labels readiness, Balmer-core mask sensitivity, window-set sensitivity, and
 same-model recovery as acceptable, borderline, blocking, or not yet evaluated.
 These labels are triage aids with explicit thresholds, not final calibrated
 uncertainties.
+It also includes a plain-language publication-stability verdict so users can
+tell when the scaffold has produced a diagnostic/exploratory result rather
+than a publication-grade parameter estimate.
 The Markdown/JSON summary also includes bounded suggested next commands. These
 commands write fresh follow-up checkpoints derived from the current
 `--output-json` path rather than mutating a previously reviewed checkpoint.

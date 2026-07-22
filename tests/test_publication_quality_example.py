@@ -79,6 +79,11 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert next_actions[0]["action"] == "run_baseline_fit"
     assert "--run-baseline-fit" in next_actions[0]["command"]
     assert "_baseline.json" in next_actions[0]["command"]
+    stability = payload["publication_summary"][
+        "publication_stability_interpretation"
+    ]
+    assert stability["claim_status"] == "not_evaluated_baseline_missing"
+    assert "audit scaffold only" in stability["user_guidance"]
     assert payload["ordinary_readiness"]["n_fit_candidate"] > 0
     assert "publication_readiness" in payload
     assert "balmer_windows" in payload["analysis_design"]
@@ -144,6 +149,7 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert summary_csv.exists()
     assert summary_plot.exists()
     assert "Spyctres publication workflow summary" in summary_md.read_text()
+    assert "Publication-stability interpretation" in summary_md.read_text()
     assert "Suggested next commands" in summary_md.read_text()
     assert "delta_teff" in summary_csv.read_text().splitlines()[0]
 
@@ -249,6 +255,10 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
         and item["assessment"] == "blocking"
         for item in calibration["checks"]
     )
+    stability = summary["publication_stability_interpretation"]
+    assert stability["claim_status"] == "exploratory_not_publication_stable"
+    assert "diagnostic/exploratory" in stability["plain_language_summary"]
+    assert stability["limiting_checks"]
 
     args = module.build_parser().parse_args(
         [
@@ -270,6 +280,8 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
     assert (tmp_path / "summary" / "publication.png").exists()
     md_text = (tmp_path / "summary" / "publication.md").read_text()
     assert "Calibration interpretation" in md_text
+    assert "Publication-stability interpretation" in md_text
+    assert "Claim status: `exploratory_not_publication_stable`" in md_text
     assert "Suggested next commands" in md_text
     assert "Systematic variants" in md_text
     assert "Injection/recovery" in md_text
