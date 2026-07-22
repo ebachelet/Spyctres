@@ -398,10 +398,11 @@ def build_parser():
     parser.add_argument(
         "--balmer-core-mask",
         type=float,
-        default=10.0,
+        default=4.0,
         help=(
             "Half-width in Angstrom for the opt-in Balmer-core exclusion mask. "
-            "Set <=0 to disable."
+            "Default: 4 A, matching the conservative information-retention "
+            "recommendation for the bundled UVB scaffold. Set <=0 to disable."
         ),
     )
     parser.add_argument(

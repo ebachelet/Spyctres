@@ -374,6 +374,10 @@ a fixed truth. By default the JSON includes an audit-only grid for core
 half-widths of 0, 4, 6, 8, 10, and 12 A, recording how many fitted pixels remain
 and which readiness flags appear. Use `--balmer-core-mask` to choose the
 baseline width shown in plots, and `--core-mask-grid` to change the audit grid.
+The scaffold default is `--balmer-core-mask 4`, because the bundled UVB example
+and the information-retention audit both show that much wider defaults can
+discard useful Balmer-wing pixels. This is still a starting assumption, not a
+publication claim.
 Only add `--run-core-mask-fit-grid` when you deliberately want the expensive
 PHOENIX fit repeated for every mask width.
 The grid also records an explicit information-retention penalty relative to

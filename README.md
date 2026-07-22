@@ -528,6 +528,10 @@ publication scaffold records the retained-pixel fraction and an
 information-loss penalty for each tested core-mask width. This penalty is not
 added to the spectral χ²; it exists to discourage choosing an overly wide mask
 just because discarded Balmer-wing pixels made the apparent fit easier.
+The X-SHOOTER UVB publication scaffold defaults to a 4 A Balmer-core mask,
+matching its own conservative information-retention recommendation for the
+bundled example; users should still run mask-width sensitivity checks before
+making scientific claims.
 The scaffold also writes a bounded systematic-variant plan covering continuum
 degree, preparation normalization, Balmer-core mask width, resolution
 assumptions, and single-line/leave-one-line-out Balmer window sets. These
