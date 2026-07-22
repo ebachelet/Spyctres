@@ -84,8 +84,10 @@ requirements.
    fit-level systematic variants with per-variant JSON checkpoints, opt-in
    same-model synthetic injection/recovery trials with per-trial checkpoints,
    compact Markdown/CSV/PNG publication-summary artifacts generated from the
-   saved checkpoint without launching extra fits, and a separate bounded
-   diagnostic-window comparison scaffold. The comparison
+   saved checkpoint without launching extra fits, conservative
+   calibration-interpretation labels for readiness, Balmer-core mask
+   sensitivity, window-set sensitivity, and same-model recovery, and a separate
+   bounded diagnostic-window comparison scaffold. The comparison
    scaffold plans trusted-baseline, role-balanced, single-window,
    leave-one-out, and leave-one-family-out checks without ranking by raw
    chi-square alone; expensive fits stay opt-in. It now includes held-out

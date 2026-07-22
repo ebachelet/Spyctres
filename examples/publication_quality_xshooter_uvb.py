@@ -141,6 +141,50 @@ LINE_RESIDUAL_INFORMATIONAL_FLAGS = frozenset(
 )
 
 
+CALIBRATION_PARAMETER_THRESHOLDS = {
+    "teff": {
+        "label": "Teff",
+        "unit": "K",
+        "acceptable_abs_delta": 100.0,
+        "blocking_abs_delta": 250.0,
+    },
+    "feh": {
+        "label": "[Fe/H]",
+        "unit": "dex",
+        "acceptable_abs_delta": 0.10,
+        "blocking_abs_delta": 0.25,
+    },
+    "logg": {
+        "label": "logg",
+        "unit": "dex",
+        "acceptable_abs_delta": 0.15,
+        "blocking_abs_delta": 0.35,
+    },
+    "rv_kms": {
+        "label": "RV",
+        "unit": "km/s",
+        "acceptable_abs_delta": 3.0,
+        "blocking_abs_delta": 10.0,
+    },
+}
+
+
+CALIBRATION_CHI2_THRESHOLDS = {
+    "label": "chi2_red",
+    "unit": "",
+    "acceptable_positive_delta": 0.25,
+    "blocking_positive_delta": 1.0,
+}
+
+
+CALIBRATION_ASSESSMENT_ORDER = {
+    "acceptable": 0,
+    "borderline": 1,
+    "blocking": 2,
+    "not_evaluated": -1,
+}
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -2900,6 +2944,8 @@ def _comparison_row_from_fit(
     status,
     fit_payload,
     baseline_fit,
+    variant_category=None,
+    window_labels=None,
     line_residual_diagnostics=None,
     all_passed=None,
     error=None,
@@ -2922,6 +2968,8 @@ def _comparison_row_from_fit(
         "source_kind": source_kind,
         "source_id": source_id,
         "label": label,
+        "variant_category": variant_category,
+        "window_labels": list(window_labels or ()),
         "status": status,
         "success": (
             fit_payload.get("success") if isinstance(fit_payload, dict) else None
@@ -2971,6 +3019,7 @@ def _comparison_row_from_injection_record(record, baseline_fit):
         status=record.get("status"),
         fit_payload=fit_payload,
         baseline_fit=baseline_fit,
+        variant_category="injection_recovery",
         line_residual_diagnostics=record.get("line_residual_diagnostics"),
         all_passed=summary.get("all_passed"),
         error=record.get("error"),
@@ -3004,6 +3053,435 @@ def _max_abs_shift_by_kind(rows):
     return out
 
 
+def _assessment_from_abs_delta(delta, thresholds):
+    delta = _finite_or_none(delta)
+    if delta is None:
+        return "not_evaluated", None
+    abs_delta = abs(float(delta))
+    if abs_delta <= float(thresholds["acceptable_abs_delta"]):
+        return "acceptable", abs_delta
+    if abs_delta <= float(thresholds["blocking_abs_delta"]):
+        return "borderline", abs_delta
+    return "blocking", abs_delta
+
+
+def _assessment_from_positive_delta(delta, thresholds):
+    delta = _finite_or_none(delta)
+    if delta is None:
+        return "not_evaluated", None
+    positive_delta = max(0.0, float(delta))
+    if positive_delta <= float(thresholds["acceptable_positive_delta"]):
+        return "acceptable", positive_delta
+    if positive_delta <= float(thresholds["blocking_positive_delta"]):
+        return "borderline", positive_delta
+    return "blocking", positive_delta
+
+
+def _worst_assessment(assessments, *, missing_as=None):
+    values = [item for item in assessments if item]
+    if missing_as is not None:
+        values = [missing_as if item == "not_evaluated" else item for item in values]
+    ranked = [
+        item
+        for item in values
+        if item in CALIBRATION_ASSESSMENT_ORDER
+        and CALIBRATION_ASSESSMENT_ORDER[item] >= 0
+    ]
+    if not ranked:
+        return "not_evaluated"
+    return max(ranked, key=lambda item: CALIBRATION_ASSESSMENT_ORDER[item])
+
+
+def _format_delta_reason(label, value, unit, assessment, threshold):
+    suffix = "" if not unit else " {0}".format(unit)
+    return (
+        "{0} shift {1:.5g}{2} is {3} relative to threshold {4:.5g}{2}".format(
+            label,
+            value,
+            suffix,
+            assessment,
+            threshold,
+        )
+    )
+
+
+def _sensitivity_scope_for_row(row):
+    category = row.get("variant_category")
+    source_kind = row.get("source_kind")
+    source_id = str(row.get("source_id", ""))
+    if source_kind == "baseline":
+        return "baseline_reference"
+    if source_kind == "injection_recovery_trial":
+        return "same_model_recovery"
+    if category == "balmer_core_mask" or source_id.startswith("balmer_core_mask"):
+        return "core_mask_fit_sensitivity"
+    if category == "fit_windows" or source_id.startswith("window_set"):
+        return "window_set_fit_sensitivity"
+    if source_kind == "systematic_variant":
+        return "fit_level_sensitivity"
+    return "unknown"
+
+
+def _assess_comparison_row_sensitivity(row):
+    source_kind = row.get("source_kind")
+    status = row.get("status")
+    scope = _sensitivity_scope_for_row(row)
+    if source_kind == "baseline":
+        return {
+            "sensitivity_scope": scope,
+            "sensitivity_assessment": "not_evaluated",
+            "sensitivity_reasons": ["baseline reference row"],
+        }
+    if status not in {"ok", None}:
+        return {
+            "sensitivity_scope": scope,
+            "sensitivity_assessment": "blocking",
+            "sensitivity_reasons": [
+                "sensitivity check did not complete cleanly: status={0}".format(status)
+            ],
+        }
+
+    assessments = []
+    reasons = []
+    evaluated = 0
+    for key, thresholds in CALIBRATION_PARAMETER_THRESHOLDS.items():
+        assessment, value = _assessment_from_abs_delta(
+            row.get("delta_{0}".format(key)),
+            thresholds,
+        )
+        if assessment == "not_evaluated":
+            continue
+        evaluated += 1
+        assessments.append(assessment)
+        if assessment != "acceptable":
+            limit_key = (
+                "acceptable_abs_delta"
+                if assessment == "borderline"
+                else "blocking_abs_delta"
+            )
+            reasons.append(
+                _format_delta_reason(
+                    thresholds["label"],
+                    value,
+                    thresholds["unit"],
+                    assessment,
+                    thresholds[limit_key],
+                )
+            )
+
+    chi2_assessment, chi2_value = _assessment_from_positive_delta(
+        row.get("delta_chi2_red"),
+        CALIBRATION_CHI2_THRESHOLDS,
+    )
+    if chi2_assessment != "not_evaluated":
+        evaluated += 1
+        assessments.append(chi2_assessment)
+        if chi2_assessment != "acceptable":
+            limit_key = (
+                "acceptable_positive_delta"
+                if chi2_assessment == "borderline"
+                else "blocking_positive_delta"
+            )
+            reasons.append(
+                _format_delta_reason(
+                    CALIBRATION_CHI2_THRESHOLDS["label"],
+                    chi2_value,
+                    CALIBRATION_CHI2_THRESHOLDS["unit"],
+                    chi2_assessment,
+                    CALIBRATION_CHI2_THRESHOLDS[limit_key],
+                )
+            )
+
+    if evaluated == 0:
+        assessment = "not_evaluated"
+        reasons.append("no finite parameter deltas are available")
+    else:
+        assessment = _worst_assessment(assessments)
+        if assessment == "acceptable":
+            reasons.append("all finite parameter shifts are within acceptable thresholds")
+
+    if source_kind == "injection_recovery_trial" and row.get("all_passed") is False:
+        assessment = "blocking"
+        reasons.append("same-model recovery did not pass all configured tolerances")
+
+    return {
+        "sensitivity_scope": scope,
+        "sensitivity_assessment": assessment,
+        "sensitivity_reasons": reasons,
+    }
+
+
+def _core_mask_audit_interpretation(payload):
+    records = list(payload.get("core_mask_sensitivity") or ())
+    recommendation = payload.get("core_mask_sensitivity_recommendation") or {}
+    if not records:
+        return {
+            "scope": "core_mask_audit",
+            "item": "Balmer-core mask audit grid",
+            "assessment": "not_evaluated",
+            "detail": "core-mask audit grid has not been evaluated",
+        }
+
+    diagnostics = payload.get("per_line_balmer_diagnostics") or {}
+    default_width = _finite_or_none(diagnostics.get("core_mask_halfwidth_A"))
+    default_record = None
+    if default_width is not None:
+        default_record = next(
+            (
+                record
+                for record in records
+                if abs(float(record.get("core_mask_halfwidth_A", np.nan)) - default_width)
+                <= 1e-8
+            ),
+            None,
+        )
+    recommended_width = _finite_or_none(
+        recommendation.get("recommended_core_mask_halfwidth_A")
+    )
+    excessive_widths = [
+        float(record["core_mask_halfwidth_A"])
+        for record in records
+        if record.get("excessive_core_mask")
+    ]
+
+    if default_record is None:
+        assessment = "not_evaluated"
+        detail = "baseline core-mask width is not present in the audit grid"
+    elif default_record.get("excessive_core_mask"):
+        assessment = "blocking"
+        detail = (
+            "baseline core-mask width {0:g} A retains only {1:.3g} of the "
+            "no-core-mask fitted pixels".format(
+                default_width,
+                float(default_record.get("information_retention_fraction", np.nan)),
+            )
+        )
+    elif (
+        recommended_width is not None
+        and default_width is not None
+        and abs(default_width - recommended_width) > 1e-8
+    ):
+        assessment = "borderline"
+        detail = (
+            "baseline core-mask width {0:g} A differs from audit recommendation "
+            "{1:g} A; compare fitted variants before publication use".format(
+                default_width,
+                recommended_width,
+            )
+        )
+    else:
+        assessment = "acceptable"
+        detail = "baseline core-mask width matches the audit recommendation"
+
+    if excessive_widths:
+        detail += "; excessive grid widths: {0}".format(
+            ", ".join("{0:g} A".format(width) for width in excessive_widths)
+        )
+    return {
+        "scope": "core_mask_audit",
+        "item": "Balmer-core mask audit grid",
+        "assessment": assessment,
+        "detail": detail,
+        "baseline_core_mask_halfwidth_A": default_width,
+        "recommended_core_mask_halfwidth_A": recommended_width,
+        "excessive_core_mask_halfwidths_A": excessive_widths,
+    }
+
+
+def _row_group_interpretation(rows, *, scope, item, missing_detail):
+    group = [row for row in rows if row.get("sensitivity_scope") == scope]
+    if not group:
+        return {
+            "scope": scope,
+            "item": item,
+            "assessment": "not_evaluated",
+            "detail": missing_detail,
+        }
+    assessment = _worst_assessment(
+        [row.get("sensitivity_assessment") for row in group],
+        missing_as="borderline",
+    )
+    if assessment == "acceptable":
+        detail = "{0} completed check(s); all finite shifts are acceptable".format(
+            len(group)
+        )
+    else:
+        flagged = [
+            "{0}: {1}".format(
+                row.get("source_id"),
+                "; ".join(row.get("sensitivity_reasons") or ()),
+            )
+            for row in group
+            if row.get("sensitivity_assessment") == assessment
+        ]
+        detail = "{0} completed check(s); {1}".format(
+            len(group),
+            " | ".join(flagged) if flagged else "review parameter shifts",
+        )
+    return {
+        "scope": scope,
+        "item": item,
+        "assessment": assessment,
+        "detail": detail,
+        "n_checks": int(len(group)),
+    }
+
+
+def _injection_recovery_interpretation(payload, rows):
+    injection = payload.get("injection_recovery") or {}
+    recovery_rows = [
+        row
+        for row in rows
+        if row.get("sensitivity_scope") == "same_model_recovery"
+    ]
+    status = injection.get("status")
+    if not recovery_rows:
+        return {
+            "scope": "same_model_recovery",
+            "item": "Synthetic same-model recovery",
+            "assessment": "not_evaluated",
+            "detail": "synthetic injection/recovery has not been run",
+        }
+    if status == "completed_all_recovered":
+        assessment = "acceptable"
+        detail = "{0}/{0} completed trial(s) passed configured recovery tolerances".format(
+            len(recovery_rows)
+        )
+    else:
+        assessment = _worst_assessment(
+            [row.get("sensitivity_assessment") for row in recovery_rows],
+            missing_as="borderline",
+        )
+        if assessment == "acceptable":
+            assessment = "borderline"
+        detail = "injection/recovery status={0}; inspect recovery deltas".format(status)
+    return {
+        "scope": "same_model_recovery",
+        "item": "Synthetic same-model recovery",
+        "assessment": assessment,
+        "detail": detail,
+        "n_checks": int(len(recovery_rows)),
+        "status": status,
+    }
+
+
+def _publication_readiness_interpretation(payload):
+    publication = payload.get("publication_readiness") or {}
+    blockers = list(publication.get("blockers") or ())
+    if not publication:
+        return {
+            "scope": "publication_readiness",
+            "item": "Publication gate",
+            "assessment": "not_evaluated",
+            "detail": "publication-readiness audit has not been run",
+        }
+    if blockers:
+        return {
+            "scope": "publication_readiness",
+            "item": "Publication gate",
+            "assessment": "blocking",
+            "detail": "readiness blockers: {0}".format(", ".join(blockers)),
+        }
+    return {
+        "scope": "publication_readiness",
+        "item": "Publication gate",
+        "assessment": "acceptable",
+        "detail": "publication-readiness audit has no blockers",
+    }
+
+
+def _build_calibration_interpretation(payload, rows):
+    for row in rows:
+        row.update(_assess_comparison_row_sensitivity(row))
+
+    checks = [
+        _publication_readiness_interpretation(payload),
+        _core_mask_audit_interpretation(payload),
+        _row_group_interpretation(
+            rows,
+            scope="core_mask_fit_sensitivity",
+            item="Fitted Balmer-core mask sensitivity",
+            missing_detail=(
+                "no fitted core-mask variants have been run; run an explicit "
+                "balmer_core_mask variant before publication use"
+            ),
+        ),
+        _row_group_interpretation(
+            rows,
+            scope="window_set_fit_sensitivity",
+            item="Fitted window-set sensitivity",
+            missing_detail=(
+                "no fitted window-set variants have been run; run at least one "
+                "single-line or leave-one-line-out variant before publication use"
+            ),
+        ),
+        _injection_recovery_interpretation(payload, rows),
+    ]
+    assessed = [item["assessment"] for item in checks]
+    if all(item == "not_evaluated" for item in assessed):
+        overall = "not_evaluated"
+    elif any(item == "blocking" for item in assessed):
+        overall = "blocking"
+    elif any(item in {"borderline", "not_evaluated"} for item in assessed):
+        overall = "borderline"
+    else:
+        overall = "acceptable"
+
+    recommendations = []
+    for check in checks:
+        if check["assessment"] == "blocking":
+            recommendations.append(
+                "Resolve blocking calibration check: {0} ({1}).".format(
+                    check["item"],
+                    check["detail"],
+                )
+            )
+        elif check["assessment"] == "borderline":
+            recommendations.append(
+                "Review borderline calibration check: {0} ({1}).".format(
+                    check["item"],
+                    check["detail"],
+                )
+            )
+        elif check["assessment"] == "not_evaluated":
+            recommendations.append(
+                "Complete calibration check: {0} ({1}).".format(
+                    check["item"],
+                    check["detail"],
+                )
+            )
+
+    headline_flags = []
+    if overall == "blocking":
+        headline_flags.append("calibration_interpretation_blocking")
+    elif overall == "borderline":
+        headline_flags.append("calibration_interpretation_borderline_or_incomplete")
+    elif overall == "not_evaluated":
+        headline_flags.append("calibration_interpretation_not_evaluated")
+
+    return {
+        "schema_version": 1,
+        "overall_assessment": overall,
+        "thresholds": {
+            "parameter_abs_delta": CALIBRATION_PARAMETER_THRESHOLDS,
+            "chi2_positive_delta": CALIBRATION_CHI2_THRESHOLDS,
+            "policy": (
+                "Thresholds are conservative triage values for review. They are "
+                "not calibrated final uncertainties and should be revisited after "
+                "real reference-star validation."
+            ),
+        },
+        "checks": checks,
+        "headline_flags": headline_flags,
+        "recommendations": recommendations,
+        "interpretation": (
+            "Calibration interpretation converts already-run readiness, mask, "
+            "systematic-variant, and same-model recovery checks into review "
+            "labels. It does not change the fit objective or select a model."
+        ),
+    }
+
+
 def _build_publication_comparison_summary(payload):
     baseline_fit = payload.get("baseline_fit")
     baseline_available = isinstance(baseline_fit, dict)
@@ -3025,6 +3503,7 @@ def _build_publication_comparison_summary(payload):
                 status="ok" if baseline_fit.get("success") else "fit_failed",
                 fit_payload=baseline_fit,
                 baseline_fit=baseline_fit,
+                variant_category="baseline",
                 line_residual_diagnostics=payload.get(
                     "baseline_line_residual_diagnostics"
                 ),
@@ -3054,6 +3533,8 @@ def _build_publication_comparison_summary(payload):
             status=record.get("status"),
             fit_payload=fit_payload,
             baseline_fit=baseline_fit,
+            variant_category=record.get("category"),
+            window_labels=record.get("window_labels"),
             line_residual_diagnostics=record.get("line_residual_diagnostics"),
             all_passed=None,
             error=record.get("error"),
@@ -3089,11 +3570,18 @@ def _build_publication_comparison_summary(payload):
         if row.get("line_quality_flags"):
             headline_flags.add("line_residual_flags_present")
 
+    calibration = _build_calibration_interpretation(payload, rows)
+    for flag in calibration.get("headline_flags") or ():
+        headline_flags.add(flag)
+
     if not baseline_available:
         status = "summary_ready_no_baseline_fit"
     elif "publication_gate_blocked" in headline_flags:
         status = "summary_ready_publication_blocked"
-    elif any("failed" in flag or "error" in flag for flag in headline_flags):
+    elif (
+        calibration.get("overall_assessment") in {"blocking", "borderline"}
+        or any("failed" in flag or "error" in flag for flag in headline_flags)
+    ):
         status = "summary_ready_needs_review"
     else:
         status = "summary_ready_for_reviewer"
@@ -3121,6 +3609,7 @@ def _build_publication_comparison_summary(payload):
                 ", ".join(publication.get("blockers"))
             )
         )
+    recommendations.extend(calibration.get("recommendations") or ())
 
     return {
         "schema_version": 1,
@@ -3132,6 +3621,7 @@ def _build_publication_comparison_summary(payload):
         "headline_flags": sorted(headline_flags),
         "comparison_rows": rows,
         "max_abs_parameter_shifts": _max_abs_shift_by_kind(rows),
+        "calibration_interpretation": calibration,
         "systematic_variant_status": systematic.get("status"),
         "injection_recovery_status": injection.get("status"),
         "recommendations": recommendations,
@@ -3153,6 +3643,8 @@ def _write_publication_summary_csv(path, summary):
         "source_kind",
         "source_id",
         "label",
+        "variant_category",
+        "window_labels",
         "status",
         "success",
         "teff",
@@ -3166,6 +3658,9 @@ def _write_publication_summary_csv(path, summary):
         "delta_rv_kms",
         "delta_chi2_red",
         "all_passed",
+        "sensitivity_scope",
+        "sensitivity_assessment",
+        "sensitivity_reasons",
         "quality_flags",
         "line_residual_status",
         "n_line_residuals",
@@ -3188,11 +3683,17 @@ def _write_publication_summary_csv(path, summary):
                         if key
                         not in {
                             "quality_flags",
+                            "window_labels",
+                            "sensitivity_reasons",
                             "problem_lines",
                             "line_quality_flags",
                             "line_info_flags",
                         }
                     },
+                    "window_labels": ";".join(row.get("window_labels") or ()),
+                    "sensitivity_reasons": " | ".join(
+                        row.get("sensitivity_reasons") or ()
+                    ),
                     "quality_flags": ";".join(row.get("quality_flags") or ()),
                     "problem_lines": ";".join(row.get("problem_lines") or ()),
                     "line_quality_flags": ";".join(
@@ -3257,9 +3758,12 @@ def _write_publication_summary_markdown(path, summary):
         for row in summary.get("comparison_rows", ())
         if row.get("source_kind") == "injection_recovery_trial"
     ]
+    calibration = summary.get("calibration_interpretation") or {}
     param_columns = [
         ("source_id", "id"),
         ("status", "status"),
+        ("variant_category", "category"),
+        ("sensitivity_assessment", "assessment"),
         ("teff", "Teff"),
         ("delta_teff", "ΔTeff"),
         ("feh", "[Fe/H]"),
@@ -3270,6 +3774,12 @@ def _write_publication_summary_markdown(path, summary):
         ("delta_rv_kms", "ΔRV"),
         ("chi2_red", "χ²ν"),
         ("all_passed", "passed"),
+    ]
+    calibration_columns = [
+        ("scope", "scope"),
+        ("item", "item"),
+        ("assessment", "assessment"),
+        ("detail", "detail"),
     ]
     line_columns = [
         ("source_id", "id"),
@@ -3309,6 +3819,14 @@ def _write_publication_summary_markdown(path, summary):
         content.append("- No immediate summary-level recommendation.")
     content.extend(
         [
+            "",
+            "## Calibration interpretation",
+            "",
+            "Overall assessment: `{0}`".format(
+                calibration.get("overall_assessment", "not_evaluated")
+            ),
+            "",
+            _markdown_table(calibration_columns, calibration.get("checks") or ()),
             "",
             "## Baseline",
             "",
@@ -3374,12 +3892,21 @@ def _write_publication_summary_plot(path, summary):
     else:
         labels = [str(row.get("source_id")) for row in rows]
         x = np.arange(len(rows))
-        colors = [
-            "tab:blue"
-            if row.get("source_kind") == "systematic_variant"
-            else "tab:green"
-            for row in rows
-        ]
+        severity_colors = {
+            "blocking": "tab:red",
+            "borderline": "tab:orange",
+            "acceptable": "tab:green",
+            "not_evaluated": "0.6",
+        }
+        colors = []
+        for row in rows:
+            assessment = row.get("sensitivity_assessment")
+            if assessment in severity_colors:
+                colors.append(severity_colors[assessment])
+            elif row.get("source_kind") == "systematic_variant":
+                colors.append("tab:blue")
+            else:
+                colors.append("tab:green")
         for ax, (key, ylabel) in zip(axes, keys):
             values = [
                 _finite_or_none(row.get(key))

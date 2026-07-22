@@ -236,6 +236,14 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
         summary["max_abs_parameter_shifts"]["injection_recovery_trial"]["delta_rv_kms"]
         == 0.4
     )
+    calibration = summary["calibration_interpretation"]
+    assert calibration["overall_assessment"] == "blocking"
+    assert "calibration_interpretation_blocking" in summary["headline_flags"]
+    assert any(
+        item["scope"] == "publication_readiness"
+        and item["assessment"] == "blocking"
+        for item in calibration["checks"]
+    )
 
     args = module.build_parser().parse_args(
         [
@@ -256,11 +264,135 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
     assert (tmp_path / "summary" / "publication.csv").exists()
     assert (tmp_path / "summary" / "publication.png").exists()
     md_text = (tmp_path / "summary" / "publication.md").read_text()
+    assert "Calibration interpretation" in md_text
     assert "Systematic variants" in md_text
     assert "Injection/recovery" in md_text
     csv_text = (tmp_path / "summary" / "publication.csv").read_text()
+    assert "sensitivity_assessment" in csv_text.splitlines()[0]
     assert "continuum_mdeg_1" in csv_text
     assert "trial_1" in csv_text
+
+
+def test_calibration_interpretation_flags_core_mask_and_window_sensitivity():
+    module = _load_publication_example_module()
+    payload = {
+        "publication_readiness": {"publication_ready": True, "blockers": []},
+        "per_line_balmer_diagnostics": {"core_mask_halfwidth_A": 10.0},
+        "core_mask_sensitivity": [
+            {
+                "core_mask_halfwidth_A": 0.0,
+                "n_fit_candidate": 1000,
+                "rejected_inside_fit_window_fraction": 0.02,
+                "information_retention_fraction": 1.0,
+                "excessive_core_mask": False,
+            },
+            {
+                "core_mask_halfwidth_A": 4.0,
+                "n_fit_candidate": 930,
+                "rejected_inside_fit_window_fraction": 0.08,
+                "information_retention_fraction": 0.93,
+                "excessive_core_mask": False,
+                "recommended_core_mask": True,
+            },
+            {
+                "core_mask_halfwidth_A": 10.0,
+                "n_fit_candidate": 760,
+                "rejected_inside_fit_window_fraction": 0.24,
+                "information_retention_fraction": 0.76,
+                "excessive_core_mask": False,
+            },
+        ],
+        "core_mask_sensitivity_recommendation": {
+            "recommended_core_mask_halfwidth_A": 4.0,
+        },
+        "baseline_fit": {
+            "success": True,
+            "teff": 9000.0,
+            "feh": 0.0,
+            "logg": 3.0,
+            "rv_kms": 0.0,
+            "chi2_red": 1.0,
+            "quality_flags": [],
+        },
+        "baseline_line_residual_diagnostics": None,
+        "systematic_variant_results": {
+            "status": "completed",
+            "records": [
+                {
+                    "variant_id": "balmer_core_mask_4A",
+                    "category": "balmer_core_mask",
+                    "label": "Balmer-core mask half-width 4 A",
+                    "status": "ok",
+                    "fit": {
+                        "success": True,
+                        "teff": 9300.0,
+                        "feh": 0.03,
+                        "logg": 3.02,
+                        "rv_kms": 12.0,
+                        "chi2_red": 1.4,
+                        "quality_flags": [],
+                    },
+                },
+                {
+                    "variant_id": "window_set_leave_out_hbeta",
+                    "category": "fit_windows",
+                    "label": "Leave out Hβ",
+                    "status": "ok",
+                    "window_labels": ["Hδ", "Hγ"],
+                    "fit": {
+                        "success": True,
+                        "teff": 9150.0,
+                        "feh": 0.01,
+                        "logg": 3.03,
+                        "rv_kms": 2.0,
+                        "chi2_red": 1.05,
+                        "quality_flags": [],
+                    },
+                },
+            ],
+        },
+        "injection_recovery": {
+            "status": "completed_all_recovered",
+            "records": [
+                {
+                    "trial_index": 1,
+                    "status": "ok",
+                    "fit_summary": {
+                        "success": True,
+                        "recovered": {
+                            "teff": 9010.0,
+                            "feh": 0.01,
+                            "logg": 3.01,
+                            "rv_kms": 0.2,
+                        },
+                        "delta": {
+                            "teff": 10.0,
+                            "feh": 0.01,
+                            "logg": 0.01,
+                            "rv_kms": 0.2,
+                        },
+                        "chi2_red": 1.0,
+                        "quality_flags": [],
+                        "all_passed": True,
+                    },
+                }
+            ],
+        },
+    }
+
+    summary = module._build_publication_comparison_summary(payload)
+    calibration = summary["calibration_interpretation"]
+    checks = {item["scope"]: item for item in calibration["checks"]}
+    rows = {item["source_id"]: item for item in summary["comparison_rows"]}
+
+    assert calibration["overall_assessment"] == "blocking"
+    assert checks["core_mask_audit"]["assessment"] == "borderline"
+    assert checks["core_mask_fit_sensitivity"]["assessment"] == "blocking"
+    assert checks["window_set_fit_sensitivity"]["assessment"] == "borderline"
+    assert checks["same_model_recovery"]["assessment"] == "acceptable"
+    assert rows["balmer_core_mask_4A"]["sensitivity_assessment"] == "blocking"
+    assert rows["window_set_leave_out_hbeta"]["sensitivity_assessment"] == "borderline"
+    assert "calibration_interpretation_blocking" in summary["headline_flags"]
 
 
 def test_publication_summary_treats_masked_core_note_as_informational():

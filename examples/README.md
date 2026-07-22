@@ -472,7 +472,11 @@ python examples/publication_quality_xshooter_uvb.py \
 
 The Markdown summary is intended for quick human review; the CSV and PNG record
 baseline/systematic/recovery parameter shifts and line-residual flags in a
-machine-readable, referee-friendly form.
+machine-readable, referee-friendly form. The summary includes a conservative
+calibration-interpretation table that labels readiness, core-mask sensitivity,
+window-set sensitivity, and same-model recovery as acceptable, borderline,
+blocking, or not yet evaluated. Those labels are triage guidance with explicit
+thresholds; they are not calibrated final uncertainties.
 
 This remains a scaffold rather than a final publication pipeline. The saved
 JSON lists the follow-up checks still required before publication claims:

@@ -555,6 +555,11 @@ compact Markdown, CSV, and PNG artifacts with `--output-publication-summary-md`,
 These reports are post-processing only: they compare the baseline, any executed
 systematic variants, and any injection/recovery trials already present in the
 JSON without launching extra PHOENIX fits.
+The summary also contains a conservative calibration-interpretation table. It
+labels readiness, Balmer-core mask sensitivity, window-set sensitivity, and
+same-model recovery as acceptable, borderline, blocking, or not yet evaluated.
+These labels are triage aids with explicit thresholds, not final calibrated
+uncertainties.
 Broad telluric catalog regions are used for warning/provenance only by default.
 They are intentionally coarser than Spyctres' legacy high-resolution telluric
 transmission template. When you explicitly want to mask telluric absorption,
