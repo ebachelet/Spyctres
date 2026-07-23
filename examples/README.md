@@ -83,6 +83,24 @@ place, while the generic SDSS reader default remains `and_mask_conservative`.
 No SDSS spectra are currently bundled in `examples/data/`, so the reproducible
 examples below use the packaged X-SHOOTER, FLOYDS, PEPSI, and XSL files.
 
+Before fitting your own SDSS/SEGUE or UVES-POP spectra, you can run the
+external-spectrum validation helper. It checks ingestion, masks, metadata, and
+fit-readiness, and can keep clean/dirty test sets separated for later review;
+it does not run PHOENIX or classify the stars:
+
+```bash
+python scripts/external_spectra_validation.py \
+  --scan-root /path/to/spectra_test_set \
+  --output-json /tmp/spyctres_external_validation.json \
+  --output-csv /tmp/spyctres_external_validation.csv \
+  --resume
+```
+
+For a manifest-driven run, use a CSV with `path`, `instrument`, and optional
+`role` values such as `clean` or `dirty`. The helper currently supports SDSS
+and UVES-POP external validation because those readers have dedicated
+regression tests.
+
 ## Example 2: batch quick scan, then focused refinement
 
 Use `batch_quickscan_then_refine.py` when you have many spectra and do not want

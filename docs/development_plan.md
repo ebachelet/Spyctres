@@ -56,8 +56,9 @@ requirements.
    separated from ordinary recovery statistics. The XSL validation plotting
    companion should produce reviewer-facing Markdown/CSV/PNG recovery summaries
    from saved checkpoints without rerunning PHOENIX. After the XSL reference
-   path is stable, add clean and dirty SDSS and UVES-POP spectra to the
-   cross-instrument validation queue.
+   path is stable, use `scripts/external_spectra_validation.py` to add clean
+   and dirty SDSS and UVES-POP spectra to the cross-instrument validation
+   queue before promoting any archive-specific fitting presets.
 
 4. **Publication-oriented X-SHOOTER UVB workflow.**
    Add a separate expert workflow, not a replacement for

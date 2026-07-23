@@ -63,6 +63,10 @@ scientific than smoke tests.
   Markdown/CSV/PNG reference-recovery summaries from the same JSON without
   rerunning PHOENIX, keeping standard recovery targets separate from
   diagnostic/stress/unsupported targets.
+- `external_spectra_validation.py` audits user-supplied SDSS/SEGUE and
+  UVES-POP spectra through the common reader and fit-readiness layers. It writes
+  resumable JSON/CSV summaries and optional quicklook plots, but deliberately
+  does not run PHOENIX fits or introduce fitting presets for those archives.
 - `diagnostic_window_audit.py` runs the PHOENIX-free diagnostic-window selector
   over a manifest, such as the bundled XSL Figure 1 validation manifest, and
   writes role-aware JSON/CSV summaries plus an optional top-window heatmap. Use
