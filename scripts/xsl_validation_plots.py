@@ -141,6 +141,14 @@ def build_parser():
         default=None,
         help="Optional compact PNG/SVG/PDF plot of reference-recovery deltas.",
     )
+    parser.add_argument(
+        "--output-summary-json",
+        default=None,
+        help=(
+            "Optional JSON copy of the compact reference-recovery and "
+            "publication-style stability summary."
+        ),
+    )
     return parser
 
 
@@ -267,6 +275,87 @@ def _quality_flags(row):
     return [str(flag) for flag in flags]
 
 
+def _row_stability_language(row):
+    """Return reviewer-facing stability language for one recovery row."""
+    status = str(row.get("status", "unknown") or "unknown")
+    statistics_group = str(row.get("statistics_group", "diagnostic_only") or "")
+    assessment = str(row.get("recovery_assessment", "not_evaluated") or "")
+    enters = bool(row.get("enters_ordinary_recovery_statistics", False))
+
+    if status == "unsupported_physics":
+        return {
+            "stability_label": "unsupported_physics_excluded",
+            "reviewer_priority": "stress_context",
+            "reviewer_interpretation": (
+                "Target lies outside the supported PHOENIX validation scope "
+                "or was explicitly configured as unsupported; do not include "
+                "it in ordinary recovery claims."
+            ),
+        }
+    if statistics_group != "ordinary_recovery":
+        return {
+            "stability_label": "quality_gated_diagnostic_only",
+            "reviewer_priority": "context_only",
+            "reviewer_interpretation": (
+                "Diagnostic/stress target. Display residuals and failure modes, "
+                "but exclude it from ordinary reference-star recovery statistics."
+            ),
+        }
+    if status != "ok":
+        return {
+            "stability_label": "not_recovered",
+            "reviewer_priority": "blocking",
+            "reviewer_interpretation": (
+                "Ordinary reference target did not complete with status='ok'; "
+                "inspect input data, masks, PHOENIX coverage, and logs."
+            ),
+        }
+    if not enters:
+        return {
+            "stability_label": "diagnostic_only_excluded",
+            "reviewer_priority": "review",
+            "reviewer_interpretation": (
+                "The target is not entering ordinary statistics despite a "
+                "standard role; inspect validation metadata."
+            ),
+        }
+    if assessment == "acceptable":
+        return {
+            "stability_label": "classification_stable",
+            "reviewer_priority": "low",
+            "reviewer_interpretation": (
+                "Ordinary target recovered within provisional thresholds. "
+                "Use plots to confirm no hidden residual/mask pathology."
+            ),
+        }
+    if assessment == "borderline":
+        return {
+            "stability_label": "branch_stable_parameter_approximate",
+            "reviewer_priority": "medium",
+            "reviewer_interpretation": (
+                "Broad classification may be useful, but one or more fitted "
+                "parameters are close to the provisional review threshold."
+            ),
+        }
+    if assessment == "needs_review":
+        return {
+            "stability_label": "needs_review_not_stable",
+            "reviewer_priority": "high",
+            "reviewer_interpretation": (
+                "At least one ordinary reference-parameter delta exceeds the "
+                "review threshold; do not claim this target as recovered yet."
+            ),
+        }
+    return {
+        "stability_label": "metadata_limited_not_evaluated",
+        "reviewer_priority": "high",
+        "reviewer_interpretation": (
+            "Reference or fitted parameters are missing, so recovery stability "
+            "cannot be evaluated."
+        ),
+    }
+
+
 def _reference_recovery_row(row):
     reference = row.get("reference") or {}
     fit = row.get("fit") or {}
@@ -310,7 +399,127 @@ def _reference_recovery_row(row):
     )
     if status == "unsupported_physics":
         out["recovery_assessment"] = "diagnostic_only"
+    out.update(_row_stability_language(out))
     return out
+
+
+def _count_by_key(rows, key):
+    counts = {}
+    for row in rows:
+        value = str(row.get(key, "unknown") or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _build_publication_style_summary(summary):
+    """Return publication-scaffold-style stability interpretation.
+
+    This is intentionally scoped to XSL/reference-star validation.  It does
+    not claim that Spyctres is publication-ready as a whole.
+    """
+    rows = list(summary.get("rows") or ())
+    ordinary = list(summary.get("ordinary_rows") or ())
+    diagnostic = list(summary.get("diagnostic_or_stress_rows") or ())
+    status = summary.get("status")
+    ordinary_problem_rows = [
+        row
+        for row in ordinary
+        if row.get("stability_label") != "classification_stable"
+    ]
+    failed_standard_rows = [
+        row
+        for row in rows
+        if row.get("statistics_group") == "ordinary_recovery"
+        and row.get("status") != "ok"
+    ]
+    limiting_rows = list(ordinary_problem_rows) + list(failed_standard_rows)
+
+    if failed_standard_rows:
+        claim_status = "not_ready_standard_targets_failed"
+        plain = (
+            "At least one ordinary standard-reference target did not complete "
+            "cleanly. Treat the current output as diagnostic until those rows "
+            "are resolved or deliberately reclassified."
+        )
+    elif not ordinary:
+        claim_status = "not_ready_no_standard_reference_recovery"
+        plain = (
+            "No successful ordinary standard-reference XSL targets are available, "
+            "so the validation set is not yet a recovery demonstration."
+        )
+    elif any(row.get("recovery_assessment") == "needs_review" for row in ordinary):
+        claim_status = "exploratory_not_reference_stable"
+        plain = (
+            "At least one ordinary XSL target exceeds the provisional recovery "
+            "thresholds. The current run is useful for debugging, not for a "
+            "clean classification-stability claim."
+        )
+    elif any(row.get("recovery_assessment") == "not_evaluated" for row in ordinary):
+        claim_status = "not_ready_reference_metadata_incomplete"
+        plain = (
+            "Ordinary targets ran, but reference/fitted parameter deltas are "
+            "missing for at least one row. Complete the manifest/reference "
+            "metadata before interpreting stability."
+        )
+    elif any(row.get("recovery_assessment") == "borderline" for row in ordinary):
+        claim_status = "exploratory_borderline_reference_stability"
+        plain = (
+            "Ordinary reference-star recovery is borderline. The spectral branch "
+            "may be stable, but atmospheric parameters should be described as "
+            "approximate until more targets and sensitivity checks pass."
+        )
+    else:
+        claim_status = "classification_stable_for_current_standard_targets"
+        plain = (
+            "All successful ordinary XSL standard-reference targets are within "
+            "the current provisional thresholds. This is a reviewer-ready "
+            "classification-stability check, but not a final package-wide "
+            "publication claim."
+        )
+
+    review_questions = [
+        "Are the provisional Teff/logg/[Fe/H] thresholds appropriate for this XSL validation phase?",
+        "Should any validation_role values be promoted to ordinary recovery or kept as stress/peculiar diagnostics?",
+        "Which residual or mask patterns should block a 'classification_stable' label even when parameter deltas pass?",
+        "Should recovery thresholds become spectral-type dependent once the branch-aware first-pass classifier is implemented?",
+    ]
+    if diagnostic:
+        review_questions.append(
+            "Do the diagnostic/stress targets expose failure modes that should become automated quality flags?"
+        )
+
+    return {
+        "schema_version": 1,
+        "status": "summary_ready_for_reviewer",
+        "input_summary_status": status,
+        "claim_status": claim_status,
+        "claim_scope": (
+            "XSL/reference-star validation only; final software publication "
+            "claims still require broader real-spectrum validation, sensitivity "
+            "checks, and reviewer inspection."
+        ),
+        "plain_language_summary": plain,
+        "ready_for_referee_review": bool(rows),
+        "ready_for_publication_claim": False,
+        "ordinary_stability_label_counts": _count_by_key(
+            ordinary,
+            "stability_label",
+        ),
+        "all_stability_label_counts": _count_by_key(rows, "stability_label"),
+        "diagnostic_or_stress_count": int(len(diagnostic)),
+        "limiting_rows": limiting_rows,
+        "limiting_checks": [
+            {
+                "xsl_id": row.get("xsl_id"),
+                "stability_label": row.get("stability_label"),
+                "recovery_assessment": row.get("recovery_assessment"),
+                "reviewer_priority": row.get("reviewer_priority"),
+                "interpretation": row.get("reviewer_interpretation"),
+            }
+            for row in limiting_rows
+        ],
+        "review_questions": review_questions,
+    }
 
 
 def build_reference_recovery_summary(payload):
@@ -410,7 +619,7 @@ def build_reference_recovery_summary(payload):
         "Next cross-instrument validation should include the user's clean and dirty SDSS and UVES-POP spectra."
     )
 
-    return {
+    out = {
         "schema_version": 1,
         "status": status,
         "claim_status": claim_status,
@@ -428,6 +637,8 @@ def build_reference_recovery_summary(payload):
         "diagnostic_or_stress_rows": diagnostic_rows,
         "recommendations": recommendations,
     }
+    out["publication_summary"] = _build_publication_style_summary(out)
+    return out
 
 
 def _markdown_table(columns, rows):
@@ -466,6 +677,9 @@ def write_reference_recovery_summary_csv(path, summary):
         "status",
         "enters_ordinary_recovery_statistics",
         "recovery_assessment",
+        "stability_label",
+        "reviewer_priority",
+        "reviewer_interpretation",
         "teff_ref",
         "teff_fit",
         "delta_teff",
@@ -504,6 +718,8 @@ def write_reference_recovery_summary_markdown(path, summary):
         ("validation_role", "role"),
         ("status", "status"),
         ("recovery_assessment", "assessment"),
+        ("stability_label", "stability"),
+        ("reviewer_priority", "priority"),
         ("teff_ref", "Teff ref"),
         ("teff_fit", "Teff fit"),
         ("delta_teff", "ΔTeff"),
@@ -540,6 +756,24 @@ def write_reference_recovery_summary_markdown(path, summary):
         "",
         summary.get("plain_language_summary", ""),
         "",
+        "## Publication-style stability interpretation",
+        "",
+        "Claim status: `{0}`".format(
+            (summary.get("publication_summary") or {}).get("claim_status")
+        ),
+        "",
+        (summary.get("publication_summary") or {}).get(
+            "plain_language_summary",
+            "No publication-style interpretation is available.",
+        ),
+        "",
+        "Claim scope: {0}".format(
+            (summary.get("publication_summary") or {}).get(
+                "claim_scope",
+                "XSL/reference-star validation only.",
+            )
+        ),
+        "",
         "Statistics policy: {0}".format(summary.get("statistics_policy")),
         "",
         "## Recommendations",
@@ -567,9 +801,30 @@ def write_reference_recovery_summary_markdown(path, summary):
             "",
             _markdown_table(columns, summary.get("diagnostic_or_stress_rows") or ()),
             "",
+            "## Questions for reviewer",
+            "",
         ]
     )
+    review_questions = (summary.get("publication_summary") or {}).get(
+        "review_questions",
+        (),
+    )
+    if review_questions:
+        content.extend("- {0}".format(item) for item in review_questions)
+    else:
+        content.append("- No reviewer questions recorded.")
+    content.append("")
     path.write_text("\n".join(content), encoding="utf-8")
+
+
+def write_reference_recovery_summary_json(path, summary):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, allow_nan=False)
+        handle.write("\n")
 
 
 def plot_reference_recovery_summary(summary, savepath=None):
@@ -656,7 +911,12 @@ def plot_reference_recovery_summary(summary, savepath=None):
             ax.grid(axis="y", alpha=0.25)
         axes[-1].set_xticks(x)
         axes[-1].set_xticklabels(labels, rotation=35, ha="right")
-    fig.suptitle("XSL reference-star recovery summary")
+    publication = summary.get("publication_summary") or {}
+    fig.suptitle(
+        "XSL reference-star recovery summary — {0}".format(
+            publication.get("claim_status", summary.get("claim_status", "unknown"))
+        )
+    )
     if savepath is not None:
         savepath = Path(savepath)
         savepath.parent.mkdir(parents=True, exist_ok=True)
@@ -670,9 +930,11 @@ def write_reference_recovery_summary_outputs(
     output_md=None,
     output_csv=None,
     output_plot=None,
+    output_json=None,
 ):
     write_reference_recovery_summary_markdown(output_md, summary)
     write_reference_recovery_summary_csv(output_csv, summary)
+    write_reference_recovery_summary_json(output_json, summary)
     if output_plot is not None:
         fig, _axes = plot_reference_recovery_summary(summary, savepath=output_plot)
         plt.close(fig)
@@ -790,6 +1052,7 @@ def main(argv=None):
         args.output_summary_md is not None
         or args.output_summary_csv is not None
         or args.output_summary_plot is not None
+        or args.output_summary_json is not None
     ):
         summary = build_reference_recovery_summary(payload)
         write_reference_recovery_summary_outputs(
@@ -797,6 +1060,7 @@ def main(argv=None):
             output_md=args.output_summary_md,
             output_csv=args.output_summary_csv,
             output_plot=args.output_summary_plot,
+            output_json=args.output_summary_json,
         )
         print(
             "Reference-recovery summary: {0}".format(summary["status"]),
@@ -818,6 +1082,13 @@ def main(argv=None):
             print(
                 "Summary plot: {0}".format(
                     os.path.abspath(args.output_summary_plot)
+                ),
+                flush=True,
+            )
+        if args.output_summary_json:
+            print(
+                "Summary JSON: {0}".format(
+                    os.path.abspath(args.output_summary_json)
                 ),
                 flush=True,
             )

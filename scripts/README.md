@@ -60,9 +60,10 @@ scientific than smoke tests.
   spectra using the manifest roles and validation budgets.
 - `xsl_validation_plots.py` renders saved XSL validation JSON payloads into
   classification plots for inspection and review. It can also write compact
-  Markdown/CSV/PNG reference-recovery summaries from the same JSON without
-  rerunning PHOENIX, keeping standard recovery targets separate from
-  diagnostic/stress/unsupported targets.
+  Markdown/CSV/JSON/PNG reference-recovery summaries from the same JSON without
+  rerunning PHOENIX. These summaries use publication-scaffold stability
+  language and reviewer questions while keeping standard recovery targets
+  separate from diagnostic/stress/unsupported targets.
 - `external_spectra_validation.py` audits user-supplied SDSS/SEGUE and
   UVES-POP spectra through the common reader and fit-readiness layers. It writes
   resumable JSON/CSV summaries and optional audit plots. The default plot style

@@ -117,7 +117,23 @@ def test_reference_recovery_summary_excludes_stress_from_ordinary_stats():
     assert summary["ordinary_recovery_statistics"]["teff"]["median_delta"] == 30.0
     assert len(summary["ordinary_rows"]) == 1
     assert len(summary["diagnostic_or_stress_rows"]) == 1
+    assert summary["ordinary_rows"][0]["stability_label"] == "classification_stable"
     assert summary["diagnostic_or_stress_rows"][0]["recovery_assessment"] == "diagnostic_only"
+    assert (
+        summary["diagnostic_or_stress_rows"][0]["stability_label"]
+        == "quality_gated_diagnostic_only"
+    )
+    publication = summary["publication_summary"]
+    assert (
+        publication["claim_status"]
+        == "classification_stable_for_current_standard_targets"
+    )
+    assert publication["ready_for_referee_review"] is True
+    assert publication["ready_for_publication_claim"] is False
+    assert publication["ordinary_stability_label_counts"] == {
+        "classification_stable": 1
+    }
+    assert publication["review_questions"]
     assert any("SDSS and UVES-POP" in item for item in summary["recommendations"])
 
 
@@ -131,6 +147,11 @@ def test_reference_recovery_summary_flags_standard_outlier():
     assert summary["status"] == "summary_ready_reference_recovery_needs_review"
     assert summary["claim_status"] == "reference_recovery_needs_review"
     assert summary["ordinary_rows"][0]["recovery_assessment"] == "needs_review"
+    assert summary["ordinary_rows"][0]["stability_label"] == "needs_review_not_stable"
+    assert (
+        summary["publication_summary"]["claim_status"]
+        == "exploratory_not_reference_stable"
+    )
 
 
 def test_reference_recovery_summary_missing_reference_is_not_acceptable():
@@ -143,6 +164,27 @@ def test_reference_recovery_summary_missing_reference_is_not_acceptable():
     assert summary["status"] == "summary_ready_reference_recovery_not_evaluated"
     assert summary["claim_status"] == "standard_reference_recovery_not_evaluated"
     assert summary["ordinary_rows"][0]["recovery_assessment"] == "not_evaluated"
+    assert (
+        summary["ordinary_rows"][0]["stability_label"]
+        == "metadata_limited_not_evaluated"
+    )
+
+
+def test_publication_summary_flags_failed_standard_before_empty_recovery():
+    payload = _summary_payload()
+    payload["results"][0]["status"] = "error"
+    payload["results"][0]["fit"] = {}
+    payload["results"][0]["delta"] = {}
+
+    summary = xsl_validation_plots.build_reference_recovery_summary(payload)
+
+    assert summary["status"] == "summary_ready_no_ordinary_reference_fits"
+    assert summary["rows"][0]["stability_label"] == "not_recovered"
+    assert (
+        summary["publication_summary"]["claim_status"]
+        == "not_ready_standard_targets_failed"
+    )
+    assert summary["publication_summary"]["limiting_checks"][0]["xsl_id"] == "XSTD"
 
 
 def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
@@ -150,6 +192,7 @@ def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
     md = tmp_path / "summary" / "xsl_summary.md"
     csv_path = tmp_path / "summary" / "xsl_summary.csv"
     plot = tmp_path / "summary" / "xsl_summary.png"
+    json_path = tmp_path / "summary" / "xsl_summary.json"
     results.write_text(json.dumps(_summary_payload()), encoding="utf-8")
 
     status = xsl_validation_plots.main(
@@ -162,6 +205,8 @@ def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
             str(csv_path),
             "--output-summary-plot",
             str(plot),
+            "--output-summary-json",
+            str(json_path),
         ]
     )
 
@@ -169,8 +214,14 @@ def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
     assert md.exists()
     assert csv_path.exists()
     assert plot.exists()
+    assert json_path.exists()
     md_text = md.read_text(encoding="utf-8")
     assert "Spyctres XSL reference-recovery summary" in md_text
+    assert "Publication-style stability interpretation" in md_text
+    assert "Questions for reviewer" in md_text
     assert "Diagnostic/stress/unsupported rows" in md_text
     csv_header = csv_path.read_text(encoding="utf-8").splitlines()[0]
     assert "recovery_assessment" in csv_header
+    assert "stability_label" in csv_header
+    summary_json = json.loads(json_path.read_text(encoding="utf-8"))
+    assert "publication_summary" in summary_json

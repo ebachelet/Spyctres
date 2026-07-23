@@ -357,8 +357,16 @@ python scripts/xsl_validation_plots.py /tmp/xsl_validation_results.json \
   --no-target-plots \
   --output-summary-md /tmp/xsl_reference_recovery_summary.md \
   --output-summary-csv /tmp/xsl_reference_recovery_summary.csv \
-  --output-summary-plot /tmp/xsl_reference_recovery_summary.png
+  --output-summary-plot /tmp/xsl_reference_recovery_summary.png \
+  --output-summary-json /tmp/xsl_reference_recovery_summary.json
 ```
+
+The summary uses reviewer-facing stability language such as
+`classification_stable`, `branch_stable_parameter_approximate`,
+`quality_gated_diagnostic_only`, and `unsupported_physics_excluded`. These are
+scoped to XSL/reference-star validation only: a clean XSL summary is evidence
+for the current classification workflow, not by itself a final software
+publication claim.
 
 The DR3 paper identifies the stellar-rest-frame wavelengths as air wavelengths,
 which is therefore the reader and runner default. The runner uses 4000--9000 A
