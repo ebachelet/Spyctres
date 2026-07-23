@@ -54,6 +54,14 @@ from .diagnostic_window_comparison import (
     write_diagnostic_window_comparison_csv,
     write_diagnostic_window_comparison_json,
 )
+from .branch_quickscan import (
+    build_branch_quickscan_plan,
+    plot_branch_quickscan,
+    run_branch_quickscan,
+    summarize_branch_fit_stability,
+    write_branch_quickscan_csv,
+    write_branch_quickscan_json,
+)
 from .recipes import (
     normalize_segment_sidebands,
     normalize_segments_sidebands,
@@ -127,6 +135,9 @@ __all__ = [
     "run_diagnostic_window_comparison", "plot_diagnostic_window_comparison",
     "write_diagnostic_window_comparison_csv",
     "write_diagnostic_window_comparison_json",
+    "build_branch_quickscan_plan", "run_branch_quickscan",
+    "plot_branch_quickscan", "summarize_branch_fit_stability",
+    "write_branch_quickscan_csv", "write_branch_quickscan_json",
     "normalize_segment_sidebands", "normalize_segments_sidebands",
     "sdss_quicklook_resolution_assumption",
     "ExclusionMaskSpec", "archive_exclusion_masks",

@@ -15,26 +15,28 @@ Start with the public examples, then move into advanced and validation
 workflows:
 
 1. `simple_phoenix_fit.py` — shortest command-line path using the public API.
-2. `batch_quickscan_then_refine.py` — batch-oriented quick scan followed by
+2. `branch_quickscan.py` — cheap branch-selection plan, with opt-in bounded
+   fits to compare hot/FGK/cool/near-IR first-pass assumptions.
+3. `batch_quickscan_then_refine.py` — batch-oriented quick scan followed by
    focused refinement; useful when fitting many spectra.
-3. `diagnostic_window_comparison.py` — quick feature-window comparison plan,
+4. `diagnostic_window_comparison.py` — quick feature-window comparison plan,
    with opt-in bounded PHOENIX fits.
-4. `high_resolution_sideband_normalization.py` — local line-window sideband
+5. `high_resolution_sideband_normalization.py` — local line-window sideband
    normalization for UVES/PEPSI-like high-resolution diagnostics.
-5. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
-6. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
+6. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
+7. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
    diagnostic workflow.
-7. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
+8. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
    useful after the basic workflow is familiar.
-8. `publication_quality_xshooter_uvb.py` and
+9. `publication_quality_xshooter_uvb.py` and
    `publication_quality_xshooter_uvb.ipynb` — expert scaffold for
    publication-oriented X-SHOOTER UVB parameter work. Starts audit-only and
    keeps baseline fitting opt-in.
-9. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
+10. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
    PEPSI legacy line-window path, not the generic public classification path.
 
 The examples are ordered by how much Spyctres-specific context they assume.
-The first two are the best place for a new user to start.
+The first three are the best place for a new user to start.
 
 ## Example 1: command-line public API quickstart
 
@@ -117,7 +119,44 @@ For a manifest-driven run, use a CSV with `path`, `instrument`, and optional
 and UVES-POP external validation because those readers have dedicated
 regression tests.
 
-## Example 2: batch quick scan, then focused refinement
+## Example 2: branch quickscan before fitting
+
+Use `branch_quickscan.py` when you want Spyctres to show which broad
+classification branches are plausible for a loaded spectrum before committing
+to a fit. The default is a dry run: it reads the bundled spectrum, scores
+hot/blue, F/G/K, cool/red, Paschen/Brackett, and CO/Ca/TiO-style branch
+coverage, and writes JSON/CSV/PNG summaries without loading PHOENIX.
+
+```bash
+python examples/branch_quickscan.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --output-json /tmp/spyctres_branches.json \
+  --output-csv /tmp/spyctres_branches.csv \
+  --output-plot /tmp/spyctres_branches.png
+```
+
+If the dry-run table suggests several plausible branches, you can opt in to
+bounded branch-specific fits:
+
+```bash
+python examples/branch_quickscan.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --instrument xshooter \
+  --run-fits \
+  --R 6200 \
+  --max-branches 3 \
+  --output-json /tmp/spyctres_branches_fit.json \
+  --output-csv /tmp/spyctres_branches_fit.csv \
+  --output-plot /tmp/spyctres_branches_fit.png
+```
+
+The branch plot is a stability and coverage diagnostic, not an automatic
+spectral-type decision. Compare branch support, quality flags, residual plots,
+resolution assumptions, and parameter scatter. Do not treat the lowest raw
+χ² alone as a calibrated classification.
+
+## Example 3: batch quick scan, then focused refinement
 
 Use `batch_quickscan_then_refine.py` when you have many spectra and do not want
 to explore a broad PHOENIX parameter box from scratch for every file. The
@@ -233,7 +272,7 @@ PHOENIX full-spectrum multiplicative continuum for low/medium-resolution
 classification or broad-window fitting. These are complementary workflows, not
 competing defaults.
 
-## Example 3: diagnostic-window comparison scaffold
+## Example 4: diagnostic-window comparison scaffold
 
 Use `diagnostic_window_comparison.py` when you want to ask "which broad
 features are available in this spectrum, and which small window combinations
@@ -284,7 +323,7 @@ DIB/telluric/model-sensitive regions, remain labelled in the JSON/CSV. The
 comparison plot is a stability diagnostic; it should not be read as "lowest
 raw χ² wins."
 
-## Example 4: high-resolution local sideband normalization
+## Example 5: high-resolution local sideband normalization
 
 Use `high_resolution_sideband_normalization.py` when you want to inspect a
 UVES-like, PEPSI-like, or other high-resolution line window with a local
@@ -308,14 +347,14 @@ the original and normalized line window. Use this pattern before local
 equivalent-width or line-profile diagnostics where broad full-spectrum
 polynomials would be the wrong mental model.
 
-## Example 5: first worked notebook
+## Example 6: first worked notebook
 
 The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
 example of the generic PHOENIX fitting workflow. It is not intended to be the
 final precision analysis for this spectrum, and it is not the full
 benchmark-validation path used for development testing.
 
-## Example 6: advanced X-SHOOTER multi-arm notebook
+## Example 7: advanced X-SHOOTER multi-arm notebook
 
 The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
 windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
@@ -326,7 +365,7 @@ several minutes on a normal workstation; progress messages are printed during
 cache construction, RV scanning, and local optimization so users can tell it is
 still working.
 
-## Example 7: XSL real-spectrum validation
+## Example 8: XSL real-spectrum validation
 
 The Figure 1 validation sample from Verro et al. (2022) is listed in
 `xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
@@ -392,7 +431,7 @@ current PHOENIX fit, and a very cool low-gravity supergiant. This distinction is
 important: a predictable model-physics mismatch is evidence about the model's
 domain, not automatically evidence that the numerical fitter is broken.
 
-## Example 8: publication-oriented X-SHOOTER UVB scaffold
+## Example 9: publication-oriented X-SHOOTER UVB scaffold
 
 Use `publication_quality_xshooter_uvb.py` only after the quickstart and
 validation examples are familiar. It is a conservative expert scaffold for
@@ -678,7 +717,7 @@ by itself prove that the DIB identification is correct or that masking is the
 final scientific choice. Inspect the residuals, other Balmer lines, continuum
 placement, and LSF assumptions before drawing that conclusion.
 
-## Example 9: PEPSI legacy line-window validation
+## Example 10: PEPSI legacy line-window validation
 
 The `pepsi_legacy_linefit_validation.ipynb` notebook is a developer validation
 example for the PEPSI legacy line-window workflow. Use it to understand and
