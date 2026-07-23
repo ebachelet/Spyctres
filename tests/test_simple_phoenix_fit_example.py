@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import matplotlib
 matplotlib.use("Agg")
 import numpy as np
+from Spyctres.io import SpectrumCollection, SpectrumSegment
 
 
 def _load_example_module():
@@ -127,7 +128,11 @@ def test_append_exclusion_mask_preserves_existing_masks():
 
 def test_reader_kwargs_use_stellar_strict_for_sdss_auto_policy():
     module = _load_example_module()
-    args = SimpleNamespace(instrument="sdss", sdss_mask_policy="auto")
+    args = SimpleNamespace(
+        instrument="sdss",
+        sdss_mask_policy="auto",
+        uves_err_column=None,
+    )
 
     assert module._reader_kwargs_from_args(args) == {
         "sdss_mask_policy": "stellar_strict"
@@ -135,6 +140,47 @@ def test_reader_kwargs_use_stellar_strict_for_sdss_auto_policy():
 
     args.instrument = "xshooter"
     assert module._reader_kwargs_from_args(args) == {}
+
+    args.instrument = "uves-pop"
+    args.uves_err_column = 2
+    assert module._reader_kwargs_from_args(args) == {"err_column": 2}
+
+
+def test_wave_medium_override_preserves_segment_metadata():
+    module = _load_example_module()
+    segment = SpectrumSegment(
+        [5000.0, 5001.0],
+        [1.0, 1.1],
+        err=[0.1, 0.1],
+        name="demo",
+        wave_medium="unknown",
+        meta={"origin": "synthetic"},
+    )
+
+    out = module._override_spectrum_wave_medium(segment, "air")
+
+    assert out.wave_medium == "air"
+    assert out.meta["origin"] == "synthetic"
+    assert out.meta["wave_medium"] == "air"
+    assert out.meta["wave_medium_source"] == "user_override"
+    assert segment.wave_medium == "unknown"
+
+
+def test_wave_medium_override_handles_collections():
+    module = _load_example_module()
+    collection = SpectrumCollection(
+        [
+            SpectrumSegment([5000.0], [1.0], wave_medium="unknown", name="a"),
+            SpectrumSegment([6000.0], [1.0], wave_medium="unknown", name="b"),
+        ],
+        name="two_segments",
+    )
+
+    out = module._override_spectrum_wave_medium(collection, "vacuum")
+
+    assert isinstance(out, SpectrumCollection)
+    assert out.meta["wave_medium_override"] == "vacuum"
+    assert [segment.wave_medium for segment in out] == ["vacuum", "vacuum"]
 
 
 def test_resolution_override_filters_missing_resolution_display():
@@ -159,6 +205,30 @@ def test_resolution_override_filters_missing_resolution_display():
             "wavelength medium is unknown",
         ],
     ) == ["wavelength medium is unknown"]
+
+
+def test_line_diagnostics_skip_zero_flux_blocks():
+    module = _load_example_module()
+    wave = np.linspace(8460.0, 8690.0, 1200)
+    flux = np.ones_like(wave)
+    flux[(wave >= 8538.0) & (wave <= 8660.0)] = 0.0
+    segment = _Segment(wave, flux=flux, err=np.ones_like(wave), name="red_gap")
+    used = np.ones(wave.size, dtype=bool)
+
+    windows, diagnostics = module._line_windows_for_used_pixels(
+        segment,
+        used,
+        groups=["caii"],
+        half_width_A=30.0,
+        return_diagnostics=True,
+    )
+
+    labels = [window[0] for window in windows]
+    skipped = {record["label"]: record["reasons"] for record in diagnostics["skipped"]}
+    assert labels == ["Ca II 8498.0 Å"]
+    assert "Ca II 8542.1 Å" in skipped
+    assert "Ca II 8662.1 Å" in skipped
+    assert "zero_flux_block" in skipped["Ca II 8542.1 Å"]
 
 
 def test_known_residual_window_diagnostic_flags_hbeta_red_wing():

@@ -22,6 +22,18 @@ def _write_uves(path, *, nm=True, with_error=True):
     path.write_text("".join(lines), encoding="utf-8")
 
 
+def _write_broad_uves(path):
+    wave = np.linspace(3030.0, 5200.0, 1600)
+    flux = 1.0 + 0.12 * np.sin(wave / 250.0)
+    flux -= 0.35 * np.exp(-0.5 * ((wave - 3933.7) / 2.0) ** 2)
+    flux -= 0.25 * np.exp(-0.5 * ((wave - 4861.3) / 4.0) ** 2)
+    flux[(wave > 3060.0) & (wave < 3070.0)] = 0.0
+    lines = ["# wavelength_A flux err\n"]
+    for w, f in zip(wave, flux):
+        lines.append("{0:.6f} {1:.8f} 0.02\n".format(w, f))
+    path.write_text("".join(lines), encoding="utf-8")
+
+
 def _write_sdss_spec(path, *, bad_masks=False, wdisp=False):
     wave = np.linspace(4000.0, 4019.0, 20)
     flux = 1.0 + 0.01 * np.cos(np.arange(wave.size) / 3.0)
@@ -176,3 +188,42 @@ def test_external_validation_scan_root_and_resume(tmp_path, capsys):
     assert any("dirty_SDSS_spec-3298-54924-0159" in item for item in target_ids)
     stdout = capsys.readouterr().out
     assert "Skipping completed" in stdout
+
+
+def test_external_validation_audit_plot_records_windows(tmp_path):
+    spectrum = tmp_path / "hd_plot.dat"
+    _write_broad_uves(spectrum)
+    output_json = tmp_path / "plot.json"
+    plot_dir = tmp_path / "plots"
+
+    status = external_spectra_validation.main(
+        [
+            str(spectrum),
+            "--instrument",
+            "uves_pop",
+            "--output-json",
+            str(output_json),
+            "--plot-dir",
+            str(plot_dir),
+            "--plot-style",
+            "audit",
+            "--diagnostic-window-count",
+            "4",
+            "--max-plot-points",
+            "500",
+            "--force",
+        ]
+    )
+
+    assert status == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    row = payload["results"][0]
+    assert "audit" in row["plots"]
+    assert Path(row["plots"]["audit"]).exists()
+    selection = row["diagnostic_window_selection"]
+    assert selection["operation"] == "select_diagnostic_windows"
+    assert len(selection["selected"]) <= 4
+    assert any(
+        item["id"] in {"ca_hk", "h_beta", "balmer_blue"}
+        for item in selection["selected"]
+    )

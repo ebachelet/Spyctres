@@ -5,7 +5,11 @@ matplotlib.use("Agg")
 import numpy as np
 
 from Spyctres.io import SpectrumCollection, SpectrumSegment
-from Spyctres.plotting import plot_fit_referee, plot_xsl_validation_payload
+from Spyctres.plotting import (
+    plot_fit_referee,
+    plot_spectrum_audit,
+    plot_xsl_validation_payload,
+)
 from Spyctres.results import PhoenixFitResult
 
 
@@ -293,6 +297,56 @@ def test_plot_fit_referee_can_annotate_feature_regions():
     )
 
     assert any(text.get_text() == "DIB 4428" for text in axes[0, 0].texts)
+    fig.clf()
+
+
+def test_plot_spectrum_audit_is_generic_and_labelled(tmp_path):
+    wave = np.linspace(4100.0, 4000.0, 80)
+    flux = 1.0 + 0.02 * np.sin(np.arange(wave.size) / 4.0)
+    flux[10:14] = 0.0
+    mask = np.ones(wave.size, dtype=bool)
+    mask[30:36] = False
+    segment = SpectrumSegment(
+        wave,
+        flux,
+        err=np.full(wave.size, 0.02),
+        mask=mask,
+        meta={
+            "warning_regions": [
+                {"id": "generic_warning", "region_A": [4050.0, 4060.0]},
+            ],
+        },
+        name="generic_uploaded_spectrum",
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+    )
+    diagnostic_selection = {
+        "selected": [
+            {
+                "id": "generic_window",
+                "label": "Generic window",
+                "region_A": [4020.0, 4040.0],
+            }
+        ]
+    }
+
+    fig, axes = plot_spectrum_audit(
+        SpectrumCollection([segment]),
+        diagnostic_selection=diagnostic_selection,
+        warning_regions=[{"id": "manual_warning", "region_A": [4070.0, 4080.0]}],
+        max_plot_points=25,
+    )
+
+    assert len(axes) == 3
+    assert axes[0].get_ylabel() == "Raw flux\n(robust y-scale)"
+    assert axes[1].get_ylabel().startswith("Flux / local")
+    assert axes[2].get_ylabel() == "Mask\nTrue=use"
+    legend_labels = [text.get_text() for text in axes[0].get_legend().get_texts()]
+    assert "suggested diagnostic window" in legend_labels
+    assert "metadata warning region" in legend_labels
+    assert "near-zero block" in legend_labels
+    assert "diagnostic only" in axes[2].texts[0].get_text()
     fig.clf()
 
 

@@ -65,8 +65,12 @@ scientific than smoke tests.
   diagnostic/stress/unsupported targets.
 - `external_spectra_validation.py` audits user-supplied SDSS/SEGUE and
   UVES-POP spectra through the common reader and fit-readiness layers. It writes
-  resumable JSON/CSV summaries and optional quicklook plots, but deliberately
-  does not run PHOENIX fits or introduce fitting presets for those archives.
+  resumable JSON/CSV summaries and optional audit plots. The default plot style
+  is generic: raw flux, plotting-only robust local normalization, mask status,
+  metadata warning regions, near-zero blocks, and suggested diagnostic windows.
+  Archive/product regions appear only when a reader supplies that metadata. The
+  script deliberately does not repair calibration, run PHOENIX fits, or
+  introduce fitting presets for those archives.
 - `diagnostic_window_audit.py` runs the PHOENIX-free diagnostic-window selector
   over a manifest, such as the bundled XSL Figure 1 validation manifest, and
   writes role-aware JSON/CSV summaries plus an optional top-window heatmap. Use

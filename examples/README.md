@@ -93,8 +93,19 @@ python scripts/external_spectra_validation.py \
   --scan-root /path/to/spectra_test_set \
   --output-json /tmp/spyctres_external_validation.json \
   --output-csv /tmp/spyctres_external_validation.csv \
+  --plot-dir /tmp/spyctres_external_plots \
   --resume
 ```
+
+Plots written by this helper default to a generic three-panel audit view: raw
+flux, robust locally normalized flux, and mask status. Green shaded spans are
+Spyctres' suggested diagnostic windows; orange spans are metadata warning
+regions, including archive/product regions only when a reader provides them;
+red spans are near-zero blocks. These overlays are diagnostic only and are not
+silently applied to fits. The helper assumes users provide properly calibrated
+spectra and masks; it does not repair flux calibration, wavelength calibration,
+or mask choices. Use `--plot-style quicklook` if you want the older single-panel
+view.
 
 For a manifest-driven run, use a CSV with `path`, `instrument`, and optional
 `role` values such as `clean` or `dirty`. The helper currently supports SDSS

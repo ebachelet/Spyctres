@@ -28,9 +28,9 @@ from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
-from Spyctres import audit_spectrum_for_fit
+from Spyctres import audit_spectrum_for_fit, select_diagnostic_windows
 from Spyctres.io import get_instrument_info, list_instruments, read_spectrum
-from Spyctres.plotting import plot_spectrum_quicklook
+from Spyctres.plotting import plot_spectrum_audit, plot_spectrum_quicklook
 
 
 SUPPORTED_EXTERNAL_INSTRUMENTS = ("sdss", "uves_pop")
@@ -113,12 +113,23 @@ def build_parser():
     parser.add_argument(
         "--plot-dir",
         default=None,
-        help="Optional directory for quicklook plots.",
+        help="Optional directory for diagnostic plots.",
+    )
+    parser.add_argument(
+        "--plot-style",
+        default="audit",
+        choices=("audit", "quicklook", "both"),
+        help=(
+            "Plot style written to --plot-dir. 'audit' writes a three-panel "
+            "raw/normalized/mask plot with generic metadata-warning and "
+            "diagnostic-window overlays; 'quicklook' preserves the old "
+            "single-panel view."
+        ),
     )
     parser.add_argument(
         "--no-plots",
         action="store_true",
-        help="Do not write quicklook plots even if --plot-dir is supplied.",
+        help="Do not write diagnostic plots even if --plot-dir is supplied.",
     )
     parser.add_argument(
         "--resume",
@@ -176,6 +187,18 @@ def build_parser():
         type=int,
         default=None,
         help="Optional zero-based UVES-POP error column. Omit to keep err=None.",
+    )
+    parser.add_argument(
+        "--diagnostic-window-count",
+        type=int,
+        default=8,
+        help="Maximum number of suggested diagnostic windows overlaid on audit plots.",
+    )
+    parser.add_argument(
+        "--max-plot-points",
+        type=int,
+        default=8000,
+        help="Maximum plotted samples per segment in each audit-plot trace.",
     )
     return parser
 
@@ -629,6 +652,34 @@ def _segment_summary(segment):
     }
 
 
+def _diagnostic_window_selection(spectrum, max_windows):
+    max_windows = int(max_windows)
+    if max_windows < 1:
+        return {
+            "schema_version": 1,
+            "operation": "select_diagnostic_windows",
+            "selected": [],
+            "rejected": [],
+            "selection_policy": {"max_windows": 0},
+        }
+    try:
+        return select_diagnostic_windows(
+            spectrum,
+            max_windows=max_windows,
+            min_overlap_A=8.0,
+            min_pixels=8,
+        )
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "operation": "select_diagnostic_windows",
+            "status": "selection_failed",
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+            "selected": [],
+        }
+
+
 def _role_expectation_assessment(role, readiness):
     role = str(role or "unknown").strip().lower()
     fit_ready = bool((readiness or {}).get("fit_ready"))
@@ -699,6 +750,10 @@ def validate_target(target, args):
         segments = [_segment_summary(segment) for segment in _iter_segments(spectrum)]
         err_present = any(item["err_present"] for item in segments)
         resolution_present = any(item["resolution"] is not None for item in segments)
+        diagnostic_selection = _diagnostic_window_selection(
+            spectrum,
+            args.diagnostic_window_count,
+        )
         record.update(
             {
                 "status": "ok",
@@ -711,6 +766,7 @@ def validate_target(target, args):
                 "resolution_present": bool(resolution_present),
                 "segments": segments,
                 "readiness": readiness,
+                "diagnostic_window_selection": diagnostic_selection,
                 "role_expectation_assessment": _role_expectation_assessment(
                     target.get("role"),
                     readiness,
@@ -727,12 +783,37 @@ def validate_target(target, args):
         )
         if args.plot_dir and not args.no_plots:
             Path(args.plot_dir).mkdir(parents=True, exist_ok=True)
-            fig, _ax = plot_spectrum_quicklook(spectrum, use_mask=True, show_error=False)
-            plot_path = Path(args.plot_dir) / _safe_plot_name(target)
-            fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            record["quicklook_plot"] = str(plot_path)
-            print("  Wrote quicklook plot: {0}".format(plot_path), flush=True)
+            plot_paths = {}
+            if args.plot_style in {"quicklook", "both"}:
+                fig, _ax = plot_spectrum_quicklook(
+                    spectrum,
+                    use_mask=True,
+                    show_error=False,
+                )
+                suffix = "_quicklook" if args.plot_style == "both" else ""
+                plot_path = Path(args.plot_dir) / _safe_plot_name(
+                    {**target, "target_id": "{0}{1}".format(target["target_id"], suffix)}
+                )
+                fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                plot_paths["quicklook"] = str(plot_path)
+                print("  Wrote quicklook plot: {0}".format(plot_path), flush=True)
+            if args.plot_style in {"audit", "both"}:
+                fig, _axes = plot_spectrum_audit(
+                    spectrum,
+                    title="{0} ({1})".format(target.get("label"), instrument),
+                    diagnostic_selection=diagnostic_selection,
+                    max_plot_points=args.max_plot_points,
+                )
+                suffix = "_audit" if args.plot_style == "both" else ""
+                plot_path = Path(args.plot_dir) / _safe_plot_name(
+                    {**target, "target_id": "{0}{1}".format(target["target_id"], suffix)}
+                )
+                fig.savefig(plot_path, dpi=150)
+                plt.close(fig)
+                plot_paths["audit"] = str(plot_path)
+                print("  Wrote audit plot: {0}".format(plot_path), flush=True)
+            record["plots"] = plot_paths
     except Exception as exc:  # validation runner should continue across bad files
         record.update(
             {
@@ -806,6 +887,9 @@ def _payload(records, args, targets):
             "sdss_attach_wdisp_resolution": bool(args.sdss_attach_wdisp_resolution),
             "uves_wave_unit": args.uves_wave_unit,
             "uves_err_column": args.uves_err_column,
+            "plot_style": args.plot_style,
+            "diagnostic_window_count": int(args.diagnostic_window_count),
+            "max_plot_points": int(args.max_plot_points),
             "note": (
                 "This runner audits ingestion/readiness only. It does not run "
                 "PHOENIX fits, apply SDSS wdisp convolution, or classify stars."

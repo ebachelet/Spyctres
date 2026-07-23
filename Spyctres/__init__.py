@@ -23,7 +23,12 @@ from .results import (
     format_fit_quality_report,
 )
 from .linefitting import LineSpec, LineFitConfig, LineFitResult, fit_line, fit_lines
-from .plotting import plot_fit_referee, plot_line_fit, plot_xsl_validation_payload
+from .plotting import (
+    plot_fit_referee,
+    plot_line_fit,
+    plot_spectrum_audit,
+    plot_xsl_validation_payload,
+)
 from .diagnostics import (
     KNOWN_RESIDUAL_WINDOWS,
     annotate_nonstellar_features,
@@ -107,7 +112,8 @@ __all__ = [
     "build_fit_quality_report", "compare_fit_results", "describe_quality_flags",
     "format_fit_quality_report",
     "LineSpec", "LineFitConfig", "LineFitResult", "fit_line", "fit_lines",
-    "plot_fit_referee", "plot_line_fit", "plot_xsl_validation_payload",
+    "plot_fit_referee", "plot_line_fit", "plot_spectrum_audit",
+    "plot_xsl_validation_payload",
     "KNOWN_RESIDUAL_WINDOWS", "annotate_nonstellar_features",
     "diagnose_known_residual_windows",
     "DEFAULT_DIAGNOSTIC_ROLES", "DIAGNOSTIC_WINDOW_CATALOG",

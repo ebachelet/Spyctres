@@ -83,7 +83,13 @@ def build_parser():
             "--instrument sdss --R 2000 --sdss-mask-policy stellar_strict\n"
             "  SDSS reader metadata intentionally keeps resolution=None; "
             "--R 2000 is an explicit quicklook approximation, not precision "
-            "SDSS LSF modelling."
+            "SDSS LSF modelling.\n\n"
+            "UVES-POP ASCII quicklook with documented metadata overrides:\n"
+            "  python examples/simple_phoenix_fit.py hd115617.dat "
+            "--instrument uves_pop --R 80000 --wave-medium air "
+            "--uves-err-column 2\n"
+            "  UVES-POP resolving power and wavelength-medium assumptions should "
+            "be verified from the product documentation before precision work."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -96,6 +102,27 @@ def build_parser():
         help=(
             "SDSS reader bitmask policy. 'auto' uses stellar_strict for this "
             "PHOENIX fitting example; other instruments ignore this option."
+        ),
+    )
+    parser.add_argument(
+        "--wave-medium",
+        choices=("keep", "unknown", "air", "vacuum"),
+        default="keep",
+        help=(
+            "Override the reader's wavelength-medium metadata before fitting. "
+            "Use this for products whose documentation says the wavelength "
+            "grid is air or vacuum but the generic reader cannot know that. "
+            "The default 'keep' preserves reader metadata."
+        ),
+    )
+    parser.add_argument(
+        "--uves-err-column",
+        type=int,
+        default=None,
+        help=(
+            "Optional zero-based uncertainty column for UVES-POP ASCII files. "
+            "UVES-POP two-column reads keep err=None by default; pass 2 when "
+            "the third numeric column is a 1-sigma error for your product."
         ),
     )
     parser.add_argument("--phoenix-dir", default=None)
@@ -355,12 +382,17 @@ def _append_exclusion_mask(fit_kwargs, mask_spec):
 
 def _reader_kwargs_from_args(args):
     instrument = str(args.instrument).strip().lower()
-    if instrument not in {"sdss", "sdss_spec", "segue"}:
-        return {}
-    policy = args.sdss_mask_policy
-    if policy == "auto":
-        policy = "stellar_strict"
-    return {"sdss_mask_policy": policy}
+    kwargs = {}
+    if instrument in {"sdss", "sdss_spec", "segue"}:
+        policy = args.sdss_mask_policy
+        if policy == "auto":
+            policy = "stellar_strict"
+        kwargs["sdss_mask_policy"] = policy
+    if instrument in {"uves_pop", "uves-pop", "uvespop"}:
+        err_column = getattr(args, "uves_err_column", None)
+        if err_column is not None:
+            kwargs["err_column"] = int(err_column)
+    return kwargs
 
 
 def _coerce_segments(spectrum):
@@ -369,6 +401,36 @@ def _coerce_segments(spectrum):
     if isinstance(spectrum, (list, tuple)):
         return list(spectrum)
     return [spectrum]
+
+
+def _override_segment_wave_medium(segment, wave_medium):
+    meta = dict(getattr(segment, "meta", {}) or {})
+    meta["wave_medium"] = wave_medium
+    meta["wave_medium_source"] = "user_override"
+    return segment.copy(meta=meta, wave_medium=wave_medium)
+
+
+def _override_spectrum_wave_medium(spectrum, wave_medium):
+    wave_medium = str(wave_medium).strip().lower()
+    if wave_medium == "keep":
+        return spectrum
+    if wave_medium not in {"unknown", "air", "vacuum"}:
+        raise ValueError("--wave-medium must be keep, unknown, air, or vacuum.")
+    if hasattr(spectrum, "segments"):
+        meta = dict(getattr(spectrum, "meta", {}) or {})
+        meta["wave_medium_override"] = wave_medium
+        return spectrum.copy(
+            segments=[
+                _override_segment_wave_medium(segment, wave_medium)
+                for segment in spectrum.segments
+            ],
+            meta=meta,
+        )
+    if isinstance(spectrum, tuple):
+        return tuple(_override_segment_wave_medium(segment, wave_medium) for segment in spectrum)
+    if isinstance(spectrum, list):
+        return [_override_segment_wave_medium(segment, wave_medium) for segment in spectrum]
+    return _override_segment_wave_medium(spectrum, wave_medium)
 
 
 def _archive_masks_by_segment(spectrum):
@@ -437,17 +499,84 @@ def _parse_line_groups(value, result=None, hot_teff_threshold=10500.0):
     return groups
 
 
-def _line_windows_for_used_pixels(segment, used_mask, groups, half_width_A):
+def _line_window_quality(segment, used_mask, label, center, wmin, wmax):
+    wave = np.asarray(segment.wave, dtype=float)
+    flux = np.asarray(segment.flux, dtype=float)
+    used = np.asarray(used_mask, dtype=bool)
+    in_window = (wave >= float(wmin)) & (wave <= float(wmax)) & np.isfinite(wave)
+    finite_flux = np.isfinite(flux)
+    total = int(np.count_nonzero(in_window))
+    used_good = in_window & used & finite_flux
+    n_used = int(np.count_nonzero(used_good))
+
+    zero_like = in_window & finite_flux & np.isclose(flux, 0.0, rtol=0.0, atol=1.0e-14)
+    n_zero = int(np.count_nonzero(zero_like))
+    zero_fraction = 0.0 if total == 0 else float(n_zero) / float(total)
+    usable_fraction = 0.0 if total == 0 else float(n_used) / float(total)
+
+    center_half_width = min(5.0, max(1.0, 0.1 * (float(wmax) - float(wmin))))
+    center_band = in_window & (np.abs(wave - float(center)) <= center_half_width)
+    center_total = int(np.count_nonzero(center_band))
+    center_used = int(np.count_nonzero(center_band & used & finite_flux))
+    center_zero = int(np.count_nonzero(center_band & zero_like))
+    center_zero_fraction = (
+        0.0 if center_total == 0 else float(center_zero) / float(center_total)
+    )
+
+    reasons = []
+    if total == 0:
+        reasons.append("no_pixels_in_window")
+    if n_used < 8:
+        reasons.append("too_few_fitted_pixels")
+    if total > 0 and usable_fraction < 0.35:
+        reasons.append("low_usable_fraction")
+    if total > 0 and zero_fraction > 0.25:
+        reasons.append("zero_flux_block")
+    if center_total == 0:
+        reasons.append("no_pixels_near_line_center")
+    elif center_used == 0:
+        reasons.append("line_center_not_fitted")
+    elif center_zero_fraction > 0.5:
+        reasons.append("line_center_zero_flux_block")
+
+    return {
+        "label": label,
+        "center_A": float(center),
+        "window_A": [float(wmin), float(wmax)],
+        "status": "skipped" if reasons else "selected",
+        "reasons": reasons,
+        "n_pixels": total,
+        "n_fitted_pixels": n_used,
+        "usable_fraction": usable_fraction,
+        "zero_flux_fraction": zero_fraction,
+        "center_half_width_A": center_half_width,
+        "center_n_pixels": center_total,
+        "center_n_fitted_pixels": center_used,
+        "center_zero_flux_fraction": center_zero_fraction,
+    }
+
+
+def _line_windows_for_used_pixels(
+    segment,
+    used_mask,
+    groups,
+    half_width_A,
+    return_diagnostics=False,
+):
     if half_width_A <= 0:
         raise ValueError("--line-window-half-width must be positive.")
     wave = np.asarray(segment.wave, dtype=float)
     used = np.asarray(used_mask, dtype=bool)
     finite_used = used & np.isfinite(wave)
     if not np.any(finite_used):
+        if return_diagnostics:
+            return [], {"selected": [], "skipped": []}
         return []
     wmin = float(np.nanmin(wave[finite_used]))
     wmax = float(np.nanmax(wave[finite_used]))
     raw_windows = []
+    selected_records = []
+    skipped_records = []
     seen = set()
     for group in groups:
         for label, center in COMMON_LINES[group]:
@@ -459,8 +588,28 @@ def _line_windows_for_used_pixels(segment, used_mask, groups, half_width_A):
                 continue
             seen.add(key)
             line_label = "{0} {1:.1f} Å".format(label, center)
-            raw_windows.append((line_label, center - half_width_A, center + half_width_A))
-    return _merge_overlapping_line_windows(sorted(raw_windows, key=lambda item: item[1]))
+            line_wmin = center - half_width_A
+            line_wmax = center + half_width_A
+            record = _line_window_quality(
+                segment,
+                used,
+                line_label,
+                center,
+                line_wmin,
+                line_wmax,
+            )
+            if record["status"] == "skipped":
+                skipped_records.append(record)
+                continue
+            selected_records.append(record)
+            raw_windows.append((line_label, line_wmin, line_wmax))
+    windows = _merge_overlapping_line_windows(sorted(raw_windows, key=lambda item: item[1]))
+    if return_diagnostics:
+        return windows, {
+            "selected": selected_records,
+            "skipped": skipped_records,
+        }
+    return windows
 
 
 def _merge_overlapping_line_windows(windows):
@@ -615,6 +764,14 @@ def _build_line_diagnostic_plots(args, spectrum, result):
 
     figures = []
     plot_paths = {}
+    quality_payload = {
+        "schema_version": 1,
+        "purpose": (
+            "Quality gate for zoomed diagnostic-line panels; skipped windows "
+            "are not used for fitting or plotted as trustworthy local diagnostics."
+        ),
+        "segments": [],
+    }
     multiple_segments = len(segments) > 1
     for index, (segment, model) in enumerate(zip(segments, models)):
         wave = np.asarray(segment.wave, dtype=float)
@@ -630,12 +787,36 @@ def _build_line_diagnostic_plots(args, spectrum, result):
         else:
             excluded = np.zeros(wave.size, dtype=bool)
 
-        windows = _line_windows_for_used_pixels(
+        windows, window_quality = _line_windows_for_used_pixels(
             segment,
             used,
             groups,
             args.line_window_half_width,
+            return_diagnostics=True,
         )
+        quality_payload["segments"].append(
+            {
+                "segment_index": int(index),
+                "segment_name": getattr(segment, "name", None),
+                "selected": window_quality["selected"],
+                "skipped": window_quality["skipped"],
+            }
+        )
+        if window_quality["skipped"]:
+            skipped_labels = [
+                "{0} ({1})".format(
+                    record["label"],
+                    ", ".join(record["reasons"]) or "unspecified",
+                )
+                for record in window_quality["skipped"]
+            ]
+            print(
+                "Skipping unreliable line diagnostic windows for {0}: {1}.".format(
+                    getattr(segment, "name", "segment {0}".format(index + 1)),
+                    "; ".join(skipped_labels),
+                ),
+                flush=True,
+            )
         if not windows:
             continue
 
@@ -680,6 +861,11 @@ def _build_line_diagnostic_plots(args, spectrum, result):
             plot_paths[key] = savepath
         figures.append(fig)
 
+    result.summary["line_diagnostic_window_quality"] = quality_payload
+    result.provenance["line_diagnostic_window_quality"] = {
+        "schema_version": quality_payload["schema_version"],
+        "note": "See result summary for selected/skipped diagnostic-line windows.",
+    }
     if not figures:
         print(
             "No requested diagnostic lines overlap fitted pixels; skipping "
@@ -703,8 +889,15 @@ def main(argv=None):
     spectrum = read_spectrum(
         args.spectrum,
         instrument=args.instrument,
+        warn_unknown=(args.wave_medium == "keep"),
         **reader_kwargs,
     )
+    spectrum = _override_spectrum_wave_medium(spectrum, args.wave_medium)
+    if args.wave_medium != "keep":
+        print(
+            "Overriding wavelength-medium metadata: {0}.".format(args.wave_medium),
+            flush=True,
+        )
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, spectrum)
     archive_masks = _archive_masks_by_segment(spectrum)
     archive_mask_count = _archive_mask_count(archive_masks)
@@ -818,6 +1011,14 @@ def main(argv=None):
     }
     result.provenance["spectrum_readiness"] = readiness
     result.provenance["archive_mask_policy"] = dict(result.summary["archive_mask_policy"])
+    if args.wave_medium != "keep":
+        result.summary["wave_medium_override"] = {
+            "wave_medium": args.wave_medium,
+            "source": "user_override",
+        }
+        result.provenance["wave_medium_override"] = dict(
+            result.summary["wave_medium_override"]
+        )
     if resolution_override is not None:
         result.summary.update(resolution_override)
         result.provenance["resolution_override"] = dict(resolution_override)

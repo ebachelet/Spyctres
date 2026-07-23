@@ -178,8 +178,433 @@ def _mask_to_spans(wave, mask):
     for g in groups:
         if g.size == 0:
             continue
-        spans.append((wave[g[0]], wave[g[-1]]))
+        w0 = float(wave[g[0]])
+        w1 = float(wave[g[-1]])
+        spans.append((min(w0, w1), max(w0, w1)))
     return spans
+
+
+def _plot_downsample_indices(n_values, max_points):
+    n_values = int(n_values)
+    max_points = int(max_points)
+    if n_values <= 0:
+        return np.array([], dtype=int)
+    if max_points < 1 or n_values <= max_points:
+        return np.arange(n_values, dtype=int)
+    stride = int(np.ceil(n_values / float(max_points)))
+    return np.arange(0, n_values, stride, dtype=int)
+
+
+def _plot_audit_segments(spectrum):
+    if hasattr(spectrum, "segments"):
+        return list(spectrum.segments)
+    if (
+        isinstance(spectrum, (list, tuple))
+        and spectrum
+        and hasattr(spectrum[0], "wave")
+        and hasattr(spectrum[0], "flux")
+    ):
+        return list(spectrum)
+    return [spectrum]
+
+
+def _local_percentile_continuum(
+    wave,
+    flux,
+    mask,
+    *,
+    n_bins=160,
+    percentile=85.0,
+):
+    """Return a plotting-only local percentile continuum estimate.
+
+    This helper is intentionally not a fitting normalization. It is used only
+    to make broad spectral structure, gaps, mask behaviour, and local features
+    visible in audit plots.
+    """
+    wave = _as_float_array(wave)
+    flux = _as_float_array(flux)
+    mask = _as_bool_array(mask, n_expected=wave.size)
+    good = mask & np.isfinite(wave) & np.isfinite(flux)
+    if np.count_nonzero(good) < 8:
+        level = np.nanmedian(flux[good]) if np.any(good) else 1.0
+        if not np.isfinite(level) or level == 0.0:
+            level = 1.0
+        return np.full(flux.shape, float(level))
+
+    w_good = wave[good]
+    f_good = flux[good]
+    wmin = float(np.nanmin(w_good))
+    wmax = float(np.nanmax(w_good))
+    if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+        level = float(np.nanmedian(f_good))
+        if not np.isfinite(level) or level == 0.0:
+            level = 1.0
+        return np.full(flux.shape, level)
+
+    n_bins = int(np.clip(n_bins, 8, max(8, min(400, np.count_nonzero(good) // 20))))
+    edges = np.linspace(wmin, wmax, n_bins + 1)
+    centers = []
+    values = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        inside = good & (wave >= lo) & (wave <= hi)
+        if np.count_nonzero(inside) < 3:
+            continue
+        sample = flux[inside]
+        sample = sample[np.isfinite(sample)]
+        if sample.size < 3:
+            continue
+        value = float(np.nanpercentile(sample, percentile))
+        if np.isfinite(value) and value != 0.0:
+            centers.append(0.5 * (lo + hi))
+            values.append(value)
+
+    if len(values) < 2:
+        level = float(np.nanmedian(f_good))
+        if not np.isfinite(level) or level == 0.0:
+            level = 1.0
+        return np.full(flux.shape, level)
+
+    continuum = np.interp(wave, np.asarray(centers), np.asarray(values))
+    bad = ~np.isfinite(continuum) | (continuum == 0.0)
+    if np.any(bad):
+        replacement = float(np.nanmedian(np.asarray(values)))
+        continuum[bad] = replacement if np.isfinite(replacement) and replacement else 1.0
+    return continuum
+
+
+def _metadata_warning_regions_for_segment(segment):
+    """Return generic wavelength warning regions declared in segment metadata."""
+    meta = getattr(segment, "meta", {}) or {}
+    candidates = []
+    for key in (
+        "warning_regions",
+        "quality_warning_regions",
+        "bad_region_catalog",
+        "archive_mask_catalog",
+    ):
+        value = meta.get(key)
+        if isinstance(value, (list, tuple)):
+            candidates.extend(value)
+
+    regions = []
+    seen = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        region = item.get("region_A") or item.get("region")
+        if not region or len(region) != 2:
+            continue
+        try:
+            wmin = float(region[0])
+            wmax = float(region[1])
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+            continue
+        key = (round(wmin, 8), round(wmax, 8), str(item.get("id", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        regions.append(
+            {
+                "id": item.get("id"),
+                "label": item.get("name") or item.get("label") or item.get("id"),
+                "region_A": [wmin, wmax],
+                "mask_type": item.get("mask_type") or item.get("type"),
+            }
+        )
+    return regions
+
+
+def _diagnostic_window_regions_for_segment(diagnostic_selection, segment_index):
+    """Extract generic diagnostic-window overlays from selector-style metadata."""
+    windows = []
+    if diagnostic_selection is None:
+        return windows
+    if isinstance(diagnostic_selection, dict):
+        records = diagnostic_selection.get("selected", ())
+    else:
+        records = diagnostic_selection
+    for item in records or ():
+        if not isinstance(item, dict):
+            continue
+        contributions = item.get("segment_contributions")
+        if contributions:
+            for contribution in contributions:
+                if int(contribution.get("segment_index", -1)) != int(segment_index):
+                    continue
+                region = contribution.get("operational_region_A")
+                if region and len(region) == 2:
+                    try:
+                        wmin = float(region[0])
+                        wmax = float(region[1])
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isfinite(wmin) and np.isfinite(wmax) and wmax > wmin:
+                        windows.append(
+                            {
+                                "id": item.get("id"),
+                                "label": item.get("label") or item.get("id"),
+                                "region_A": [wmin, wmax],
+                                "score": item.get("score"),
+                            }
+                        )
+            continue
+
+        region = item.get("region_A") or item.get("region")
+        if region and len(region) == 2:
+            try:
+                wmin = float(region[0])
+                wmax = float(region[1])
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(wmin) and np.isfinite(wmax) and wmax > wmin:
+                windows.append(
+                    {
+                        "id": item.get("id"),
+                        "label": item.get("label") or item.get("id"),
+                        "region_A": [wmin, wmax],
+                        "score": item.get("score"),
+                    }
+                )
+    return windows
+
+
+def plot_spectrum_audit(
+    spectrum,
+    *,
+    title=None,
+    diagnostic_selection=None,
+    warning_regions=None,
+    max_plot_points=8000,
+    local_continuum_percentile=85.0,
+    include_metadata_warning_regions=True,
+    figsize=(14.0, 9.0),
+):
+    """Plot generic audit diagnostics for any calibrated 1-D spectrum.
+
+    The plot is designed for user-uploaded reduced 1-D spectra from any
+    supported reader, not for a specific archive. It assumes the input spectrum
+    is already wavelength/flux calibrated and that the container mask follows
+    Spyctres' convention: ``True`` means usable. The local continuum estimate is
+    plotting-only; it is not applied to the data and is not used for fitting.
+
+    Green spans show optional diagnostic windows, orange spans show generic
+    warning/bad regions supplied by metadata or ``warning_regions``, and red
+    spans show near-zero blocks detected from the plotted flux. These overlays
+    are visual/provenance aids only and are not silently applied as masks.
+    """
+    segments = _plot_audit_segments(spectrum)
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=figsize,
+        sharex=True,
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [2.4, 2.4, 1.0]},
+    )
+    raw_ax, norm_ax, mask_ax = axes
+    raw_values = []
+    norm_values = []
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["tab:blue"])
+    warning_label_used = False
+    window_label_used = False
+    zero_label_used = False
+    warning_regions = list(warning_regions or ())
+
+    for segment_index, segment in enumerate(segments):
+        if not hasattr(segment, "wave") or not hasattr(segment, "flux"):
+            raise TypeError("plot_spectrum_audit requires spectrum-like objects.")
+        color = colors[segment_index % len(colors)]
+        wave = _as_float_array(segment.wave)
+        flux = _as_float_array(segment.flux)
+        mask = np.asarray(
+            getattr(segment, "mask", np.ones(wave.shape, dtype=bool)),
+            dtype=bool,
+        )
+        if mask.shape != wave.shape:
+            raise ValueError("Spectrum mask shape must match wavelength shape.")
+        good = np.isfinite(wave) & np.isfinite(flux)
+        used = good & mask
+        order = np.argsort(wave[good]) if np.any(good) else np.array([], dtype=int)
+        wave_good = wave[good][order]
+        flux_good = flux[good][order]
+        idx = _plot_downsample_indices(wave_good.size, max_plot_points)
+        label = getattr(segment, "name", None) or "segment {0}".format(segment_index + 1)
+        if idx.size:
+            raw_ax.plot(
+                wave_good[idx],
+                flux_good[idx],
+                lw=0.75,
+                color=color,
+                label=str(label),
+            )
+            raw_values.append(flux_good[idx])
+
+        continuum = _local_percentile_continuum(
+            wave,
+            flux,
+            used,
+            percentile=local_continuum_percentile,
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            normalized = flux / continuum
+        normalized_good = good & np.isfinite(normalized)
+        order_norm = (
+            np.argsort(wave[normalized_good])
+            if np.any(normalized_good)
+            else np.array([], dtype=int)
+        )
+        wave_norm = wave[normalized_good][order_norm]
+        flux_norm = normalized[normalized_good][order_norm]
+        idx_norm = _plot_downsample_indices(wave_norm.size, max_plot_points)
+        if idx_norm.size:
+            norm_ax.plot(
+                wave_norm[idx_norm],
+                flux_norm[idx_norm],
+                lw=0.75,
+                color=color,
+                label=str(label),
+            )
+            norm_values.append(flux_norm[idx_norm])
+
+        if wave.size:
+            mask_order = np.argsort(wave)
+            xmask = wave[mask_order]
+            ymask = np.where(mask[mask_order], 1.0, 0.0)
+            idx_mask = _plot_downsample_indices(xmask.size, max_plot_points)
+            if idx_mask.size:
+                mask_ax.plot(
+                    xmask[idx_mask],
+                    ymask[idx_mask],
+                    drawstyle="steps-mid",
+                    lw=0.8,
+                    color=color,
+                    alpha=0.85,
+                    label="usable mask" if segment_index == 0 else None,
+                )
+
+        finite_used_flux = flux[used]
+        scale = (
+            float(np.nanmedian(np.abs(finite_used_flux)))
+            if finite_used_flux.size
+            else 1.0
+        )
+        if not np.isfinite(scale) or scale <= 0.0:
+            scale = 1.0
+        near_zero = good & (np.abs(flux) <= max(1.0e-30, 1.0e-6 * scale))
+        for wmin, wmax in _mask_to_spans(wave, near_zero):
+            for ax in axes:
+                ax.axvspan(
+                    wmin,
+                    wmax,
+                    color="tab:red",
+                    alpha=0.12,
+                    lw=0,
+                    label=(
+                        "near-zero block"
+                        if not zero_label_used and ax is raw_ax
+                        else None
+                    ),
+                )
+            zero_label_used = True
+
+        segment_warning_regions = list(warning_regions)
+        if include_metadata_warning_regions:
+            segment_warning_regions.extend(_metadata_warning_regions_for_segment(segment))
+        for region in segment_warning_regions:
+            if not isinstance(region, dict):
+                continue
+            values = region.get("region_A") or region.get("region")
+            if not values or len(values) != 2:
+                continue
+            try:
+                wmin = float(values[0])
+                wmax = float(values[1])
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+                continue
+            for ax in axes:
+                ax.axvspan(
+                    wmin,
+                    wmax,
+                    color="tab:orange",
+                    alpha=0.12,
+                    lw=0,
+                    label=(
+                        "metadata warning region"
+                        if not warning_label_used and ax is raw_ax
+                        else None
+                    ),
+                )
+            warning_label_used = True
+
+        for window in _diagnostic_window_regions_for_segment(
+            diagnostic_selection,
+            segment_index,
+        ):
+            wmin, wmax = window["region_A"]
+            for ax in (raw_ax, norm_ax):
+                ax.axvspan(
+                    wmin,
+                    wmax,
+                    color="tab:green",
+                    alpha=0.08,
+                    lw=0,
+                    label=(
+                        "suggested diagnostic window"
+                        if not window_label_used and ax is raw_ax
+                        else None
+                    ),
+                )
+            center = 0.5 * (wmin + wmax)
+            norm_ax.text(
+                center,
+                0.98,
+                str(window.get("label") or window.get("id") or "window"),
+                transform=norm_ax.get_xaxis_transform(),
+                ha="center",
+                va="top",
+                fontsize=7,
+                rotation=30,
+                color="tab:green",
+                alpha=0.9,
+            )
+            window_label_used = True
+
+    if raw_values:
+        raw_ax.set_ylim(*_compute_robust_ylim(np.concatenate(raw_values), 0.5, 99.5))
+    if norm_values:
+        norm_ax.set_ylim(*_compute_robust_ylim(np.concatenate(norm_values), 1.0, 99.0))
+    mask_ax.set_ylim(-0.15, 1.15)
+    raw_ax.set_ylabel("Raw flux\n(robust y-scale)")
+    norm_ax.set_ylabel(
+        "Flux / local\n{0:g}th-percentile continuum".format(
+            float(local_continuum_percentile)
+        )
+    )
+    mask_ax.set_ylabel("Mask\nTrue=use")
+    mask_ax.set_xlabel("Wavelength [Å]")
+    raw_ax.grid(alpha=0.18)
+    norm_ax.grid(alpha=0.18)
+    mask_ax.grid(alpha=0.18)
+    raw_ax.legend(loc="best", fontsize=8)
+    mask_ax.text(
+        0.01,
+        0.04,
+        "Green = suggested diagnostic windows; orange = metadata warning regions; "
+        "red = near-zero blocks. Overlays are diagnostic only and are not "
+        "silently applied.",
+        transform=mask_ax.transAxes,
+        fontsize=8,
+        va="bottom",
+        ha="left",
+    )
+    if title:
+        fig.suptitle(title)
+    return fig, axes
 
 
 def _resolve_line_group(group):
