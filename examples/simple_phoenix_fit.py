@@ -372,6 +372,44 @@ def _display_warnings(args, warnings):
     ]
 
 
+def _print_classification_branch_summary(suggestion, max_rows=3):
+    branch_plan = suggestion.provenance.get("classification_branches", {})
+    branches = list(branch_plan.get("branches") or ())
+    recommended = branch_plan.get("recommended_branch") or {}
+    if not branches:
+        return
+    print("Branch-aware first-pass candidates:", flush=True)
+    if recommended:
+        regions = recommended.get("fit_regions_A") or ()
+        print(
+            "  - recommended: {0} ({1} fitted diagnostic window(s))".format(
+                recommended.get("label", recommended.get("id", "unknown")),
+                len(regions),
+            ),
+            flush=True,
+        )
+    else:
+        print("  - no branch passed the minimum coverage checks", flush=True)
+    for branch in branches[: int(max_rows)]:
+        status = branch.get("status", "unknown")
+        label = branch.get("label", branch.get("id", "unknown"))
+        windows = branch.get("fit_window_ids") or branch.get("matched_window_ids") or ()
+        print(
+            "  - {0}: {1}; score={2:.2f}; windows={3}".format(
+                label,
+                status,
+                float(branch.get("score", 0.0)),
+                ", ".join(windows) or "none",
+            ),
+            flush=True,
+        )
+    if branch_plan.get("ambiguous_top_branches"):
+        print(
+            "  - note: top branches are similar; compare branch-specific fits before trusting one.",
+            flush=True,
+        )
+
+
 def _append_exclusion_mask(fit_kwargs, mask_spec):
     masks = list(fit_kwargs.get("exclude_masks", []) or [])
     if fit_kwargs.get("exclude_mask") is not None:
@@ -932,6 +970,7 @@ def main(argv=None):
         print("Suggested first-pass fit defaults:", flush=True)
         for reason in suggestion.reasons:
             print("  - {0}".format(reason), flush=True)
+        _print_classification_branch_summary(suggestion)
         if resolution_override is not None:
             print(
                 "  - using user-supplied assumed resolution R={0:g}".format(

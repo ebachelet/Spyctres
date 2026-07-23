@@ -62,11 +62,16 @@ printed quality report to check flags, masked fraction, dropped segments, and
 per-segment fit-pixel counts before interpreting the fitted parameters. Use the
 instrument-specific recipes and local line diagnostics when assessing whether
 line-width residuals arise from the LSF, stellar broadening, masks, or model
-physics. The script uses `prepare_phoenix_fit_kwargs()` by default to choose a
-conservative first-pass window, bounds, RV scan, and coarse initialization from
-the loaded spectrum metadata. Expert users can still override those choices
-with flags such as `--wmin`, `--wmax`, `--teff`, `--teff-min`, or
-`--no-auto-defaults`.
+physics. The script uses `prepare_phoenix_fit_kwargs()` by default to choose
+branch-aware first-pass diagnostic windows, bounds, RV scan, and coarse
+initialization from the loaded spectrum metadata. When the spectrum has enough
+usable pixels in recognized features, the default regions come from explicit
+Balmer/Ca/Mg/TiO/Paschen/Brackett/CO-style diagnostic branches; otherwise the
+helper falls back to a broad coverage window. These branch suggestions are
+triage aids, not hidden spectral-type labels, and the script prints the
+recommended branch plus top alternatives before fitting. Expert users can still
+override those choices with flags such as `--wmin`, `--wmax`, `--teff`,
+`--teff-min`, or `--no-auto-defaults`.
 
 For SDSS spectra supplied by a user, the reader deliberately leaves
 `resolution=None` by default. It preserves `wdisp` LSF provenance when

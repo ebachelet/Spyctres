@@ -12,6 +12,7 @@ from .defaults import (
     clip_grid_to_bounds,
     prepare_phoenix_fit_kwargs,
     spectrum_wavelength_range,
+    suggest_classification_branches,
     suggest_phoenix_fit_defaults,
 )
 from .results import (
@@ -108,7 +109,7 @@ __all__ = [
     "PhoenixFitDiagnostics", "PhoenixFitResult",
     "PhoenixFitDefaults", "clip_grid_to_bounds",
     "prepare_phoenix_fit_kwargs", "spectrum_wavelength_range",
-    "suggest_phoenix_fit_defaults",
+    "suggest_classification_branches", "suggest_phoenix_fit_defaults",
     "build_fit_quality_report", "compare_fit_results", "describe_quality_flags",
     "format_fit_quality_report",
     "LineSpec", "LineFitConfig", "LineFitResult", "fit_line", "fit_lines",

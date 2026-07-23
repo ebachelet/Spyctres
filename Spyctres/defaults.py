@@ -1,10 +1,11 @@
 """Conservative first-pass PHOENIX fitting defaults.
 
 These helpers are intentionally rule-based and transparent. They do not try to
-classify the star before fitting; they choose a practical first wavelength
-window, broad-but-bounded PHOENIX parameter ranges, and a modest search budget
-from spectrum metadata and wavelength coverage. Every assumption is returned in
-provenance so callers can display or override it.
+classify the star before fitting; they choose practical first wavelength
+windows, broad-but-bounded PHOENIX parameter ranges, and a modest search budget
+from spectrum metadata and wavelength coverage. The branch-aware suggestions are
+feature-coverage triage, not a hidden spectral-type label. Every assumption is
+returned in provenance so callers can display or override it.
 """
 
 from __future__ import annotations
@@ -256,6 +257,444 @@ def _overlap_width(ranges, lo, hi):
     return float(width)
 
 
+CLASSIFICATION_BRANCH_PROFILES = (
+    {
+        "id": "blue_optical_balmer_metal",
+        "label": "Blue optical Balmer/metal classification",
+        "description": (
+            "A mixed blue-optical branch using Balmer wings plus Ca/Mg/metal "
+            "features. This is the safest first-pass branch when the spectrum "
+            "covers the classical 3900-5200 A classification region but the "
+            "stellar type is not yet known."
+        ),
+        "window_ids": (
+            "ca_hk_h_epsilon",
+            "h_delta",
+            "ca_i_4227",
+            "ch_g_band",
+            "h_gamma",
+            "h_beta",
+            "mg_i_b",
+        ),
+        "fit_window_ids": (
+            "ca_hk_h_epsilon",
+            "h_delta",
+            "ca_i_4227",
+            "h_gamma",
+            "h_beta",
+            "mg_i_b",
+        ),
+        "min_windows": 3,
+        "min_total_overlap_A": 140.0,
+        "max_fit_windows": 6,
+        "priority": 1.20,
+        "p0": (7000.0, 0.0, 4.0, 0.0),
+        "teff_bounds": (4500.0, 12000.0),
+        "teff_grid": (5000.0, 6000.0, 7500.0, 9000.0, 11000.0),
+        "feh_bounds": (-1.5, 0.5),
+        "logg_bounds": (2.5, 5.5),
+        "coarse_feh_grid": (-1.0, 0.0, 0.5),
+        "coarse_logg_grid": (3.0, 4.0, 5.0),
+        "ordinary_default": True,
+    },
+    {
+        "id": "hot_blue_hydrogen_stress",
+        "label": "Hot/intermediate blue hydrogen stress check",
+        "description": (
+            "Balmer plus He/Mg hot-star indicators. Useful as a follow-up "
+            "branch, but not the ordinary default because PHOENIX LTE models "
+            "near the hot end can miss NLTE-sensitive H/He physics."
+        ),
+        "window_ids": (
+            "ca_hk_h_epsilon",
+            "h_delta",
+            "h_gamma",
+            "he_i_4471",
+            "mg_ii_4481",
+            "si_ii_4128_4130",
+            "h_beta",
+        ),
+        "fit_window_ids": ("h_delta", "h_gamma", "h_beta"),
+        "min_windows": 2,
+        "min_total_overlap_A": 90.0,
+        "max_fit_windows": 3,
+        "priority": 0.78,
+        "p0": (9000.0, 0.0, 3.5, 0.0),
+        "teff_bounds": (6500.0, 12000.0),
+        "teff_grid": (7000.0, 9000.0, 11000.0),
+        "feh_bounds": (-1.0, 0.5),
+        "logg_bounds": (2.0, 5.0),
+        "coarse_feh_grid": (-0.5, 0.0, 0.5),
+        "coarse_logg_grid": (2.5, 3.5, 4.5),
+        "ordinary_default": False,
+        "risk_tags": ("phoenix_hot_star_limit", "nlte_sensitive"),
+    },
+    {
+        "id": "fgk_optical_balmer_metal",
+        "label": "F/G/K optical Balmer/metal branch",
+        "description": (
+            "Optical Balmer and atomic/molecular-metal windows for ordinary "
+            "F/G/K-like spectra when the blue or red optical region is present."
+        ),
+        "window_ids": (
+            "ca_hk_h_epsilon",
+            "ca_i_4227",
+            "ch_g_band",
+            "h_gamma",
+            "h_beta",
+            "mg_i_b",
+            "na_i_d",
+            "h_alpha",
+        ),
+        "fit_window_ids": (
+            "ca_i_4227",
+            "h_gamma",
+            "h_beta",
+            "mg_i_b",
+            "na_i_d",
+            "h_alpha",
+        ),
+        "min_windows": 2,
+        "min_total_overlap_A": 90.0,
+        "max_fit_windows": 5,
+        "priority": 0.92,
+        "p0": (5750.0, 0.0, 4.3, 0.0),
+        "teff_bounds": (4300.0, 8000.0),
+        "teff_grid": (4500.0, 5500.0, 6500.0, 7500.0),
+        "feh_bounds": (-1.5, 0.5),
+        "logg_bounds": (2.5, 5.5),
+        "coarse_feh_grid": (-1.0, 0.0, 0.5),
+        "coarse_logg_grid": (3.0, 4.0, 5.0),
+        "ordinary_default": True,
+    },
+    {
+        "id": "cool_red_optical_molecular",
+        "label": "Cool red-optical molecular/alkali branch",
+        "description": (
+            "Red-optical TiO/VO/alkali/Ca-triplet windows for late-K/M or "
+            "other cool spectra. These are especially useful when the blue "
+            "Balmer region is absent or low-S/N."
+        ),
+        "window_ids": (
+            "mg_i_b",
+            "na_i_d",
+            "h_alpha",
+            "tio_7050",
+            "vo_7450",
+            "k_i_7700",
+            "vo_7900",
+            "na_i_8200",
+            "ca_ii_triplet_paschen",
+            "feh_8700",
+            "tio_red_bands",
+        ),
+        "fit_window_ids": (
+            "mg_i_b",
+            "h_alpha",
+            "tio_7050",
+            "na_i_8200",
+            "ca_ii_triplet_paschen",
+            "tio_red_bands",
+        ),
+        "min_windows": 2,
+        "min_total_overlap_A": 140.0,
+        "max_fit_windows": 5,
+        "priority": 1.05,
+        "p0": (4000.0, 0.0, 4.0, 0.0),
+        "teff_bounds": (3000.0, 6500.0),
+        "teff_grid": (3200.0, 4000.0, 5000.0, 6000.0),
+        "feh_bounds": (-1.5, 0.5),
+        "logg_bounds": (1.0, 5.5),
+        "coarse_feh_grid": (-1.0, 0.0, 0.5),
+        "coarse_logg_grid": (1.5, 3.0, 4.5),
+        "ordinary_default": True,
+        "risk_tags": ("molecular_model_sensitive", "telluric_sensitive"),
+    },
+    {
+        "id": "near_ir_hydrogen",
+        "label": "Near-IR Paschen/Brackett hydrogen branch",
+        "description": (
+            "Paschen and Brackett windows for hot/intermediate spectra with "
+            "near-IR coverage. Treat this as a hydrogen-line classification "
+            "branch, not an abundance or detailed LSF solution."
+        ),
+        "window_ids": (
+            "ca_ii_triplet_paschen",
+            "paschen_gamma_delta",
+            "paschen_beta",
+            "brackett_h_band",
+            "br_gamma",
+        ),
+        "fit_window_ids": (
+            "ca_ii_triplet_paschen",
+            "paschen_gamma_delta",
+            "paschen_beta",
+            "brackett_h_band",
+            "br_gamma",
+        ),
+        "min_windows": 1,
+        "min_total_overlap_A": 120.0,
+        "max_fit_windows": 4,
+        "priority": 0.96,
+        "p0": (8500.0, 0.0, 3.5, 0.0),
+        "teff_bounds": (6000.0, 12000.0),
+        "teff_grid": (6500.0, 8000.0, 10000.0, 11500.0),
+        "feh_bounds": (-1.0, 0.5),
+        "logg_bounds": (2.0, 5.0),
+        "coarse_feh_grid": (-0.5, 0.0, 0.5),
+        "coarse_logg_grid": (2.5, 3.5, 4.5),
+        "ordinary_default": True,
+        "risk_tags": ("telluric_sensitive",),
+    },
+    {
+        "id": "cool_near_ir_molecular",
+        "label": "Cool near-IR atomic/CO branch",
+        "description": (
+            "K-band Na I, Ca I, and CO bandhead windows for cool-star "
+            "near-IR classification when those features are covered."
+        ),
+        "window_ids": (
+            "ca_ii_triplet_paschen",
+            "feh_8700",
+            "tio_red_bands",
+            "na_i_kband",
+            "ca_i_kband",
+            "co_23um_bandhead",
+        ),
+        "fit_window_ids": (
+            "ca_ii_triplet_paschen",
+            "tio_red_bands",
+            "na_i_kband",
+            "ca_i_kband",
+            "co_23um_bandhead",
+        ),
+        "min_windows": 1,
+        "min_total_overlap_A": 180.0,
+        "max_fit_windows": 4,
+        "priority": 1.08,
+        "p0": (3800.0, 0.0, 3.0, 0.0),
+        "teff_bounds": (2800.0, 6000.0),
+        "teff_grid": (3000.0, 3800.0, 4800.0, 5800.0),
+        "feh_bounds": (-1.5, 0.5),
+        "logg_bounds": (0.5, 5.5),
+        "coarse_feh_grid": (-1.0, 0.0, 0.5),
+        "coarse_logg_grid": (1.0, 3.0, 5.0),
+        "ordinary_default": True,
+        "risk_tags": ("molecular_model_sensitive", "telluric_sensitive"),
+    },
+)
+
+
+def _diagnostic_records_by_id(selection):
+    return {
+        str(record.get("id")): record
+        for record in selection.get("selected", ())
+        if isinstance(record, dict) and record.get("id") is not None
+    }
+
+
+def _record_fit_allowed(record):
+    if str(record.get("default_fit_policy", "include")) == "exclude":
+        return False
+    return str(record.get("model_support", "supported")) not in {
+        "unsupported",
+        "stress_only",
+    }
+
+
+def _profile_parameters(profile, mode):
+    teff_lo, teff_hi = profile["teff_bounds"]
+    if mode == "diagnostic":
+        teff_lo = max(2500.0, float(teff_lo) - 500.0)
+        teff_hi = min(12000.0, float(teff_hi) + 1000.0)
+    feh_lo, feh_hi = profile["feh_bounds"]
+    logg_lo, logg_hi = profile["logg_bounds"]
+    teff_grid = [
+        float(value)
+        for value in profile["teff_grid"]
+        if float(teff_lo) <= float(value) <= float(teff_hi)
+    ]
+    if not teff_grid:
+        teff_grid = [0.5 * (float(teff_lo) + float(teff_hi))]
+    return {
+        "p0": tuple(float(value) for value in profile["p0"]),
+        "bounds": (
+            (float(teff_lo), float(feh_lo), float(logg_lo), -300.0),
+            (float(teff_hi), float(feh_hi), float(logg_hi), 300.0),
+        ),
+        "coarse_teff_grid": teff_grid,
+        "coarse_feh_grid": [float(value) for value in profile["coarse_feh_grid"]],
+        "coarse_logg_grid": [float(value) for value in profile["coarse_logg_grid"]],
+    }
+
+
+def _regions_from_records(records):
+    regions = []
+    for record in records:
+        region = record.get("operational_region_A") or record.get("region_A")
+        if region is None or len(region) != 2:
+            continue
+        lo, hi = float(region[0]), float(region[1])
+        if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+            regions.append((lo, hi))
+    return regions
+
+
+def _branch_record(profile, selected_by_id, mode):
+    matched = [
+        selected_by_id[window_id]
+        for window_id in profile["window_ids"]
+        if window_id in selected_by_id
+    ]
+    fit_pool = [
+        selected_by_id[window_id]
+        for window_id in profile["fit_window_ids"]
+        if window_id in selected_by_id and _record_fit_allowed(selected_by_id[window_id])
+    ]
+    max_fit_windows = int(profile["max_fit_windows"])
+    ranked_fit_records = sorted(
+        fit_pool,
+        key=lambda item: (-float(item.get("score", 0.0)), float(item["region_A"][0])),
+    )[:max_fit_windows]
+    fit_records = sorted(
+        ranked_fit_records,
+        key=lambda item: float((item.get("operational_region_A") or item["region_A"])[0]),
+    )
+    fit_regions = _regions_from_records(fit_records)
+    total_overlap = float(sum(float(item.get("overlap_A", 0.0)) for item in matched))
+    raw_score = float(sum(float(item.get("score", 0.0)) for item in matched))
+    coverage_gate = (
+        len(matched) >= int(profile["min_windows"])
+        and total_overlap >= float(profile["min_total_overlap_A"])
+        and bool(fit_regions)
+    )
+    score = raw_score * float(profile["priority"])
+    if not profile.get("ordinary_default", True):
+        score *= 0.65
+    status = "candidate" if coverage_gate else "insufficient_coverage"
+    if not fit_regions and matched:
+        status = "diagnostic_only"
+    parameters = _profile_parameters(profile, mode)
+    risk_tags = sorted(
+        {
+            str(tag)
+            for item in matched
+            for tag in (item.get("risk_tags") or ())
+        }
+        | {str(tag) for tag in profile.get("risk_tags", ())}
+    )
+    return {
+        "id": profile["id"],
+        "label": profile["label"],
+        "description": profile["description"],
+        "status": status,
+        "score": float(score),
+        "raw_window_score": float(raw_score),
+        "ordinary_default": bool(profile.get("ordinary_default", True)),
+        "matched_window_count": int(len(matched)),
+        "required_window_count": int(profile["min_windows"]),
+        "total_overlap_A": float(total_overlap),
+        "required_overlap_A": float(profile["min_total_overlap_A"]),
+        "matched_window_ids": [item["id"] for item in matched],
+        "fit_window_ids": [item["id"] for item in fit_records],
+        "fit_regions_A": [(float(lo), float(hi)) for lo, hi in fit_regions],
+        "parameter_defaults": parameters,
+        "risk_tags": risk_tags,
+        "notes": (
+            "Branch suggestions are feature-coverage triage. They do not prove "
+            "the stellar type; compare branch stability and quality flags "
+            "before promoting a result."
+        ),
+    }
+
+
+def suggest_classification_branches(
+    spectrum,
+    *,
+    selection=None,
+    mode="quicklook",
+    max_branches=None,
+):
+    """Suggest branch-aware first-pass classification region sets.
+
+    The helper uses the existing diagnostic-window catalog. It does not run a
+    fit and it does not infer the final spectral type. Instead, it answers the
+    practical setup question: given the wavelength coverage and usable pixels,
+    which hot/blue, F/G/K, cool/red, Paschen/Brackett, or CO/Ca/TiO-style
+    branches are plausible enough to try first?
+    """
+    mode = str(mode).strip().lower()
+    if mode not in {"quicklook", "standard", "diagnostic"}:
+        raise ValueError("mode must be quicklook, standard, or diagnostic.")
+    if selection is None:
+        selection = select_diagnostic_windows(spectrum)
+    selected_by_id = _diagnostic_records_by_id(selection)
+    branches = [
+        _branch_record(profile, selected_by_id, mode)
+        for profile in CLASSIFICATION_BRANCH_PROFILES
+    ]
+    branches = sorted(
+        branches,
+        key=lambda item: (
+            item["status"] != "candidate",
+            -float(item["score"]),
+            item["label"],
+        ),
+    )
+    if max_branches is not None:
+        max_branches = int(max_branches)
+        if max_branches < 1:
+            raise ValueError("max_branches must be >= 1 when supplied.")
+        branches = branches[:max_branches]
+    candidates = [item for item in branches if item["status"] == "candidate"]
+    recommended = candidates[0] if candidates else None
+    ambiguous = False
+    if len(candidates) > 1 and recommended is not None:
+        top_score = float(recommended["score"])
+        second_score = float(candidates[1]["score"])
+        ambiguous = bool(top_score > 0.0 and second_score >= 0.85 * top_score)
+    default_action = (
+        "use_recommended_branch_regions"
+        if recommended is not None
+        else "fallback_to_coverage_window"
+    )
+    return {
+        "schema_version": 1,
+        "operation": "suggest_classification_branches",
+        "mode": mode,
+        "selection_source": "diagnostic_window_catalog",
+        "policy": {
+            "fit_regions_are_diagnostic_windows": True,
+            "branches_are_not_final_spectral_types": True,
+            "stress_only_windows_do_not_drive_default_fit": True,
+            "ambiguous_top_branches_are_reported": True,
+            "default_action": default_action,
+        },
+        "recommended_branch_id": None if recommended is None else recommended["id"],
+        "recommended_branch": recommended,
+        "ambiguous_top_branches": ambiguous,
+        "branches": branches,
+    }
+
+
+def _window_from_branch_plan(branch_plan):
+    branch = branch_plan.get("recommended_branch")
+    if not branch:
+        return None
+    regions = branch.get("fit_regions_A") or ()
+    if not regions:
+        return None
+    overlap = sum(float(hi) - float(lo) for lo, hi in regions)
+    return {
+        "label": "classification_branch:{0}".format(branch["id"]),
+        "regions": [(float(lo), float(hi)) for lo, hi in regions],
+        "overlap_A": float(overlap),
+        "source": "diagnostic_window_branch",
+        "branch_id": branch["id"],
+        "branch_label": branch["label"],
+    }
+
+
 def _choose_window(summary, mode):
     instruments = " ".join(summary["instruments"]).lower()
     arms = " ".join(summary["arms"]).lower()
@@ -305,7 +744,10 @@ def _choose_window(summary, mode):
     }
 
 
-def _parameter_defaults(window_label, mode):
+def _parameter_defaults(window_label, mode, branch=None):
+    if branch is not None:
+        return dict(branch["parameter_defaults"])
+
     if "red" in window_label or "near_ir" in window_label:
         p0 = (5500.0, 0.0, 4.0, 0.0)
         teff_bounds = (3500.0, 8000.0)
@@ -538,16 +980,34 @@ def suggest_phoenix_fit_defaults(
 
     segments = _as_segments(spectrum)
     summary = _coverage_summary(segments)
-    window = _choose_window(summary, mode)
-    params = _parameter_defaults(window["label"], mode)
+    coverage_window = _choose_window(summary, mode)
+    fallback_params = _parameter_defaults(coverage_window["label"], mode)
     diagnostic_spectrum = SpectrumCollection(segments) if len(segments) > 1 else segments[0]
-    rv_padding = max(abs(params["bounds"][0][3]), abs(params["bounds"][1][3]))
+    rv_padding = max(
+        abs(fallback_params["bounds"][0][3]),
+        abs(fallback_params["bounds"][1][3]),
+    )
     diagnostic_selection = select_diagnostic_windows(
         diagnostic_spectrum,
-        rv_kms=params["p0"][3],
+        rv_kms=fallback_params["p0"][3],
         rv_padding_kms=rv_padding,
-        max_windows=12,
     )
+    branch_plan = suggest_classification_branches(
+        diagnostic_spectrum,
+        selection=diagnostic_selection,
+        mode=mode,
+    )
+    branch_window = _window_from_branch_plan(branch_plan)
+    if branch_window is not None:
+        window = branch_window
+        params = _parameter_defaults(
+            window["label"],
+            mode,
+            branch=branch_plan["recommended_branch"],
+        )
+    else:
+        window = coverage_window
+        params = fallback_params
     diagnostic_combinations = build_diagnostic_window_combinations(
         diagnostic_selection,
         max_windows=6 if mode == "quicklook" else 8,
@@ -586,6 +1046,18 @@ def suggest_phoenix_fit_defaults(
             len(diagnostic_selection["selected"])
         ),
     ]
+    recommended_branch = branch_plan.get("recommended_branch")
+    if recommended_branch is not None:
+        reasons.append(
+            "recommended branch-aware first-pass region set '{0}' with {1} fitted diagnostic window(s)".format(
+                recommended_branch["label"],
+                len(recommended_branch.get("fit_regions_A") or ()),
+            )
+        )
+    else:
+        reasons.append(
+            "no diagnostic branch passed the minimum coverage checks; using the broad coverage fallback window"
+        )
     warnings = []
     if "unknown" in summary["wave_media"]:
         warnings.append(
@@ -610,6 +1082,10 @@ def suggest_phoenix_fit_defaults(
     if window["overlap_A"] < 300.0:
         warnings.append(
             "selected wavelength span is narrow; treat atmospheric parameters as local diagnostics"
+        )
+    if branch_plan.get("ambiguous_top_branches"):
+        warnings.append(
+            "multiple first-pass classification branches have similar support; compare branch-specific fits before trusting one branch"
         )
     if telluric_overlaps:
         warnings.append(
@@ -652,6 +1128,8 @@ def suggest_phoenix_fit_defaults(
                 "as a blind all-combinations grid."
             ),
         },
+        "classification_branches": branch_plan,
+        "coverage_window_fallback": coverage_window,
         "telluric_catalog_policy": {
             "default_action": "warn_only",
             "feature_source": "broad_catalog_regions",

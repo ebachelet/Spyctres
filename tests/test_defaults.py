@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from Spyctres import suggest_phoenix_fit_defaults
+from Spyctres import suggest_classification_branches, suggest_phoenix_fit_defaults
 from Spyctres.defaults import prepare_phoenix_fit_kwargs
 from Spyctres.io import SpectrumCollection, SpectrumSegment
 
@@ -21,13 +21,34 @@ def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     suggestion = suggest_phoenix_fit_defaults(segment)
 
     assert suggestion.fit_kwargs["forward_model"] == "native_interp"
-    assert suggestion.fit_kwargs["regions"] == [(3800.0, 5200.0)]
+    assert suggestion.fit_kwargs["regions"] == [
+        (3900.0, 3998.0),
+        (4070.0, 4135.0),
+        (4205.0, 4248.0),
+        (4310.0, 4372.0),
+        (4830.0, 4898.0),
+        (5150.0, 5208.0),
+    ]
     assert suggestion.fit_kwargs["physical_init"] == "coarse"
     assert suggestion.fit_kwargs["rv_grid_n"] == 41
     assert suggestion.fit_kwargs["bounds"][0][0] == pytest.approx(4500.0)
-    assert suggestion.fit_kwargs["bounds"][1][0] == pytest.approx(10000.0)
+    assert suggestion.fit_kwargs["bounds"][1][0] == pytest.approx(12000.0)
     assert not suggestion.warnings
-    assert suggestion.provenance["window"]["label"] == "blue_optical_classification"
+    assert (
+        suggestion.provenance["window"]["label"]
+        == "classification_branch:blue_optical_balmer_metal"
+    )
+    branch_plan = suggestion.provenance["classification_branches"]
+    assert branch_plan["recommended_branch_id"] == "blue_optical_balmer_metal"
+    assert branch_plan["policy"]["branches_are_not_final_spectral_types"] is True
+    assert branch_plan["recommended_branch"]["fit_window_ids"] == [
+        "ca_hk_h_epsilon",
+        "h_delta",
+        "ca_i_4227",
+        "h_gamma",
+        "h_beta",
+        "mg_i_b",
+    ]
     diagnostic_windows = suggestion.provenance["diagnostic_windows"]
     selected_ids = {
         item["id"] for item in diagnostic_windows["selection"]["selected"]
@@ -46,6 +67,7 @@ def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     assert suggestion.provenance["mode_policy"]["multistart"] == 1
     assert suggestion.provenance["mode_policy"]["rv_grid_n"] == 41
     assert any("quicklook defaults mode" in item for item in suggestion.reasons)
+    assert any("branch-aware first-pass" in item for item in suggestion.reasons)
 
 
 def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():
@@ -63,6 +85,9 @@ def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():
 
     assert suggestion.fit_kwargs["regions"] == [(5200.0, 7000.0)]
     assert suggestion.fit_kwargs["bounds"][0][0] == pytest.approx(3500.0)
+    branch_plan = suggestion.provenance["classification_branches"]
+    assert branch_plan["recommended_branch_id"] is None
+    assert branch_plan["policy"]["default_action"] == "fallback_to_coverage_window"
     assert any("wavelength medium is unknown" in item for item in suggestion.warnings)
     assert any("lacks formal uncertainties" in item for item in suggestion.warnings)
     assert any("lacks resolution metadata" in item for item in suggestion.warnings)
@@ -119,6 +144,60 @@ def test_suggest_phoenix_fit_defaults_uses_shorter_rv_scan_for_stellar_rest_coll
         == "rest_frame_consistency_check"
     )
     assert suggestion.provenance["telluric_catalog_policy"]["overlaps"]
+    assert (
+        suggestion.provenance["classification_branches"]["recommended_branch_id"]
+        is None
+    )
+
+
+def test_suggest_phoenix_fit_defaults_uses_dense_red_cool_branch():
+    segment = SpectrumSegment(
+        wave=np.linspace(6500.0, 8900.0, 1600),
+        flux=np.ones(1600),
+        err=np.full(1600, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+
+    suggestion = suggest_phoenix_fit_defaults(segment)
+
+    assert (
+        suggestion.provenance["classification_branches"]["recommended_branch_id"]
+        == "cool_red_optical_molecular"
+    )
+    selected = {
+        window_id
+        for window_id in suggestion.provenance["classification_branches"][
+            "recommended_branch"
+        ]["fit_window_ids"]
+    }
+    assert {"h_alpha", "tio_7050", "ca_ii_triplet_paschen"} <= selected
+    assert suggestion.fit_kwargs["bounds"][0][0] == pytest.approx(3000.0)
+
+
+def test_suggest_classification_branches_identifies_cool_kband_branch():
+    segment = SpectrumSegment(
+        wave=np.linspace(21800.0, 23800.0, 700),
+        flux=np.ones(700),
+        err=np.full(700, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=4000.0,
+    )
+
+    branch_plan = suggest_classification_branches(segment)
+
+    assert branch_plan["operation"] == "suggest_classification_branches"
+    assert branch_plan["recommended_branch_id"] == "cool_near_ir_molecular"
+    assert branch_plan["recommended_branch"]["fit_window_ids"] == [
+        "na_i_kband",
+        "ca_i_kband",
+        "co_23um_bandhead",
+    ]
+    assert branch_plan["policy"]["stress_only_windows_do_not_drive_default_fit"] is True
 
 
 def test_prepare_phoenix_fit_kwargs_applies_expert_overrides_and_clips_grids():
