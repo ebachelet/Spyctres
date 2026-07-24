@@ -127,12 +127,23 @@ Use this checklist for a first local run from a source checkout.
    python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
    ```
 
-4. Run the shortest command-line fitting example:
+4. Run the numbered quickstart. The default run is intentionally cheap: it
+   reads and plots the bundled spectrum, then prints the reviewed setup without
+   loading PHOENIX:
 
    ```bash
-   python examples/simple_phoenix_fit.py \
-     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --instrument xshooter
+   python examples/example1_quickstart.py --no-show
+   ```
+
+5. After PHOENIX is configured, opt in to the fit using exactly that reviewed
+   setup:
+
+   ```bash
+   python examples/example1_quickstart.py \
+     --run-fit \
+     --output-json /tmp/spyctres_example1_fit.json \
+     --output-plot /tmp/spyctres_example1_fit.png \
+     --no-show
    ```
 
    This example reads the spectrum, suggests conservative first-pass fit
@@ -148,7 +159,17 @@ Use this checklist for a first local run from a source checkout.
    Expert users can override the suggested values with flags such as `--wmin`,
    `--wmax`, `--teff`, `--teff-min`, or `--no-auto-defaults`.
 
-5. If you want to inspect the plausible classification branches before
+6. If you want to inspect diagnostic windows, explicit warning/mask regions,
+   and one local line fit before PHOENIX fitting:
+
+   ```bash
+   python examples/example2_lines_windows_and_masks.py \
+     --output-json /tmp/spyctres_example2.json \
+     --output-plot /tmp/spyctres_example2_windows.png \
+     --no-show
+   ```
+
+7. If you want to inspect the plausible classification branches before
    fitting, run the dry-run branch quickscan. This is cheap and does not load
    PHOENIX unless you explicitly add `--run-fits`:
 
@@ -161,27 +182,23 @@ Use this checklist for a first local run from a source checkout.
      --output-plot /tmp/spyctres_branches.png
    ```
 
-6. For many spectra, first run a cheap quicklook batch to identify sensible
+8. For many spectra, first run a cheap quicklook batch to identify sensible
    local parameter ranges:
 
    ```bash
-   python examples/batch_quickscan_then_refine.py \
-     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --instrument xshooter \
+   python examples/example5_batch_fitting.py \
      --quicklook \
      --output-json /tmp/spyctres_batch_quick.json \
      --summary-csv /tmp/spyctres_batch_quick.csv \
      --resume
    ```
 
-7. Then rerun with focused refinement. The script reuses the quick-pass result
+9. Then rerun with focused refinement. The script reuses the quick-pass result
    to build local Teff/[Fe/H]/logg/RV bounds, rather than blindly searching the
    broad classification box for every spectrum:
 
    ```bash
-   python examples/batch_quickscan_then_refine.py \
-     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --instrument xshooter \
+   python examples/example5_batch_fitting.py \
      --output-json /tmp/spyctres_batch_refined.json \
      --summary-csv /tmp/spyctres_batch_refined.csv \
      --resume
@@ -219,24 +236,30 @@ Use this checklist for a first local run from a source checkout.
 
 Recommended example order:
 
-1. `examples/simple_phoenix_fit.py` for the shortest command-line public-API
-   path.
-2. `examples/branch_quickscan.py` for quickly inspecting which broad
-   classification branches are plausible before running branch-specific fits.
-3. `examples/batch_quickscan_then_refine.py` for fitting many spectra with a
-   cheap quick scan followed by focused local refinement.
-4. `examples/high_resolution_sideband_normalization.py` for local
-   sideband-normalized line-window diagnostics.
-5. `examples/full_spectrum_classification.ipynb` for the first worked
-   PHOENIX classification notebook.
-6. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
-   fitting diagnostics.
-7. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
-8. `examples/publication_quality_xshooter_uvb.py` and
-   `examples/publication_quality_xshooter_uvb.ipynb` for the expert
-   publication-oriented X-SHOOTER UVB scaffold.
-9. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
-   line-window validation path.
+1. `examples/example1_quickstart.py` /
+   `examples/example1_quickstart.ipynb` for reading, plotting, setup review,
+   and one optional PHOENIX fit.
+2. `examples/example2_lines_windows_and_masks.py` /
+   `examples/example2_lines_windows_and_masks.ipynb` for diagnostic windows,
+   warning/mask overlays, and one local line fit.
+3. `examples/example3_improving_a_phoenix_fit.py` /
+   `examples/example3_improving_a_phoenix_fit.ipynb` for comparing quicklook
+   and stronger reviewed setup choices.
+4. `examples/example4_publication_quality_fitting.py` /
+   `examples/example4_publication_quality_fitting.ipynb` for the conservative
+   publication-oriented scaffold.
+5. `examples/example5_batch_fitting.py` /
+   `examples/example5_batch_fitting.ipynb` for the quickscan-then-refine batch
+   pattern.
+6. Advanced/validation examples after that: `simple_phoenix_fit.py`,
+   `branch_quickscan.py`, `batch_quickscan_then_refine.py`,
+   `diagnostic_window_comparison.py`,
+   `high_resolution_sideband_normalization.py`,
+   `full_spectrum_classification.ipynb`,
+   `xshooter_multiarm_classification.ipynb`,
+   `xsl_figure1_validation.ipynb`,
+   `publication_quality_xshooter_uvb.py`, and
+   `pepsi_legacy_linefit_validation.ipynb`.
 
 The same beginner workflow is available from one Python import:
 

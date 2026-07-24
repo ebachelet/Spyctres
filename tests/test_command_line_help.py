@@ -30,6 +30,26 @@ def _run_command(*args):
         (["scripts/check_spyctres_setup.py", "--help"], "Setup diagnostic"),
         (["scripts/io_smoketest.py", "--help"], "Setup/ingestion diagnostic"),
         (["examples/simple_phoenix_fit.py", "--help"], "Minimal fit_stellar_spectrum"),
+        (
+            ["examples/example1_quickstart.py", "--help"],
+            "Example 1 quickstart",
+        ),
+        (
+            ["examples/example2_lines_windows_and_masks.py", "--help"],
+            "Example 2",
+        ),
+        (
+            ["examples/example3_improving_a_phoenix_fit.py", "--help"],
+            "Example 3",
+        ),
+        (
+            ["examples/example4_publication_quality_fitting.py", "--help"],
+            "Example 4",
+        ),
+        (
+            ["examples/example5_batch_fitting.py", "--help"],
+            "Example 5",
+        ),
         (["examples/branch_quickscan.py", "--help"], "Branch quickscan"),
         (
             ["examples/diagnostic_window_comparison.py", "--help"],

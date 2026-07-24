@@ -47,8 +47,7 @@ numbered examples and, later, the versioned report schema.
    Finish the out-of-the-box path before adding major new fitting features. The
    immediate acceptance target is that a collaborator can follow a small,
    numbered set of examples and understand the package order from filenames
-   alone. The public learning path should be reorganized into paired scripts
-   and notebooks:
+   alone. The initial paired script/notebook scaffold is now in place:
 
    - `example1_quickstart.py` / `example1_quickstart.ipynb`
    - `example2_lines_windows_and_masks.py` /
@@ -59,11 +58,12 @@ numbered examples and, later, the versioned report schema.
      `example4_publication_quality_fitting.ipynb`
    - `example5_batch_fitting.py` / `example5_batch_fitting.ipynb`
 
-   Validation and stress material should move out of the numbered beginner path
-   into a clearly labelled area such as `examples/validation/` or
-   `examples/advanced/`. User-facing examples should continue to use bundled
-   spectra under `examples/data/` unless explicitly labelled as external-user
-   validation.
+   Remaining work: enrich the notebook prose after user testing, keep heavy
+   PHOENIX runs opt-in where possible, and gradually move validation/stress
+   material out of the numbered beginner path into clearly labelled areas such
+   as `examples/validation/` or `examples/advanced/`. User-facing examples
+   should continue to use bundled spectra under `examples/data/` unless
+   explicitly labelled as external-user validation.
 
 2. **Reviewed setup as a first-class object.**
    Initial implementation is in place: `suggest_fit_setup()` returns a

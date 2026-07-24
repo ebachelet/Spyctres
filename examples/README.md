@@ -11,32 +11,26 @@ examples unless they are present in `examples/data/`.
 
 ## Recommended order
 
-Start with the public examples, then move into advanced and validation
-workflows:
+Start with the five numbered example pairs. Each script has a matching
+no-output notebook with the same name, and each step adds one new idea:
 
-1. `simple_phoenix_fit.py` — shortest command-line path using the public API.
-2. `branch_quickscan.py` — cheap branch-selection plan, with opt-in bounded
-   fits to compare hot/FGK/cool/near-IR first-pass assumptions.
-3. `batch_quickscan_then_refine.py` — batch-oriented quick scan followed by
-   focused refinement; useful when fitting many spectra.
-4. `diagnostic_window_comparison.py` — quick feature-window comparison plan,
-   with opt-in bounded PHOENIX fits.
-5. `high_resolution_sideband_normalization.py` — local line-window sideband
-   normalization for UVES/PEPSI-like high-resolution diagnostics.
-6. `full_spectrum_classification.ipynb` — first worked notebook, UVB only.
-7. `xshooter_multiarm_classification.ipynb` — advanced multi-arm X-SHOOTER
-   diagnostic workflow.
-8. `xsl_figure1_validation.ipynb` — real-library validation against XSL DR3;
-   useful after the basic workflow is familiar.
-9. `publication_quality_xshooter_uvb.py` and
-   `publication_quality_xshooter_uvb.ipynb` — expert scaffold for
-   publication-oriented X-SHOOTER UVB parameter work. Starts audit-only and
-   keeps baseline fitting opt-in.
-10. `pepsi_legacy_linefit_validation.ipynb` — developer validation for the
-   PEPSI legacy line-window path, not the generic public classification path.
+1. `example1_quickstart.py` / `example1_quickstart.ipynb` — read a bundled
+   spectrum, inspect it, review a `FitSetup`, and optionally run one PHOENIX
+   fit.
+2. `example2_lines_windows_and_masks.py` /
+   `example2_lines_windows_and_masks.ipynb` — inspect diagnostic windows,
+   explicit warning/mask regions, and one local line fit.
+3. `example3_improving_a_phoenix_fit.py` /
+   `example3_improving_a_phoenix_fit.ipynb` — compare quicklook and stronger
+   reviewed setups before running more expensive fits.
+4. `example4_publication_quality_fitting.py` /
+   `example4_publication_quality_fitting.ipynb` — wrapper for the conservative
+   publication-oriented scaffold; audit-only by default.
+5. `example5_batch_fitting.py` / `example5_batch_fitting.ipynb` — the
+   quickscan-then-focused-refine pattern for many spectra.
 
-The examples are ordered by how much Spyctres-specific context they assume.
-The first three are the best place for a new user to start.
+The older unnumbered scripts and notebooks are still maintained, but they are
+advanced, validation, or compatibility material rather than the beginner path.
 
 The beginner Python mental model is deliberately one import:
 
@@ -54,11 +48,44 @@ result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 sp.plot_fit_referee(result)
 ```
 
-More detailed examples below add one idea at a time: branch choice, batch
-throughput, local line/mask diagnostics, multi-arm fitting, real-library
-validation, and publication-oriented stress tests.
+More detailed examples below explain what the numbered path wraps and how to
+move into advanced diagnostics, multi-arm fitting, real-library validation, and
+publication-oriented stress tests.
 
-## Example 1: command-line public API quickstart
+## Numbered beginner path
+
+The fastest no-PHOENIX first contact is:
+
+```bash
+python examples/example1_quickstart.py --no-show
+python examples/example2_lines_windows_and_masks.py --no-show
+python examples/example3_improving_a_phoenix_fit.py --no-show
+python examples/example4_publication_quality_fitting.py
+```
+
+After PHOENIX is configured, opt in to real fits:
+
+```bash
+python examples/example1_quickstart.py \
+  --run-fit \
+  --output-json /tmp/spyctres_example1_fit.json \
+  --output-plot /tmp/spyctres_example1_fit.png \
+  --no-show
+
+python examples/example3_improving_a_phoenix_fit.py \
+  --run-fits \
+  --output-json /tmp/spyctres_example3.json \
+  --output-plot /tmp/spyctres_example3_standard.png \
+  --no-show
+
+python examples/example5_batch_fitting.py \
+  --quicklook \
+  --output-json /tmp/spyctres_example5_batch_quick.json \
+  --summary-csv /tmp/spyctres_example5_batch_quick.csv \
+  --resume
+```
+
+## Compatibility shortcut: simple PHOENIX fit
 
 For a shorter non-notebook workflow, use `simple_phoenix_fit.py`. It reads any
 registered instrument format, invokes the public `fit_stellar_spectrum()`
@@ -139,7 +166,7 @@ For a manifest-driven run, use a CSV with `path`, `instrument`, and optional
 and UVES-POP external validation because those readers have dedicated
 regression tests.
 
-## Example 2: branch quickscan before fitting
+## Advanced workflow: branch quickscan before fitting
 
 Use `branch_quickscan.py` when you want Spyctres to show which broad
 classification branches are plausible for a loaded spectrum before committing
@@ -176,7 +203,7 @@ spectral-type decision. Compare branch support, quality flags, residual plots,
 resolution assumptions, and parameter scatter. Do not treat the lowest raw
 χ² alone as a calibrated classification.
 
-## Example 3: batch quick scan, then focused refinement
+## Advanced workflow: batch quick scan, then focused refinement
 
 Use `batch_quickscan_then_refine.py` when you have many spectra and do not want
 to explore a broad PHOENIX parameter box from scratch for every file. The
@@ -292,7 +319,7 @@ PHOENIX full-spectrum multiplicative continuum for low/medium-resolution
 classification or broad-window fitting. These are complementary workflows, not
 competing defaults.
 
-## Example 4: diagnostic-window comparison scaffold
+## Advanced workflow: diagnostic-window comparison scaffold
 
 Use `diagnostic_window_comparison.py` when you want to ask "which broad
 features are available in this spectrum, and which small window combinations
@@ -343,7 +370,7 @@ DIB/telluric/model-sensitive regions, remain labelled in the JSON/CSV. The
 comparison plot is a stability diagnostic; it should not be read as "lowest
 raw χ² wins."
 
-## Example 5: high-resolution local sideband normalization
+## Advanced workflow: high-resolution local sideband normalization
 
 Use `high_resolution_sideband_normalization.py` when you want to inspect a
 UVES-like, PEPSI-like, or other high-resolution line window with a local
@@ -367,14 +394,14 @@ the original and normalized line window. Use this pattern before local
 equivalent-width or line-profile diagnostics where broad full-spectrum
 polynomials would be the wrong mental model.
 
-## Example 6: first worked notebook
+## Notebook workflow: first worked classification notebook
 
 The `full_spectrum_classification.ipynb` notebook is meant to be a clean first
 example of the generic PHOENIX fitting workflow. It is not intended to be the
 final precision analysis for this spectrum, and it is not the full
 benchmark-validation path used for development testing.
 
-## Example 7: advanced X-SHOOTER multi-arm notebook
+## Notebook workflow: advanced X-SHOOTER multi-arm classification
 
 The `xshooter_multiarm_classification.ipynb` notebook shows how to fit selected
 windows from UVB, VIS, and NIR together as a `SpectrumCollection`. It is useful
@@ -385,7 +412,7 @@ several minutes on a normal workstation; progress messages are printed during
 cache construction, RV scanning, and local optimization so users can tell it is
 still working.
 
-## Example 8: XSL real-spectrum validation
+## Validation workflow: XSL real-spectrum validation
 
 The Figure 1 validation sample from Verro et al. (2022) is listed in
 `xsl_validation_manifest.csv`, with the official DR3 FITS products stored in
@@ -451,7 +478,7 @@ current PHOENIX fit, and a very cool low-gravity supergiant. This distinction is
 important: a predictable model-physics mismatch is evidence about the model's
 domain, not automatically evidence that the numerical fitter is broken.
 
-## Example 9: publication-oriented X-SHOOTER UVB scaffold
+## Publication workflow: X-SHOOTER UVB scaffold
 
 Use `publication_quality_xshooter_uvb.py` only after the quickstart and
 validation examples are familiar. It is a conservative expert scaffold for
@@ -737,7 +764,7 @@ by itself prove that the DIB identification is correct or that masking is the
 final scientific choice. Inspect the residuals, other Balmer lines, continuum
 placement, and LSF assumptions before drawing that conclusion.
 
-## Example 10: PEPSI legacy line-window validation
+## Developer validation: PEPSI legacy line-window validation
 
 The `pepsi_legacy_linefit_validation.ipynb` notebook is a developer validation
 example for the PEPSI legacy line-window workflow. Use it to understand and
