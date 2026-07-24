@@ -45,6 +45,7 @@ import Spyctres as sp
 
 spec = sp.read_spectrum("examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits", instrument="xshooter")
 sp.plot_spectrum(spec)
+setup = sp.suggest_fit_setup(spec)  # inspect suggested windows, risks, and assumptions
 audit = sp.audit_spectrum_for_fit(spec)
 windows = sp.select_diagnostic_windows(spec)
 sp.plot_diagnostic_windows(spec, windows)

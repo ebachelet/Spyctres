@@ -18,6 +18,7 @@ def test_public_function_help_is_structured_and_formatted():
     assert "fit_line" in topics
     assert "build_mask" in topics
     assert "plot_spectrum" in topics
+    assert "suggest_fit_setup" in topics
     assert "read_spectrum" in topics
 
     record = describe_public_function("fit_stellar_spectrum")
@@ -32,6 +33,10 @@ def test_public_function_help_is_structured_and_formatted():
 
     line_text = format_public_function_help("fit_line")
     assert 'fit_line(spec, "Hgamma")' in line_text
+
+    setup_text = format_public_function_help("suggest_fit_setup")
+    assert "without running PHOENIX" in setup_text
+    assert "suggest_fit_setup(spec)" in setup_text
 
 
 def test_unknown_public_function_help_lists_known_topics():

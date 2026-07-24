@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from Spyctres import suggest_classification_branches, suggest_phoenix_fit_defaults
+from Spyctres import (
+    suggest_classification_branches,
+    suggest_fit_setup,
+    suggest_phoenix_fit_defaults,
+)
 from Spyctres.defaults import prepare_phoenix_fit_kwargs
 from Spyctres.io import SpectrumCollection, SpectrumSegment
 
@@ -68,6 +72,68 @@ def test_suggest_phoenix_fit_defaults_prefers_blue_optical_window():
     assert suggestion.provenance["mode_policy"]["rv_grid_n"] == 41
     assert any("quicklook defaults mode" in item for item in suggestion.reasons)
     assert any("branch-aware first-pass" in item for item in suggestion.reasons)
+
+
+def test_suggest_fit_setup_wraps_defaults_and_readiness_for_users():
+    segment = SpectrumSegment(
+        wave=np.linspace(3000.0, 5600.0, 1000),
+        flux=np.ones(1000),
+        err=np.full(1000, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "XSHOOTER", "arm": "UVB"},
+        resolution=500.0,
+    )
+
+    setup = suggest_fit_setup(segment)
+
+    assert setup["operation"] == "suggest_fit_setup"
+    assert setup["model"] == "phoenix"
+    assert setup["minimal_fit_call"] == "fit_stellar_spectrum(spec, model='phoenix')"
+    assert setup["recommended_branch_id"] == "blue_optical_balmer_metal"
+    assert setup["fit_kwargs"]["forward_model"] == "native_interp"
+    assert setup["readiness"]["fit_ready"] is True
+    assert setup["readiness"]["n_fit_candidate"] > 0
+    assert setup["risk_flags"] == []
+    assert any("metadata" in item.lower() for item in setup["next_steps"])
+    assert setup["provenance"]["readiness_included"] is True
+
+
+def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 7100.0, 100),
+        flux=np.ones(100),
+        err=None,
+        wave_medium="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+        meta={"instrument": "GMOS"},
+    )
+
+    setup = suggest_fit_setup(segment)
+
+    assert setup["readiness"]["fit_ready"] is False
+    assert "unknown_wave_medium" in setup["risk_flags"]
+    assert "wave_medium_unknown" in setup["risk_flags"]
+    assert "missing_uncertainties" in setup["risk_flags"]
+    assert "resolution_assumption_required" in setup["risk_flags"]
+    assert any("Readiness audit is not fit-ready" in item for item in setup["next_steps"])
+
+
+def test_suggest_fit_setup_is_explicitly_phoenix_only_for_now():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5100.0, 20),
+        flux=np.ones(20),
+        err=np.full(20, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=1000.0,
+    )
+
+    with pytest.raises(ValueError, match="model='phoenix'"):
+        suggest_fit_setup(segment, model="other")
 
 
 def test_suggest_phoenix_fit_defaults_records_unknown_metadata_warnings():

@@ -21,6 +21,7 @@ from .diagnostic_windows import (
 from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
 from .preprocessing import (
     OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
+    audit_spectrum_for_fit,
     nonstellar_feature_metadata,
 )
 
@@ -1146,4 +1147,124 @@ def suggest_phoenix_fit_defaults(
         provenance=provenance,
         reasons=tuple(reasons),
         warnings=tuple(warnings),
+    )
+
+
+def _setup_next_steps(suggestion, readiness):
+    interpretation = suggestion.provenance.get("interpretation", {})
+    next_steps = [
+        "Review wavelength-medium, observer-frame, stellar-rest, and resolution metadata before interpreting rv_kms or line widths.",
+        "Inspect diagnostic windows and residual plots before treating a first-pass classification as science-ready.",
+    ]
+    mode_step = interpretation.get("recommended_next_step")
+    if mode_step:
+        next_steps.append(str(mode_step))
+    if readiness is not None:
+        if not readiness.get("fit_ready", False):
+            flags = ", ".join(readiness.get("interpretation_flags", []) or ["unknown"])
+            next_steps.append(
+                "Readiness audit is not fit-ready; resolve or explicitly accept these flags before refinement: {0}.".format(
+                    flags
+                )
+            )
+        elif readiness.get("quicklook_only", False):
+            next_steps.append(
+                "Treat this setup as quicklook-only until the readiness flags and model residuals are reviewed."
+            )
+    return list(dict.fromkeys(next_steps))
+
+
+def suggest_fit_setup(
+    spectrum,
+    *,
+    model="phoenix",
+    mode="quicklook",
+    science_case="classification",
+    include_readiness=True,
+    assumed_resolution=None,
+    exclude_mask=None,
+    exclude_masks=None,
+    mask_threshold=0.5,
+):
+    """Return a compact first-pass setup recommendation for a loaded spectrum.
+
+    This public helper is deliberately PHOENIX-free: it does not load templates,
+    build caches, optimize parameters, or mutate the input spectrum.  It answers
+    the setup question a user or GUI usually has immediately after ingestion:
+    which wavelength windows, broad parameter ranges, diagnostic branches,
+    resolution/frame warnings, and readiness flags should be reviewed before a
+    fit is launched?
+
+    The returned dictionary is JSON-safe and built from the canonical
+    ``suggest_phoenix_fit_defaults()``, ``select_diagnostic_windows()``,
+    ``suggest_classification_branches()``, and optional
+    ``audit_spectrum_for_fit()`` layers. Expert users can still override every
+    suggested fit keyword.
+    """
+    model = str(model).strip().lower()
+    if model != "phoenix":
+        raise ValueError("suggest_fit_setup currently supports model='phoenix'.")
+
+    suggestion = suggest_phoenix_fit_defaults(
+        spectrum,
+        mode=mode,
+        science_case=science_case,
+    )
+    readiness = None
+    if include_readiness:
+        readiness = audit_spectrum_for_fit(
+            spectrum,
+            regions=suggestion.fit_kwargs.get("regions"),
+            exclude_mask=exclude_mask,
+            exclude_masks=exclude_masks,
+            mask_threshold=mask_threshold,
+            intended_use=science_case,
+            assumed_resolution=assumed_resolution,
+        )
+
+    interpretation = suggestion.provenance.get("interpretation", {})
+    branch_plan = suggestion.provenance.get("classification_branches", {})
+    diagnostic_info = suggestion.provenance.get("diagnostic_windows", {})
+    window = suggestion.provenance.get("window", {})
+    readiness_flags = [] if readiness is None else readiness.get("interpretation_flags", [])
+    risk_flags = sorted(
+        set(interpretation.get("risk_flags", []) or [])
+        | set(readiness_flags or [])
+    )
+    return _jsonable(
+        {
+            "schema_version": 1,
+            "operation": "suggest_fit_setup",
+            "model": model,
+            "mode": str(mode).strip().lower(),
+            "science_case": str(science_case).strip().lower(),
+            "minimal_fit_call": "fit_stellar_spectrum(spec, model='phoenix')",
+            "fit_kwargs": suggestion.fit_kwargs,
+            "recommended_window": window,
+            "recommended_branch_id": branch_plan.get("recommended_branch_id"),
+            "recommended_branch": branch_plan.get("recommended_branch"),
+            "diagnostic_windows": {
+                "selected": diagnostic_info.get("selection", {}).get("selected", []),
+                "recommended_combinations": diagnostic_info.get(
+                    "recommended_combinations",
+                    {},
+                ),
+            },
+            "readiness": readiness,
+            "warnings": list(dict.fromkeys(list(suggestion.warnings))),
+            "risk_flags": risk_flags,
+            "reasons": list(suggestion.reasons),
+            "next_steps": _setup_next_steps(suggestion, readiness),
+            "provenance": {
+                "defaults": suggestion.provenance,
+                "readiness_included": bool(include_readiness),
+                "assumed_resolution": _jsonable(assumed_resolution),
+                "mask_threshold": float(mask_threshold),
+                "expert_overrides": (
+                    "Pass explicit regions, bounds, p0, resolution_R/R, "
+                    "exclude_masks, defaults_mode, or mode to the fitter to "
+                    "override these suggestions."
+                ),
+            },
+        }
     )

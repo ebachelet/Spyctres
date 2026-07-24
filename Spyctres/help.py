@@ -77,7 +77,7 @@ PUBLIC_FUNCTION_HELP = {
             {
                 "name": "auto_defaults",
                 "default": "True",
-                "description": "Let Spyctres suggest first-pass bounds, windows, and RV scan.",
+                "description": "Let Spyctres suggest first-pass bounds, windows, and RV scan. Use suggest_fit_setup(spec) to inspect those assumptions before fitting.",
             },
             {
                 "name": "defaults_mode",
@@ -124,6 +124,40 @@ PUBLIC_FUNCTION_HELP = {
             "For a first run, use examples/simple_phoenix_fit.py; for many spectra, "
             "use examples/batch_quickscan_then_refine.py."
         ),
+    },
+    "suggest_fit_setup": {
+        "name": "suggest_fit_setup",
+        "purpose": "Inspect Spyctres' first-pass fitting assumptions without running PHOENIX.",
+        "minimal_call": "suggest_fit_setup(spec)",
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "A loaded SpectrumSegment or SpectrumCollection.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "model",
+                "default": "phoenix",
+                "description": "Model backend. The current public setup helper supports PHOENIX.",
+            },
+            {
+                "name": "mode",
+                "default": "quicklook",
+                "description": "Search-budget mode: quicklook, standard, or diagnostic.",
+            },
+            {
+                "name": "include_readiness",
+                "default": "True",
+                "description": "Include a pre-fit readiness audit over the suggested fit regions.",
+            },
+            {
+                "name": "assumed_resolution / exclude_masks",
+                "default": "None",
+                "description": "Optional assumptions passed into the readiness audit, without mutating the spectrum.",
+            },
+        ],
+        "advice": "Use this immediately after read_spectrum() to see windows, branches, warnings, and next steps before launching a fit.",
     },
     "classify_spectrum": {
         "name": "classify_spectrum",
