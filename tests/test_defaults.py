@@ -121,6 +121,26 @@ def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
     assert any("Readiness audit is not fit-ready" in item for item in setup["next_steps"])
 
 
+def test_suggest_fit_setup_assumed_resolution_is_not_reported_as_missing():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 7100.0, 100),
+        flux=np.ones(100),
+        err=np.full(100, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "SDSS"},
+        resolution=None,
+    )
+
+    setup = suggest_fit_setup(segment, assumed_resolution=2000.0)
+
+    assert setup["fit_kwargs"]["R"] == pytest.approx(2000.0)
+    assert "missing_resolution" not in setup["risk_flags"]
+    assert "resolution_assumption_required" not in setup["risk_flags"]
+    assert any("R=2000" in item for item in setup["warnings"])
+
+
 def test_suggest_fit_setup_is_explicitly_phoenix_only_for_now():
     segment = SpectrumSegment(
         wave=np.linspace(5000.0, 5100.0, 20),

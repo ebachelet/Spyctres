@@ -1174,6 +1174,51 @@ def _setup_next_steps(suggestion, readiness):
     return list(dict.fromkeys(next_steps))
 
 
+def _assumed_resolution_fit_kwargs(assumed_resolution):
+    if assumed_resolution is None:
+        return None
+    if isinstance(assumed_resolution, dict):
+        quantity = str(assumed_resolution.get("quantity", "R"))
+        value = assumed_resolution.get("value", assumed_resolution.get("R"))
+    else:
+        quantity = "R"
+        value = assumed_resolution
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value) or value <= 0.0:
+        return None
+    if quantity == "R":
+        return {"R": float(value)}
+    if quantity in {"fwhm_kms", "sigma_kms"}:
+        return {quantity: float(value)}
+    return None
+
+
+def _warnings_with_assumed_resolution(warnings, assumed_resolution):
+    warnings = [str(item) for item in warnings]
+    override = _assumed_resolution_fit_kwargs(assumed_resolution)
+    if override is None:
+        return warnings
+    warnings = [
+        item for item in warnings if "lacks resolution metadata" not in item
+    ]
+    key, value = next(iter(override.items()))
+    if key == "R":
+        message = (
+            "using user-supplied assumed resolution R={0:g}; treat this as an "
+            "approximate quicklook assumption unless the product documentation "
+            "justifies it"
+        ).format(value)
+    else:
+        message = (
+            "using user-supplied assumed {0}={1:g} for setup/readiness; treat "
+            "this as an approximate quicklook assumption unless documented"
+        ).format(key, value)
+    return warnings + [message]
+
+
 def suggest_fit_setup(
     spectrum,
     *,
@@ -1222,6 +1267,11 @@ def suggest_fit_setup(
             assumed_resolution=assumed_resolution,
         )
 
+    fit_kwargs = dict(suggestion.fit_kwargs)
+    assumed_lsf_kwargs = _assumed_resolution_fit_kwargs(assumed_resolution)
+    if assumed_lsf_kwargs:
+        fit_kwargs.update(assumed_lsf_kwargs)
+
     interpretation = suggestion.provenance.get("interpretation", {})
     branch_plan = suggestion.provenance.get("classification_branches", {})
     diagnostic_info = suggestion.provenance.get("diagnostic_windows", {})
@@ -1231,6 +1281,16 @@ def suggest_fit_setup(
         set(interpretation.get("risk_flags", []) or [])
         | set(readiness_flags or [])
     )
+    if assumed_lsf_kwargs:
+        risk_flags = [
+            flag
+            for flag in risk_flags
+            if flag not in {"missing_resolution", "resolution_assumption_required"}
+        ]
+    warnings = _warnings_with_assumed_resolution(
+        suggestion.warnings,
+        assumed_resolution,
+    )
     return _jsonable(
         {
             "schema_version": 1,
@@ -1239,7 +1299,7 @@ def suggest_fit_setup(
             "mode": str(mode).strip().lower(),
             "science_case": str(science_case).strip().lower(),
             "minimal_fit_call": "fit_stellar_spectrum(spec, model='phoenix')",
-            "fit_kwargs": suggestion.fit_kwargs,
+            "fit_kwargs": fit_kwargs,
             "recommended_window": window,
             "recommended_branch_id": branch_plan.get("recommended_branch_id"),
             "recommended_branch": branch_plan.get("recommended_branch"),
@@ -1251,7 +1311,7 @@ def suggest_fit_setup(
                 ),
             },
             "readiness": readiness,
-            "warnings": list(dict.fromkeys(list(suggestion.warnings))),
+            "warnings": list(dict.fromkeys(warnings)),
             "risk_flags": risk_flags,
             "reasons": list(suggestion.reasons),
             "next_steps": _setup_next_steps(suggestion, readiness),

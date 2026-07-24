@@ -28,7 +28,7 @@ from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
-from Spyctres import audit_spectrum_for_fit, select_diagnostic_windows
+from Spyctres import audit_spectrum_for_fit, select_diagnostic_windows, suggest_fit_setup
 from Spyctres.io import get_instrument_info, list_instruments, read_spectrum
 from Spyctres.plotting import plot_spectrum_audit, plot_spectrum_quicklook
 
@@ -196,6 +196,15 @@ def build_parser():
         help="Maximum number of suggested diagnostic windows overlaid on audit plots.",
     )
     parser.add_argument(
+        "--setup-mode",
+        choices=("quicklook", "standard", "diagnostic"),
+        default="quicklook",
+        help=(
+            "PHOENIX-free defaults/setup recommendation mode recorded for "
+            "each target. This does not run a fit."
+        ),
+    )
+    parser.add_argument(
         "--max-plot-points",
         type=int,
         default=8000,
@@ -276,6 +285,9 @@ def _atomic_write_csv(path, payload):
         "wave_max_A",
         "err_present",
         "resolution_present",
+        "setup_mode",
+        "recommended_branch_id",
+        "recommended_window_label",
         "path",
     ]
     descriptor, temporary = tempfile.mkstemp(
@@ -290,6 +302,8 @@ def _atomic_write_csv(path, payload):
             for row in payload.get("results", []):
                 readiness = row.get("readiness") or {}
                 coverage = row.get("coverage") or {}
+                setup = row.get("fit_setup_recommendation") or {}
+                window = setup.get("recommended_window") or {}
                 writer.writerow(
                     {
                         "target_id": row.get("target_id"),
@@ -319,6 +333,9 @@ def _atomic_write_csv(path, payload):
                         "wave_max_A": coverage.get("wave_max_A"),
                         "err_present": row.get("err_present"),
                         "resolution_present": row.get("resolution_present"),
+                        "setup_mode": setup.get("mode"),
+                        "recommended_branch_id": setup.get("recommended_branch_id"),
+                        "recommended_window_label": window.get("label"),
                         "path": row.get("path"),
                     }
                 )
@@ -681,6 +698,28 @@ def _diagnostic_window_selection(spectrum, max_windows):
         }
 
 
+def _fit_setup_recommendation(spectrum, args, assumed_resolution):
+    try:
+        setup = suggest_fit_setup(
+            spectrum,
+            mode=args.setup_mode,
+            science_case="classification",
+            include_readiness=False,
+            assumed_resolution=assumed_resolution,
+        )
+        setup["status"] = "ok"
+        setup["readiness_source"] = "external_validation.readiness"
+        return setup
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "operation": "suggest_fit_setup",
+            "status": "setup_recommendation_failed",
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+        }
+
+
 def _role_expectation_assessment(role, readiness):
     role = str(role or "unknown").strip().lower()
     fit_ready = bool((readiness or {}).get("fit_ready"))
@@ -755,6 +794,11 @@ def validate_target(target, args):
             spectrum,
             args.diagnostic_window_count,
         )
+        fit_setup = _fit_setup_recommendation(
+            spectrum,
+            args,
+            assumed_resolution,
+        )
         record.update(
             {
                 "status": "ok",
@@ -767,6 +811,7 @@ def validate_target(target, args):
                 "resolution_present": bool(resolution_present),
                 "segments": segments,
                 "readiness": readiness,
+                "fit_setup_recommendation": fit_setup,
                 "diagnostic_window_selection": diagnostic_selection,
                 "role_expectation_assessment": _role_expectation_assessment(
                     target.get("role"),
@@ -782,6 +827,16 @@ def validate_target(target, args):
             ),
             flush=True,
         )
+        if fit_setup.get("status") == "ok":
+            window = fit_setup.get("recommended_window") or {}
+            print(
+                "  Setup suggestion: mode={0}, branch={1}, window={2}".format(
+                    fit_setup.get("mode"),
+                    fit_setup.get("recommended_branch_id") or "none",
+                    window.get("label") or "none",
+                ),
+                flush=True,
+            )
         if args.plot_dir and not args.no_plots:
             Path(args.plot_dir).mkdir(parents=True, exist_ok=True)
             plot_paths = {}
@@ -889,6 +944,7 @@ def _payload(records, args, targets):
             "uves_wave_unit": args.uves_wave_unit,
             "uves_err_column": args.uves_err_column,
             "plot_style": args.plot_style,
+            "setup_mode": args.setup_mode,
             "diagnostic_window_count": int(args.diagnostic_window_count),
             "max_plot_points": int(args.max_plot_points),
             "note": (

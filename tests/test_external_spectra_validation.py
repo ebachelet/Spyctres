@@ -135,13 +135,21 @@ def test_external_validation_manifest_writes_json_and_csv(tmp_path):
     assert by_id["uves_clean"]["status"] == "ok"
     assert by_id["uves_clean"]["reader_kwargs"]["err_column"] == 2
     assert by_id["uves_clean"]["segments"][0]["wave_medium"] == "unknown"
+    assert by_id["uves_clean"]["fit_setup_recommendation"]["status"] == "ok"
+    assert by_id["uves_clean"]["fit_setup_recommendation"]["operation"] == "suggest_fit_setup"
     assert by_id["sdss_dirty"]["status"] == "ok"
     assert by_id["sdss_dirty"]["reader_kwargs"]["sdss_mask_policy"] == "and_mask_conservative"
     assert by_id["sdss_dirty"]["readiness"]["n_fit_candidate"] < 20
     assert by_id["sdss_dirty"]["segments"][0]["sdss_lsf"]["present"] is True
     assert by_id["sdss_dirty"]["segments"][0]["sdss_lsf"]["lsf_source"] == "sdss_wdisp_not_applied"
+    sdss_setup = by_id["sdss_dirty"]["fit_setup_recommendation"]
+    assert sdss_setup["fit_kwargs"]["R"] == 2000.0
+    assert "missing_resolution" not in sdss_setup["risk_flags"]
+    assert any("R=2000" in item for item in sdss_setup["warnings"])
     assert output_csv.exists()
-    assert "role_expectation_assessment" in output_csv.read_text(encoding="utf-8")
+    csv_text = output_csv.read_text(encoding="utf-8")
+    assert "role_expectation_assessment" in csv_text
+    assert "recommended_branch_id" in csv_text
 
 
 def test_external_validation_scan_root_and_resume(tmp_path, capsys):
