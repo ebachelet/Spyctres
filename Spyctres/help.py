@@ -159,6 +159,26 @@ PUBLIC_FUNCTION_HELP = {
         ],
         "advice": "Use this immediately after read_spectrum() to see windows, branches, warnings, and next steps before launching a fit.",
     },
+    "readiness_flag_actions": {
+        "name": "readiness_flag_actions",
+        "purpose": "Translate readiness-audit flags into short next actions for users.",
+        "minimal_call": 'readiness_flag_actions(["wave_medium_unknown"])',
+        "required": [
+            {
+                "name": "flags",
+                "description": (
+                    "Iterable of readiness flag strings, normally from "
+                    "audit_spectrum_for_fit(...)[\"interpretation_flags\"]."
+                ),
+            },
+        ],
+        "optional": [],
+        "advice": (
+            "Most users see these actions through suggest_fit_setup() or the "
+            "external validation CSV; call this directly when building custom "
+            "notebooks or GUIs."
+        ),
+    },
     "classify_spectrum": {
         "name": "classify_spectrum",
         "purpose": "Alias for fit_stellar_spectrum() for first-pass classification workflows.",

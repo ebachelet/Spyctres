@@ -19,6 +19,7 @@ def test_public_function_help_is_structured_and_formatted():
     assert "build_mask" in topics
     assert "plot_spectrum" in topics
     assert "suggest_fit_setup" in topics
+    assert "readiness_flag_actions" in topics
     assert "read_spectrum" in topics
 
     record = describe_public_function("fit_stellar_spectrum")
@@ -37,6 +38,9 @@ def test_public_function_help_is_structured_and_formatted():
     setup_text = format_public_function_help("suggest_fit_setup")
     assert "without running PHOENIX" in setup_text
     assert "suggest_fit_setup(spec)" in setup_text
+
+    readiness_text = format_public_function_help("readiness_flag_actions")
+    assert "Translate readiness-audit flags" in readiness_text
 
 
 def test_unknown_public_function_help_lists_known_topics():

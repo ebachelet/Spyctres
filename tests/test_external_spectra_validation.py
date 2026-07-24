@@ -140,6 +140,12 @@ def test_external_validation_manifest_writes_json_and_csv(tmp_path):
     assert by_id["sdss_dirty"]["status"] == "ok"
     assert by_id["sdss_dirty"]["reader_kwargs"]["sdss_mask_policy"] == "and_mask_conservative"
     assert by_id["sdss_dirty"]["readiness"]["n_fit_candidate"] < 20
+    sdss_actions = {
+        item["flag"]: item
+        for item in by_id["sdss_dirty"]["readiness"]["recommended_actions"]
+    }
+    assert "sdss_wdisp_lsf_not_applied" in sdss_actions
+    assert "constant R" in sdss_actions["sdss_wdisp_lsf_not_applied"]["action"]
     assert by_id["sdss_dirty"]["segments"][0]["sdss_lsf"]["present"] is True
     assert by_id["sdss_dirty"]["segments"][0]["sdss_lsf"]["lsf_source"] == "sdss_wdisp_not_applied"
     sdss_setup = by_id["sdss_dirty"]["fit_setup_recommendation"]
@@ -149,6 +155,7 @@ def test_external_validation_manifest_writes_json_and_csv(tmp_path):
     assert output_csv.exists()
     csv_text = output_csv.read_text(encoding="utf-8")
     assert "role_expectation_assessment" in csv_text
+    assert "recommended_actions" in csv_text
     assert "recommended_branch_id" in csv_text
 
 

@@ -119,6 +119,11 @@ def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
     assert "missing_uncertainties" in setup["risk_flags"]
     assert "resolution_assumption_required" in setup["risk_flags"]
     assert any("Readiness audit is not fit-ready" in item for item in setup["next_steps"])
+    assert any(
+        item.startswith("wave_medium_unknown:")
+        and "wave_medium='air'" in item
+        for item in setup["next_steps"]
+    )
 
 
 def test_suggest_fit_setup_assumed_resolution_is_not_reported_as_missing():

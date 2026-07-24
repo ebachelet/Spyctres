@@ -101,6 +101,7 @@ from .preprocessing import (
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
     publication_readiness_audit,
+    readiness_flag_actions,
     broad_telluric_catalog_fallback_mask,
     telluric_transmission_exclusion_mask,
 )
@@ -161,6 +162,7 @@ __all__ = [
     "archive_mask_summary_for_segment", "artifact_exclusion_mask_from_segment",
     "audit_spectrum_for_fit",
     "publication_readiness_audit",
+    "readiness_flag_actions",
     "combine_exclusion_masks", "dilate_boolean_mask",
     "exclusion_mask",
     "NONSTELLAR_FEATURES", "OPTICAL_DIB_DIAGNOSTIC_FEATURES",

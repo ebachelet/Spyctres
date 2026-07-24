@@ -1167,6 +1167,11 @@ def _setup_next_steps(suggestion, readiness):
                     flags
                 )
             )
+            for item in readiness.get("recommended_actions", []) or []:
+                flag = item.get("flag")
+                action = item.get("action")
+                if flag and action:
+                    next_steps.append("{0}: {1}".format(flag, action))
         elif readiness.get("quicklook_only", False):
             next_steps.append(
                 "Treat this setup as quicklook-only until the readiness flags and model residuals are reviewed."

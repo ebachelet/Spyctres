@@ -259,6 +259,19 @@ def _atomic_write_json(path, payload):
         raise
 
 
+def _format_recommended_actions(readiness):
+    actions = (readiness or {}).get("recommended_actions") or ()
+    formatted = []
+    for item in actions:
+        if not isinstance(item, dict):
+            continue
+        flag = item.get("flag")
+        action = item.get("action")
+        if flag and action:
+            formatted.append("{0}: {1}".format(flag, action))
+    return ";".join(formatted)
+
+
 def _atomic_write_csv(path, payload):
     if path is None:
         return
@@ -281,6 +294,7 @@ def _atomic_write_csv(path, payload):
         "rejected_inside_fit_window_fraction",
         "interpretation_flags",
         "warnings",
+        "recommended_actions",
         "wave_min_A",
         "wave_max_A",
         "err_present",
@@ -329,6 +343,9 @@ def _atomic_write_csv(path, payload):
                             readiness.get("interpretation_flags") or ()
                         ),
                         "warnings": ";".join(readiness.get("warnings") or ()),
+                        "recommended_actions": _format_recommended_actions(
+                            readiness
+                        ),
                         "wave_min_A": coverage.get("wave_min_A"),
                         "wave_max_A": coverage.get("wave_max_A"),
                         "err_present": row.get("err_present"),

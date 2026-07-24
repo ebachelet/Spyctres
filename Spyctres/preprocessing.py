@@ -1904,6 +1904,179 @@ def _fraction(numerator, denominator):
     return float(numerator) / float(denominator)
 
 
+READINESS_FLAG_ACTIONS = {
+    "missing_uncertainties": {
+        "severity": "review",
+        "action": (
+            "Provide 1-sigma uncertainties, or explicitly accept fallback "
+            "errors for quicklook use only."
+        ),
+        "detail": (
+            "Reduced chi-square and parameter uncertainties should not be "
+            "treated as calibrated without a validated error model."
+        ),
+    },
+    "wave_medium_unknown": {
+        "severity": "blocker",
+        "action": (
+            "Set wave_medium='air' or wave_medium='vacuum' from the product "
+            "documentation before medium-sensitive fitting."
+        ),
+        "detail": (
+            "Air/vacuum ambiguity can shift line centres enough to bias RV "
+            "and line-profile interpretation."
+        ),
+    },
+    "observer_frame_unknown": {
+        "severity": "blocker",
+        "action": (
+            "Set observer_frame from the product documentation, for example "
+            "'topocentric', 'heliocentric', or 'barycentric'."
+        ),
+        "detail": (
+            "Observer-motion metadata is needed before interpreting any "
+            "velocity correction or comparing independent products."
+        ),
+    },
+    "stellar_rest_status_unknown": {
+        "severity": "blocker",
+        "action": (
+            "Set stellar_rest_status='observed' or 'corrected', and record "
+            "any stellar RV correction already applied to the wavelength grid."
+        ),
+        "detail": (
+            "A stellar-rest-frame spectrum should not be shifted again unless "
+            "that is an explicit diagnostic choice."
+        ),
+    },
+    "resolution_assumption_required": {
+        "severity": "blocker",
+        "action": (
+            "Provide a validated constant resolution_R/R or fwhm_kms, or pass "
+            "an explicit approximate value for quicklook classification only."
+        ),
+        "detail": (
+            "Line-width and gravity-sensitive diagnostics depend on the "
+            "instrumental LSF assumption."
+        ),
+    },
+    "sdss_wdisp_lsf_not_applied": {
+        "severity": "review",
+        "action": (
+            "Keep SDSS wdisp as provenance for now; use an explicit constant "
+            "R only for quicklook fits until wavelength-dependent LSF support "
+            "is validated."
+        ),
+        "detail": (
+            "The reader preserves the tabulated SDSS LSF metadata but the "
+            "current PHOENIX likelihood does not apply it."
+        ),
+    },
+    "lsf_undersampled": {
+        "severity": "blocker",
+        "action": (
+            "Use a lower effective resolution assumption, a coarser comparison "
+            "window, or avoid interpreting line widths in this spectrum."
+        ),
+        "detail": (
+            "The pixel spacing is too coarse to resolve the requested Gaussian "
+            "LSF reliably."
+        ),
+    },
+    "artifact_review_required": {
+        "severity": "blocker",
+        "action": (
+            "Inspect an audit plot and apply explicit artifact masks or crop "
+            "bad regions before focused refinement."
+        ),
+        "detail": (
+            "Spikes, nonfinite values, zero blocks, or bad input-mask pixels "
+            "overlap the candidate fit region."
+        ),
+    },
+    "archive_mask_overlap_inside_fit_window": {
+        "severity": "review",
+        "action": (
+            "Review archive/product bad-region metadata and either apply those "
+            "masks explicitly or choose fit windows that avoid them."
+        ),
+        "detail": (
+            "Archive catalogs are recorded as provenance and warnings; they "
+            "are not silently applied unless requested."
+        ),
+    },
+    "archive_mask_fraction_high": {
+        "severity": "blocker",
+        "action": (
+            "Apply archive/product masks explicitly or choose a cleaner fit "
+            "window before treating the fit as stable."
+        ),
+        "detail": (
+            "A substantial fraction of the current fit window overlaps known "
+            "archive/product bad regions."
+        ),
+    },
+    "flat_zero_block_detected": {
+        "severity": "blocker",
+        "action": (
+            "Mask or crop flat zero-valued blocks before fitting; they usually "
+            "indicate gaps, order joins, or failed calibration regions."
+        ),
+        "detail": (
+            "Leaving these pixels in the likelihood can dominate continuum and "
+            "line-shape diagnostics."
+        ),
+    },
+    "large_wavelength_gap_detected": {
+        "severity": "review",
+        "action": (
+            "Review wavelength gaps and consider preserving separate segments "
+            "rather than forcing one continuous fit window."
+        ),
+        "detail": (
+            "Large gaps may mark chip gaps, order boundaries, or merged-arm "
+            "joins with different calibration properties."
+        ),
+    },
+    "no_fitted_pixels": {
+        "severity": "blocker",
+        "action": (
+            "Broaden or move the fit window, verify mask polarity, and check "
+            "that True means usable pixels in the Spyctres mask."
+        ),
+        "detail": (
+            "No pixels survived the finite-data, uncertainty, window, and "
+            "mask-selection checks."
+        ),
+    },
+}
+
+
+def readiness_flag_actions(flags):
+    """Return JSON-safe user actions corresponding to readiness flags.
+
+    The helper is intentionally advisory: it does not change masks, wavelength
+    metadata, or fitting defaults. It gives scripts, notebooks, and future GUI
+    code a stable way to explain what a non-fit-ready audit needs next.
+    """
+    actions = []
+    for flag in sorted({str(item) for item in (flags or [])}):
+        template = READINESS_FLAG_ACTIONS.get(flag)
+        if template is None:
+            template = {
+                "severity": "review",
+                "action": (
+                    "Inspect this readiness flag in the fit-quality report "
+                    "before interpreting fitted parameters."
+                ),
+                "detail": "No specialized action has been registered for this flag.",
+            }
+        action = {"flag": flag}
+        action.update(template)
+        actions.append(action)
+    return _json_safe(actions)
+
+
 def _segment_readiness(
     seg,
     regions=None,
@@ -2104,6 +2277,7 @@ def _segment_readiness(
         },
         "warnings": list(lsf_provenance.get("warnings") or []),
         "interpretation_flags": sorted(set(flags)),
+        "recommended_actions": readiness_flag_actions(flags),
     }
 
 
@@ -2225,6 +2399,7 @@ def audit_spectrum_for_fit(
         "archive_mask_fraction_high",
     }
     fit_ready = bool(n_fit > 0 and not (set(flags) & hard_flags))
+    recommended_actions = readiness_flag_actions(flags)
     return _json_safe(
         {
             "schema_version": 1,
@@ -2243,6 +2418,7 @@ def audit_spectrum_for_fit(
             ),
             "warnings": warnings,
             "interpretation_flags": flags,
+            "recommended_actions": recommended_actions,
             "archive_mask_summary": archive_summary,
             "segments": per_segment,
         }

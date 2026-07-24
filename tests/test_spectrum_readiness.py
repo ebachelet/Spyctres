@@ -8,6 +8,7 @@ from Spyctres.preprocessing import (
     artifact_exclusion_mask_from_segment,
     audit_spectrum_for_fit,
     publication_readiness_audit,
+    readiness_flag_actions,
 )
 
 
@@ -50,6 +51,27 @@ def test_audit_unknown_metadata_and_missing_resolution_are_quicklook_only():
     assert "wave_medium_unknown" in audit["interpretation_flags"]
     assert "observer_frame_unknown" in audit["interpretation_flags"]
     assert "stellar_rest_status_unknown" in audit["interpretation_flags"]
+    actions = {item["flag"]: item for item in audit["recommended_actions"]}
+    assert actions["wave_medium_unknown"]["severity"] == "blocker"
+    assert "wave_medium='air'" in actions["wave_medium_unknown"]["action"]
+    assert "1-sigma uncertainties" in actions["missing_uncertainties"]["action"]
+    assert "recommended_actions" in audit["segments"][0]
+
+
+def test_readiness_flag_actions_handles_unknown_flags():
+    actions = readiness_flag_actions(["custom_future_flag"])
+
+    assert actions == [
+        {
+            "flag": "custom_future_flag",
+            "severity": "review",
+            "action": (
+                "Inspect this readiness flag in the fit-quality report "
+                "before interpreting fitted parameters."
+            ),
+            "detail": "No specialized action has been registered for this flag.",
+        }
+    ]
 
 
 def test_audit_user_resolution_override_removes_resolution_missing_flag():
