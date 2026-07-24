@@ -94,6 +94,8 @@ def test_suggest_fit_setup_wraps_defaults_and_readiness_for_users():
     assert setup["recommended_branch_id"] == "blue_optical_balmer_metal"
     assert setup["fit_kwargs"]["forward_model"] == "native_interp"
     assert setup["readiness"]["fit_ready"] is True
+    assert setup["readiness"]["intent"] == "quicklook_classification"
+    assert setup["readiness"]["ready_for_intent"] is True
     assert setup["readiness"]["n_fit_candidate"] > 0
     assert setup["risk_flags"] == []
     assert any("metadata" in item.lower() for item in setup["next_steps"])
@@ -114,6 +116,10 @@ def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
     setup = suggest_fit_setup(segment)
 
     assert setup["readiness"]["fit_ready"] is False
+    assert setup["readiness"]["intent"] == "quicklook_classification"
+    assert setup["readiness"]["ready_for_intent"] is False
+    assert "resolution_assumption_required" in setup["readiness"]["blockers_for_intent"]
+    assert "wave_medium_unknown" in setup["readiness"]["warnings_for_intent"]
     assert "unknown_wave_medium" in setup["risk_flags"]
     assert "wave_medium_unknown" in setup["risk_flags"]
     assert "missing_uncertainties" in setup["risk_flags"]
@@ -144,6 +150,38 @@ def test_suggest_fit_setup_assumed_resolution_is_not_reported_as_missing():
     assert "missing_resolution" not in setup["risk_flags"]
     assert "resolution_assumption_required" not in setup["risk_flags"]
     assert any("R=2000" in item for item in setup["warnings"])
+
+
+def test_suggest_fit_setup_can_review_radial_velocity_intent():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 5020.0, 1000),
+        flux=np.ones(1000),
+        err=np.full(1000, 0.1),
+        wave_medium="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+        meta={"instrument": "SDSS"},
+        resolution=None,
+    )
+
+    setup = suggest_fit_setup(
+        segment,
+        readiness_intent="radial_velocity",
+        assumed_resolution=2000.0,
+    )
+
+    assert setup["readiness"]["fit_ready"] is False
+    assert setup["readiness"]["intent"] == "radial_velocity"
+    assert setup["readiness"]["ready_for_intent"] is False
+    assert set(setup["readiness"]["blockers_for_intent"]) == {
+        "observer_frame_unknown",
+        "stellar_rest_status_unknown",
+        "wave_medium_unknown",
+    }
+    assert setup["provenance"]["readiness_intent"] == "radial_velocity"
+    assert any(
+        "not fit-ready for radial_velocity" in item for item in setup["next_steps"]
+    )
 
 
 def test_suggest_fit_setup_is_explicitly_phoenix_only_for_now():

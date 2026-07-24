@@ -17,9 +17,10 @@ ready for deeper analysis.
 The public path should remain simple:
 
 ```python
-from Spyctres import read_spectrum, fit_stellar_spectrum, plot_fit_referee
+from Spyctres import read_spectrum, suggest_fit_setup, fit_stellar_spectrum, plot_fit_referee
 
 spec = read_spectrum("my_spectrum.fits", instrument="xshooter")
+setup = suggest_fit_setup(spec)  # inspect windows, assumptions, readiness, and actions
 result = fit_stellar_spectrum(spec, model="phoenix")
 plot_fit_referee(result)
 ```
@@ -28,39 +29,131 @@ Expert and publication-oriented workflows should build on the same components,
 but they must not silently relax metadata, LSF, mask, or uncertainty
 requirements.
 
+Near-term public-API work should make the reviewed setup object passable to the
+fit itself:
+
+```python
+setup = suggest_fit_setup(spec)
+result = fit_stellar_spectrum(spec, model="phoenix", setup=setup)
+```
+
+The fit result should then embed the exact reviewed setup, including a setup
+hash and readiness interpretation. Until that object exists, the existing
+dictionary output from `suggest_fit_setup()` remains an inspection aid.
+
 ## Priority order
 
-1. **Alpha first-run and batch usability.**
-   Keep the setup checker, read-only CLI, public examples, batch quick-scan
-   workflow, and throughput reporting working with bundled spectra. These are
-   the pieces a collaborator should be able to run out of the box.
+1. **Parsimonious alpha user journey.**
+   Finish the out-of-the-box path before adding major new fitting features. The
+   immediate acceptance target is that a collaborator can follow a small,
+   numbered set of examples and understand the package order from filenames
+   alone. The public learning path should be reorganized into paired scripts
+   and notebooks:
 
-2. **Fit-readiness and preprocessing discipline.**
+   - `example1_quickstart.py` / `example1_quickstart.ipynb`
+   - `example2_lines_windows_and_masks.py` /
+     `example2_lines_windows_and_masks.ipynb`
+   - `example3_improving_a_phoenix_fit.py` /
+     `example3_improving_a_phoenix_fit.ipynb`
+   - `example4_publication_quality_fitting.py` /
+     `example4_publication_quality_fitting.ipynb`
+   - `example5_batch_fitting.py` / `example5_batch_fitting.ipynb`
+
+   Validation and stress material should move out of the numbered beginner path
+   into a clearly labelled area such as `examples/validation/` or
+   `examples/advanced/`. User-facing examples should continue to use bundled
+   spectra under `examples/data/` unless explicitly labelled as external-user
+   validation.
+
+2. **Reviewed setup as a first-class object.**
+   Replace the current large nested setup dictionary with a compact
+   `FitSetup`-style object while preserving `to_dict()`/JSON provenance for
+   expert and batch use. A setup should include resolved windows, bounds, RV
+   scan settings, continuum degree, resolution/mask policy, readiness
+   interpretation, warnings, alternatives, and a configuration hash. The
+   fitter should accept `setup=setup` and embed the exact setup in the result.
+
+3. **Intent-aware readiness and preprocessing discipline.**
    Continue hardening the common spectrum boundary, mask polarity, native
    archive/product masks, formal-error handling, wavelength-medium/frame
-   metadata, and explicit resolution/LSF provenance. The ordinary readiness
-   audit should decide whether a quick classification fit is safe to attempt.
-   The diagnostic-window selector should remain advisory and generic: it should
-   identify useful Balmer, Paschen, Brackett, He/Mg/Si, CH G-band, Ca I/Ca II,
-   Mg/Na/K, TiO/VO/CaH/FeH, and K-band Na I/Ca I/CO windows from wavelength
-   coverage and simple data-quality scores, without automatically launching
-   expensive all-combinations fits. Catalog windows are
-   stored in canonical vacuum Angstrom, stellar-rest-frame coordinates and are
-   converted into operational per-segment windows at runtime; provenance should
-   keep score components, risk policies, RV padding, contiguous coverage, and
-   resolution-element estimates visible.
+   metadata, and explicit resolution/LSF provenance. The next readiness change
+   is to make the audit task-dependent rather than assigning one global
+   severity to every flag. Planned intents include:
 
-3. **Real-spectrum validation.**
-   Expand and maintain validation on real spectra, especially X-SHOOTER/XSL
-   reference spectra and bundled examples. Stress/peculiar targets should remain
-   separated from ordinary recovery statistics. The XSL validation plotting
-   companion should produce reviewer-facing Markdown/CSV/PNG recovery summaries
-   from saved checkpoints without rerunning PHOENIX. After the XSL reference
-   path is stable, use `scripts/external_spectra_validation.py` to add clean
-   and dirty SDSS and UVES-POP spectra to the cross-instrument validation
-   queue before promoting any archive-specific fitting presets.
+   - `inspect`
+   - `quicklook_classification`
+   - `atmospheric_parameters`
+   - `radial_velocity`
+   - `publication`
 
-4. **Publication-oriented X-SHOOTER UVB workflow.**
+   The audit should report `ready_for_intent`, `blockers_for_intent`,
+   `warnings_for_intent`, and `actions_for_intent`. The same missing metadata
+   may be allowed for visual inspection, allowed with caveats for quicklook
+   classification, and blocked for physical RV or publication-quality
+   inference. Existing `blocker`/`review` labels remain useful display labels,
+   but should not be the only policy layer.
+
+4. **Curated public facade and documentation source of truth.**
+   Keep the top-level namespace useful but not sprawling. The intended one
+   import facade should cover ordinary user actions:
+
+   - read and plot a spectrum;
+   - audit readiness;
+   - select and plot diagnostic windows;
+   - build a simple mask;
+   - fit and plot one line;
+   - run a first-pass PHOENIX fit;
+   - plot and compare fit results.
+
+   Review whether helper functions such as `readiness_flag_actions()` should
+   remain top-level or become properties of structured audit/setup objects once
+   those exist. Also clarify whether `classify_spectrum()` should remain a
+   direct alias, return a distinct first-pass classification object, or be
+   deprecated to avoid confusing atmospheric-parameter fits with formal MK
+   classification.
+
+   Public call help should ultimately be generated from real signatures,
+   numpydoc-style docstrings, and registered examples rather than maintained as
+   a parallel metadata layer.
+
+5. **Versioned serialized reports and provenance.**
+   Add a versioned, web/Django-friendly serialized report schema before
+   external clients depend on ad-hoc JSON fields. The schema should record at
+   least: schema version, Spyctres version, git commit if available, model
+   backend, model-grid manifest/hash, input checksum when allowed, fit setup
+   hash, wavelength assumptions, mask policy, resolution source, quality flags,
+   readiness intent, and path-sanitization policy. PHOENIX composition
+   provenance should be explicit: model family/version, selected abundance
+   pattern, alpha policy, microturbulence policy if known, solar abundance
+   scale, and whether `[Fe/H]` is an iron abundance, global metallicity, or a
+   grid label.
+
+6. **Real-spectrum validation before further feature growth.**
+   Expand and maintain validation on real spectra before adding heavier
+   modelling features. Use two tracks:
+
+   - XSL/X-SHOOTER behavior and stability: ingestion, window selection, branch
+     proposal, multi-arm behavior, residual morphology, and stress-case
+     recognition.
+   - Benchmark accuracy: Gaia FGK Benchmark Stars and other independently
+     constrained standards for Teff/logg/[Fe/H]/RV where appropriate.
+
+   Stress/peculiar targets should remain separated from ordinary recovery
+   statistics. XSL recovery thresholds should be class-dependent and expressed
+   where possible as normalized residuals with broad absolute floors, not as
+   one universal pass/fail rule.
+
+7. **Quickscan/refine calibration and throughput.**
+   Continue the quality-gated quickscan/refine approach for batches of tens to
+   hundreds of spectra, but measure more than runtime. Track false narrowing:
+   the fraction of validation stars whose accepted broad solution lies inside
+   the automatically proposed refinement bounds. Report this by spectral
+   family, luminosity class, metallicity, S/N, resolution, instrument, and
+   ordinary/stress role. Boundary hits, fallback errors, archive-mask overlap,
+   structured residuals, or window inconsistency should widen refinement bounds
+   or skip refinement rather than confidently narrowing.
+
+8. **Publication-oriented X-SHOOTER UVB workflow.**
    Add a separate expert workflow, not a replacement for
    `examples/simple_phoenix_fit.py`, for cases where the user wants defensible
    stellar parameters rather than a first-pass classification. The first target
@@ -112,22 +205,51 @@ requirements.
    rankings, masks, and fit-comparison behaviour on real spectra rather than
    expanding the catalog mechanically.
 
-5. **Public API and reporting polish.**
-   Keep refining structured result objects, quality reports, plotting, and
-   simple examples so the common path remains easy to teach and maintain.
+9. **LSF, hot-regime, and model-support safeguards.**
+   Keep constant Gaussian LSF broadening as the production path for now. Define
+   but do not yet activate the SDSS wavelength-dependent LSF acceptance tests:
+   exact `wdisp` interpretation, unit conversion, constant-LSF equivalence,
+   synthetic line-width recovery, flux conservation, edge padding, invalid
+   resolution entries, RV recovery, atmospheric-parameter deltas, and runtime
+   behavior. Enrich resolution provenance with distinctions such as
+   `reported_nominal`, `adopted_for_fit`, `measured_from_calibration`,
+   `wavelength_dependent`, `fitted_nuisance`, and `unknown`.
 
-6. **Later beta features.**
+   Keep the PHOENIX `Teff > 12000 K` guard. Also tag hot-star and peculiar-star
+   diagnostic branches with model-support status (`supported`, `uncertain`,
+   `stress_only`, `unsupported`) so such windows can identify likely regime
+   mismatch without implying ordinary PHOENIX refinement is valid.
+
+10. **Legacy, import, and packaging hygiene.**
+    Before beta, produce a migration table for legacy functions: current
+    replacement, status, deprecation release, removal target, and optional
+    dependency requirements. The modern core should not require importing
+    `pysynphot`/`stsynphot` for ordinary use if those remain legacy-only.
+
+    Revisit import-time Matplotlib setup. The current helper is useful for CI,
+    restricted servers, and Django, but ordinary `import Spyctres` should avoid
+    surprising global Matplotlib/cache/backend side effects. Prefer explicit
+    setup in scripts/server entry points and documented deployment guidance.
+
+    Categorize the current test-suite warnings before beta: expected
+    third-party deprecations should be narrowly filtered or documented;
+    numerical/resource warnings should be fixed; unexpected warning growth
+    should fail CI. Continue package-data, wheel/sdist, and console-entry-point
+    checks.
+
+11. **Later beta features.**
    Defer heavier additions until the above pieces are stable: optional
    wavelength-dependent LSF fitting, compression/MOPED-style acceleration,
    posterior samplers, alternative atmosphere backends, a GUI, and publication
    SED/arm-scaling modes.
 
-7. **Final pre-beta audit.**
+12. **Final pre-beta audit.**
    Before treating Spyctres as stable enough for broader collaborator use,
    run a whole-package audit: public API compatibility, source-distribution and
    package-data checks, Django/server-side plotting compatibility with
-   non-interactive Matplotlib backends, example clarity and ordering, notebook
-   reproducibility, and a final pass over README/setup instructions.
+   non-interactive Matplotlib backends, Python 3.12 and 3.13 testing, example
+   clarity and ordering, notebook reproducibility, warning baseline, legacy API
+   compatibility, and a final pass over README/setup instructions.
 
 ## New publication-readiness gate
 
@@ -140,3 +262,51 @@ or too few usable pixels.
 
 This distinction is deliberate: ingestion and quick classification should be
 forgiving, while publication-quality parameter claims should be conservative.
+
+The next iteration should fold this into the intent-aware readiness model:
+publication remains the strictest intent, while inspect and quicklook
+classification may allow some missing metadata only when the output explicitly
+labels which interpretations are invalid.
+
+## Acceptance criteria before wider collaborator use
+
+Spyctres should not be considered ready for broad collaborator use merely
+because the code imports and the unit tests pass. The practical alpha-readiness
+target is:
+
+- a user can start with `import Spyctres as sp`;
+- the five numbered example pairs run in order and introduce one concept at a
+  time;
+- setup inspection and the actual fit use the same reviewed setup object;
+- readiness is task/intent-aware and explains which interpretations are valid;
+- quicklook, atmospheric-parameter, RV, and publication claims are clearly
+  separated;
+- wavelength medium, observer frame, stellar-rest status, mask policy,
+  formal-error policy, PHOENIX model-family/composition assumptions, and
+  resolution/LSF source are recorded in serialized output;
+- ordinary XSL behavior validation and benchmark-star accuracy validation have
+  been reviewed separately;
+- SDSS/UVES-POP external products can be ingested and audited without bundling
+  those data files in the repository;
+- batch quickscan/refine has measured runtime, skip-rate, and false-narrowing
+  behavior on representative spectra;
+- legacy APIs have a migration table and optional-dependency policy;
+- import-time side effects, warnings, wheel/sdist packaging, console entry
+  points, and Django/headless plotting behavior have been audited.
+
+## Referee feedback questions currently open
+
+- What should the exact intent-readiness matrix allow or block for quicklook
+  classification versus atmospheric parameters, physical RV, and publication?
+- Should `classify_spectrum()` remain as a documented first-pass PHOENIX-label
+  helper, become a distinct classification object, or be deprecated as an alias?
+- Should the current custom public-help registry be retained for GUI use if it
+  is generated from signatures/docstrings, or should it be removed in favor of
+  standard Python help plus tutorials?
+- Should `readiness_flag_actions()` stay top-level during alpha, or move behind
+  structured audit/setup objects once those exist?
+- What PHOENIX composition policy should be adopted for metal-poor or
+  alpha-enhanced regimes when the current fit is only three-dimensional?
+- Which real validation set should be treated as the first benchmark-accuracy
+  gate after XSL behavior validation: Gaia FGK Benchmark Stars or a smaller
+  locally available standard-star set?

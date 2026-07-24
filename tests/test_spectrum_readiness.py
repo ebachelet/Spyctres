@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegment
 from Spyctres.recipes import sdss_quicklook_resolution_assumption
@@ -56,6 +57,85 @@ def test_audit_unknown_metadata_and_missing_resolution_are_quicklook_only():
     assert "wave_medium='air'" in actions["wave_medium_unknown"]["action"]
     assert "1-sigma uncertainties" in actions["missing_uncertainties"]["action"]
     assert "recommended_actions" in audit["segments"][0]
+
+
+def test_audit_intent_specific_readiness_allows_quicklook_metadata_warnings():
+    segment = SpectrumSegment(
+        wave=[5000.0, 5001.0, 5002.0],
+        flux=[1.0, 1.1, 1.2],
+        err=[0.1, 0.1, 0.1],
+        wave_medium="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+    )
+
+    audit = audit_spectrum_for_fit(
+        segment,
+        intent="quicklook_classification",
+        assumed_resolution={
+            "quantity": "R",
+            "value": 2000.0,
+            "source": "user_override",
+        },
+    )
+
+    assert audit["fit_ready"] is False
+    assert audit["quicklook_only"] is True
+    assert audit["intent"] == "quicklook_classification"
+    assert audit["ready_for_intent"] is True
+    assert audit["blockers_for_intent"] == []
+    assert "wave_medium_unknown" in audit["warnings_for_intent"]
+    assert "observer_frame_unknown" in audit["warnings_for_intent"]
+    assert "stellar_rest_status_unknown" in audit["warnings_for_intent"]
+    assert "physical_radial_velocity" in audit["invalid_interpretations_for_intent"]
+    actions = {item["flag"]: item for item in audit["actions_for_intent"]}
+    assert actions["wave_medium_unknown"]["intent_severity"] == "warning"
+    assert (
+        audit["readiness_by_intent"]["radial_velocity"]["ready_for_intent"]
+        is False
+    )
+
+
+def test_audit_radial_velocity_intent_blocks_frame_metadata():
+    segment = SpectrumSegment(
+        wave=[5000.0, 5001.0, 5002.0],
+        flux=[1.0, 1.1, 1.2],
+        err=[0.1, 0.1, 0.1],
+        wave_medium="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+    )
+
+    audit = audit_spectrum_for_fit(
+        segment,
+        intent="radial_velocity",
+        assumed_resolution={
+            "quantity": "R",
+            "value": 2000.0,
+            "source": "user_override",
+        },
+    )
+
+    assert audit["ready_for_intent"] is False
+    assert set(audit["blockers_for_intent"]) == {
+        "observer_frame_unknown",
+        "stellar_rest_status_unknown",
+        "wave_medium_unknown",
+    }
+    assert "physical_radial_velocity" in audit["invalid_interpretations_for_intent"]
+    actions = {item["flag"]: item for item in audit["actions_for_intent"]}
+    assert actions["observer_frame_unknown"]["intent_severity"] == "blocker"
+
+
+def test_audit_rejects_unknown_explicit_intent():
+    segment = SpectrumSegment(
+        wave=[5000.0, 5001.0, 5002.0],
+        flux=[1.0, 1.1, 1.2],
+        err=[0.1, 0.1, 0.1],
+    )
+
+    with pytest.raises(ValueError, match="Unknown readiness intent"):
+        audit_spectrum_for_fit(segment, intent="precision_abundance")
 
 
 def test_readiness_flag_actions_handles_unknown_flags():

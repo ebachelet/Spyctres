@@ -152,6 +152,15 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "Include a pre-fit readiness audit over the suggested fit regions.",
             },
             {
+                "name": "readiness_intent",
+                "default": "classification/quicklook",
+                "description": (
+                    "Task-specific readiness policy: inspect, "
+                    "quicklook_classification, atmospheric_parameters, "
+                    "radial_velocity, or publication."
+                ),
+            },
+            {
                 "name": "assumed_resolution / exclude_masks",
                 "default": "None",
                 "description": "Optional assumptions passed into the readiness audit, without mutating the spectrum.",

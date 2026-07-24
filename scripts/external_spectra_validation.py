@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 from Spyctres import audit_spectrum_for_fit, select_diagnostic_windows, suggest_fit_setup
 from Spyctres.io import get_instrument_info, list_instruments, read_spectrum
 from Spyctres.plotting import plot_spectrum_audit, plot_spectrum_quicklook
+from Spyctres.preprocessing import READINESS_INTENTS
 
 
 SUPPORTED_EXTERNAL_INSTRUMENTS = ("sdss", "uves_pop")
@@ -164,6 +165,16 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--readiness-intent",
+        default="quicklook_classification",
+        choices=READINESS_INTENTS,
+        help=(
+            "Task-specific readiness policy. Use inspect for pure reader/QC "
+            "checks; the default quicklook_classification asks whether the "
+            "spectrum is safe for a first-pass classification attempt."
+        ),
+    )
+    parser.add_argument(
         "--sdss-mask-policy",
         default="and_mask_conservative",
         choices=("ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
@@ -272,6 +283,21 @@ def _format_recommended_actions(readiness):
     return ";".join(formatted)
 
 
+def _format_intent_actions(readiness):
+    actions = (readiness or {}).get("actions_for_intent") or ()
+    formatted = []
+    for item in actions:
+        if not isinstance(item, dict):
+            continue
+        flag = item.get("flag")
+        severity = item.get("intent_severity") or item.get("severity")
+        action = item.get("action")
+        if flag and action:
+            prefix = "{0}:{1}".format(flag, severity) if severity else str(flag)
+            formatted.append("{0}: {1}".format(prefix, action))
+    return ";".join(formatted)
+
+
 def _atomic_write_csv(path, payload):
     if path is None:
         return
@@ -287,6 +313,12 @@ def _atomic_write_csv(path, payload):
         "role_expectation_assessment",
         "fit_ready",
         "quicklook_only",
+        "readiness_intent",
+        "ready_for_intent",
+        "blockers_for_intent",
+        "warnings_for_intent",
+        "actions_for_intent",
+        "invalid_interpretations_for_intent",
         "n_segments",
         "n_total",
         "n_fit_candidate",
@@ -330,6 +362,18 @@ def _atomic_write_csv(path, payload):
                         ),
                         "fit_ready": readiness.get("fit_ready"),
                         "quicklook_only": readiness.get("quicklook_only"),
+                        "readiness_intent": readiness.get("intent"),
+                        "ready_for_intent": readiness.get("ready_for_intent"),
+                        "blockers_for_intent": ";".join(
+                            readiness.get("blockers_for_intent") or ()
+                        ),
+                        "warnings_for_intent": ";".join(
+                            readiness.get("warnings_for_intent") or ()
+                        ),
+                        "actions_for_intent": _format_intent_actions(readiness),
+                        "invalid_interpretations_for_intent": ";".join(
+                            readiness.get("invalid_interpretations_for_intent") or ()
+                        ),
                         "n_segments": readiness.get("n_segments"),
                         "n_total": readiness.get("n_total"),
                         "n_fit_candidate": readiness.get("n_fit_candidate"),
@@ -721,6 +765,7 @@ def _fit_setup_recommendation(spectrum, args, assumed_resolution):
             spectrum,
             mode=args.setup_mode,
             science_case="classification",
+            readiness_intent=args.readiness_intent,
             include_readiness=False,
             assumed_resolution=assumed_resolution,
         )
@@ -739,7 +784,7 @@ def _fit_setup_recommendation(spectrum, args, assumed_resolution):
 
 def _role_expectation_assessment(role, readiness):
     role = str(role or "unknown").strip().lower()
-    fit_ready = bool((readiness or {}).get("fit_ready"))
+    fit_ready = bool((readiness or {}).get("ready_for_intent"))
     n_fit = int((readiness or {}).get("n_fit_candidate") or 0)
     if role == "clean":
         return "clean_passed_readiness" if fit_ready else "clean_needs_review"
@@ -802,6 +847,7 @@ def validate_target(target, args):
             fit_windows=fit_windows,
             assumed_resolution=assumed_resolution,
             intended_use="external_reader_validation",
+            intent=args.readiness_intent,
         )
         coverage = _coverage_summary(spectrum)
         segments = [_segment_summary(segment) for segment in _iter_segments(spectrum)]
@@ -837,7 +883,9 @@ def validate_target(target, args):
             }
         )
         print(
-            "  Readiness: fit_ready={0}, Nfit={1}, flags={2}".format(
+            "  Readiness: intent={0}, ready_for_intent={1}, fit_ready={2}, Nfit={3}, flags={4}".format(
+                readiness.get("intent"),
+                readiness.get("ready_for_intent"),
                 readiness.get("fit_ready"),
                 readiness.get("n_fit_candidate"),
                 ", ".join(readiness.get("interpretation_flags") or ()) or "none",
@@ -956,6 +1004,7 @@ def _payload(records, args, targets):
             "scan_root": args.scan_root or [],
             "fit_window_A": args.fit_window,
             "assumed_resolution_R": args.assumed_resolution,
+            "readiness_intent": args.readiness_intent,
             "sdss_mask_policy": args.sdss_mask_policy,
             "sdss_attach_wdisp_resolution": bool(args.sdss_attach_wdisp_resolution),
             "uves_wave_unit": args.uves_wave_unit,

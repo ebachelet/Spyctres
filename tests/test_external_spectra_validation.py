@@ -10,7 +10,7 @@ from scripts import external_spectra_validation
 
 def _write_uves(path, *, nm=True, with_error=True):
     wave0 = 500.0 if nm else 5000.0
-    step = 0.02 if nm else 0.2
+    step = 0.002 if nm else 0.02
     lines = ["# synthetic UVES-POP-like spectrum\n"]
     for index in range(20):
         wave = wave0 + index * step
@@ -135,11 +135,20 @@ def test_external_validation_manifest_writes_json_and_csv(tmp_path):
     assert by_id["uves_clean"]["status"] == "ok"
     assert by_id["uves_clean"]["reader_kwargs"]["err_column"] == 2
     assert by_id["uves_clean"]["segments"][0]["wave_medium"] == "unknown"
+    assert by_id["uves_clean"]["readiness"]["intent"] == "quicklook_classification"
+    assert by_id["uves_clean"]["readiness"]["ready_for_intent"] is True
+    assert by_id["uves_clean"]["readiness"]["blockers_for_intent"] == []
+    assert "wave_medium_unknown" in by_id["uves_clean"]["readiness"]["warnings_for_intent"]
     assert by_id["uves_clean"]["fit_setup_recommendation"]["status"] == "ok"
     assert by_id["uves_clean"]["fit_setup_recommendation"]["operation"] == "suggest_fit_setup"
     assert by_id["sdss_dirty"]["status"] == "ok"
     assert by_id["sdss_dirty"]["reader_kwargs"]["sdss_mask_policy"] == "and_mask_conservative"
     assert by_id["sdss_dirty"]["readiness"]["n_fit_candidate"] < 20
+    assert by_id["sdss_dirty"]["readiness"]["ready_for_intent"] is False
+    assert (
+        "artifact_review_required"
+        in by_id["sdss_dirty"]["readiness"]["blockers_for_intent"]
+    )
     sdss_actions = {
         item["flag"]: item
         for item in by_id["sdss_dirty"]["readiness"]["recommended_actions"]
@@ -155,6 +164,10 @@ def test_external_validation_manifest_writes_json_and_csv(tmp_path):
     assert output_csv.exists()
     csv_text = output_csv.read_text(encoding="utf-8")
     assert "role_expectation_assessment" in csv_text
+    assert "readiness_intent" in csv_text
+    assert "ready_for_intent" in csv_text
+    assert "blockers_for_intent" in csv_text
+    assert "actions_for_intent" in csv_text
     assert "recommended_actions" in csv_text
     assert "recommended_branch_id" in csv_text
 

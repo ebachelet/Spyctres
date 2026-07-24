@@ -1160,18 +1160,42 @@ def _setup_next_steps(suggestion, readiness):
     if mode_step:
         next_steps.append(str(mode_step))
     if readiness is not None:
-        if not readiness.get("fit_ready", False):
-            flags = ", ".join(readiness.get("interpretation_flags", []) or ["unknown"])
+        intent = readiness.get("intent") or readiness.get("intended_use") or "fit"
+        ready_for_intent = readiness.get(
+            "ready_for_intent",
+            readiness.get("fit_ready", False),
+        )
+        if not ready_for_intent:
+            flags = ", ".join(
+                readiness.get("blockers_for_intent")
+                or readiness.get("interpretation_flags", [])
+                or ["unknown"]
+            )
             next_steps.append(
-                "Readiness audit is not fit-ready; resolve or explicitly accept these flags before refinement: {0}.".format(
-                    flags
+                "Readiness audit is not fit-ready for {0}; resolve or "
+                "explicitly accept these blockers before refinement: {1}.".format(
+                    intent,
+                    flags,
                 )
             )
-            for item in readiness.get("recommended_actions", []) or []:
+            for item in (
+                readiness.get("actions_for_intent")
+                or readiness.get("recommended_actions", [])
+                or []
+            ):
                 flag = item.get("flag")
                 action = item.get("action")
                 if flag and action:
                     next_steps.append("{0}: {1}".format(flag, action))
+        elif readiness.get("warnings_for_intent"):
+            flags = ", ".join(readiness.get("warnings_for_intent") or ())
+            next_steps.append(
+                "Intent-specific audit is ready for {0}, but review these "
+                "warnings before interpreting the result: {1}.".format(
+                    intent,
+                    flags,
+                )
+            )
         elif readiness.get("quicklook_only", False):
             next_steps.append(
                 "Treat this setup as quicklook-only until the readiness flags and model residuals are reviewed."
@@ -1230,6 +1254,7 @@ def suggest_fit_setup(
     model="phoenix",
     mode="quicklook",
     science_case="classification",
+    readiness_intent=None,
     include_readiness=True,
     assumed_resolution=None,
     exclude_mask=None,
@@ -1269,6 +1294,7 @@ def suggest_fit_setup(
             exclude_masks=exclude_masks,
             mask_threshold=mask_threshold,
             intended_use=science_case,
+            intent=readiness_intent,
             assumed_resolution=assumed_resolution,
         )
 
@@ -1323,6 +1349,9 @@ def suggest_fit_setup(
             "provenance": {
                 "defaults": suggestion.provenance,
                 "readiness_included": bool(include_readiness),
+                "readiness_intent": None
+                if readiness is None
+                else readiness.get("intent"),
                 "assumed_resolution": _jsonable(assumed_resolution),
                 "mask_threshold": float(mask_threshold),
                 "expert_overrides": (

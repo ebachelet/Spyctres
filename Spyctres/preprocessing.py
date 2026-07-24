@@ -2077,6 +2077,227 @@ def readiness_flag_actions(flags):
     return _json_safe(actions)
 
 
+READINESS_INTENTS = (
+    "inspect",
+    "quicklook_classification",
+    "atmospheric_parameters",
+    "radial_velocity",
+    "publication",
+)
+
+
+READINESS_INTENT_ALIASES = {
+    "inspect": "inspect",
+    "inspection": "inspect",
+    "reader_validation": "inspect",
+    "external_reader_validation": "inspect",
+    "quicklook": "quicklook_classification",
+    "classification": "quicklook_classification",
+    "quicklook_classification": "quicklook_classification",
+    "first_pass_classification": "quicklook_classification",
+    "batch_quick_scan_classification": "quicklook_classification",
+    "atmospheric": "atmospheric_parameters",
+    "atmospheric_parameters": "atmospheric_parameters",
+    "stellar_parameters": "atmospheric_parameters",
+    "parameters": "atmospheric_parameters",
+    "rv": "radial_velocity",
+    "radial_velocity": "radial_velocity",
+    "physical_rv": "radial_velocity",
+    "publication": "publication",
+    "publication_quality": "publication",
+    "publication_quality_stellar_parameters": "publication",
+}
+
+
+READINESS_INTENT_BLOCKERS = {
+    "inspect": {
+        "no_fitted_pixels",
+    },
+    "quicklook_classification": {
+        "no_fitted_pixels",
+        "resolution_assumption_required",
+        "artifact_review_required",
+        "lsf_undersampled",
+        "archive_mask_fraction_high",
+        "flat_zero_block_detected",
+    },
+    "atmospheric_parameters": {
+        "no_fitted_pixels",
+        "resolution_assumption_required",
+        "wave_medium_unknown",
+        "artifact_review_required",
+        "lsf_undersampled",
+        "archive_mask_fraction_high",
+        "flat_zero_block_detected",
+    },
+    "radial_velocity": {
+        "no_fitted_pixels",
+        "resolution_assumption_required",
+        "wave_medium_unknown",
+        "observer_frame_unknown",
+        "stellar_rest_status_unknown",
+        "artifact_review_required",
+        "lsf_undersampled",
+        "archive_mask_overlap_inside_fit_window",
+        "archive_mask_fraction_high",
+        "flat_zero_block_detected",
+        "sdss_wdisp_lsf_not_applied",
+    },
+    "publication": {
+        "no_fitted_pixels",
+        "missing_uncertainties",
+        "resolution_assumption_required",
+        "wave_medium_unknown",
+        "observer_frame_unknown",
+        "stellar_rest_status_unknown",
+        "artifact_review_required",
+        "lsf_undersampled",
+        "archive_mask_overlap_inside_fit_window",
+        "archive_mask_fraction_high",
+        "flat_zero_block_detected",
+        "sdss_wdisp_lsf_not_applied",
+    },
+}
+
+
+READINESS_FLAG_LIMITATIONS = {
+    "missing_uncertainties": (
+        "calibrated_chi_square",
+        "formal_parameter_uncertainties",
+    ),
+    "wave_medium_unknown": (
+        "precision_line_centres",
+        "rv_kms_interpretation",
+        "medium_sensitive_line_fits",
+    ),
+    "observer_frame_unknown": (
+        "physical_radial_velocity",
+        "barycentric_or_heliocentric_comparison",
+    ),
+    "stellar_rest_status_unknown": (
+        "physical_radial_velocity",
+        "whether_an_additional_stellar_rv_shift_is_valid",
+    ),
+    "resolution_assumption_required": (
+        "line_widths",
+        "gravity_sensitive_line_profiles",
+        "precision_lsf_dependent_parameters",
+    ),
+    "sdss_wdisp_lsf_not_applied": (
+        "precision_sdss_line_widths",
+        "wavelength_dependent_lsf_claims",
+    ),
+    "lsf_undersampled": (
+        "line_widths",
+        "precision_rv",
+    ),
+    "artifact_review_required": (
+        "focused_refinement_without_human_review",
+        "structured_residual_interpretation",
+    ),
+    "archive_mask_overlap_inside_fit_window": (
+        "clean_fit_window_claim",
+    ),
+    "archive_mask_fraction_high": (
+        "clean_fit_window_claim",
+        "focused_refinement_without_human_review",
+    ),
+    "flat_zero_block_detected": (
+        "continuum_shape_interpretation",
+        "focused_refinement_without_human_review",
+    ),
+    "large_wavelength_gap_detected": (
+        "single_continuous_segment_assumption",
+    ),
+    "no_fitted_pixels": (
+        "fit_result_interpretation",
+    ),
+}
+
+
+def _normalize_readiness_intent(intent=None, intended_use=None):
+    if intent is not None:
+        key = str(intent).strip().lower().replace("-", "_").replace(" ", "_")
+        if key in READINESS_INTENT_ALIASES:
+            return READINESS_INTENT_ALIASES[key]
+        known = ", ".join(READINESS_INTENTS)
+        raise ValueError(
+            "Unknown readiness intent {0!r}. Known intents: {1}.".format(
+                intent,
+                known,
+            )
+        )
+
+    text = str(intended_use or "classification").strip().lower()
+    key = text.replace("-", "_").replace(" ", "_")
+    if key in READINESS_INTENT_ALIASES:
+        return READINESS_INTENT_ALIASES[key]
+    if "publication" in key:
+        return "publication"
+    if "radial_velocity" in key or key.endswith("_rv") or key == "rv":
+        return "radial_velocity"
+    if "atmospheric" in key or "parameter" in key:
+        return "atmospheric_parameters"
+    if "inspect" in key or "reader_validation" in key:
+        return "inspect"
+    if "classification" in key or "quick" in key:
+        return "quicklook_classification"
+    return "quicklook_classification"
+
+
+def _readiness_actions_for_intent(blockers, warnings):
+    blocker_set = set(blockers or ())
+    warning_set = set(warnings or ())
+    actions = []
+    for item in readiness_flag_actions(blocker_set | warning_set):
+        action = dict(item)
+        flag = action.get("flag")
+        action["intent_severity"] = (
+            "blocker" if flag in blocker_set else "warning"
+        )
+        actions.append(action)
+    return actions
+
+
+def _limitations_for_flags(flags):
+    limitations = {
+        item
+        for flag in (flags or ())
+        for item in READINESS_FLAG_LIMITATIONS.get(flag, ())
+    }
+    return sorted(limitations)
+
+
+def _readiness_for_intent(flags, n_fit, intent):
+    intent = _normalize_readiness_intent(intent=intent)
+    flag_set = set(flags or ())
+    blockers = sorted(flag_set & READINESS_INTENT_BLOCKERS[intent])
+    warnings = sorted(flag_set - set(blockers))
+    if int(n_fit) <= 0 and "no_fitted_pixels" not in blockers:
+        blockers = sorted(set(blockers) | {"no_fitted_pixels"})
+        warnings = sorted(set(warnings) - {"no_fitted_pixels"})
+    ready = bool(int(n_fit) > 0 and not blockers)
+    return {
+        "intent": intent,
+        "ready_for_intent": ready,
+        "blockers_for_intent": blockers,
+        "warnings_for_intent": warnings,
+        "actions_for_intent": _readiness_actions_for_intent(blockers, warnings),
+        "invalid_interpretations_for_intent": _limitations_for_flags(flag_set),
+    }
+
+
+def _readiness_by_intent(flags, n_fit):
+    return {
+        intent: {
+            key: value
+            for key, value in _readiness_for_intent(flags, n_fit, intent).items()
+            if key != "actions_for_intent"
+        }
+        for intent in READINESS_INTENTS
+    }
+
+
 def _segment_readiness(
     seg,
     regions=None,
@@ -2289,6 +2510,7 @@ def audit_spectrum_for_fit(
     exclude_masks=None,
     mask_threshold=0.5,
     intended_use="classification",
+    intent=None,
     assumed_resolution=None,
     spike_sigma=10.0,
     flat_block_min=5,
@@ -2320,6 +2542,10 @@ def audit_spectrum_for_fit(
         segments,
         exclude_masks,
         "exclude_masks",
+    )
+    readiness_intent = _normalize_readiness_intent(
+        intent=intent,
+        intended_use=intended_use,
     )
     per_segment = [
         _segment_readiness(
@@ -2400,12 +2626,23 @@ def audit_spectrum_for_fit(
     }
     fit_ready = bool(n_fit > 0 and not (set(flags) & hard_flags))
     recommended_actions = readiness_flag_actions(flags)
+    intent_summary = _readiness_for_intent(flags, n_fit, readiness_intent)
     return _json_safe(
         {
             "schema_version": 1,
             "intended_use": str(intended_use),
+            "intent": readiness_intent,
+            "readiness_intent": readiness_intent,
             "fit_ready": fit_ready,
             "quicklook_only": not fit_ready,
+            "ready_for_intent": intent_summary["ready_for_intent"],
+            "blockers_for_intent": intent_summary["blockers_for_intent"],
+            "warnings_for_intent": intent_summary["warnings_for_intent"],
+            "actions_for_intent": intent_summary["actions_for_intent"],
+            "invalid_interpretations_for_intent": intent_summary[
+                "invalid_interpretations_for_intent"
+            ],
+            "readiness_by_intent": _readiness_by_intent(flags, n_fit),
             "mask_true_means": "use",
             "n_segments": len(per_segment),
             "n_total": n_total,
@@ -2487,6 +2724,7 @@ def publication_readiness_audit(
         exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
         intended_use=intended_use,
+        intent="publication",
         assumed_resolution=assumed_resolution,
         **audit_kwargs,
     )
@@ -2497,9 +2735,6 @@ def publication_readiness_audit(
 
     blockers = set(flags & blocking_flags)
     warnings = set(flags - blockers)
-
-    if not audit.get("fit_ready", False):
-        blockers.add("base_fit_readiness_failed")
 
     n_fit = int(audit.get("n_fit_candidate", 0))
     if min_fit_pixels is not None and n_fit < int(min_fit_pixels):
