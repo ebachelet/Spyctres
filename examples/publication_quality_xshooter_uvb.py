@@ -222,6 +222,7 @@ def build_parser():
             "--output-publication-summary-csv /tmp/spyctres_publication_summary.csv"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "spectrum",

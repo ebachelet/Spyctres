@@ -45,7 +45,16 @@ def build_parser():
         description=(
             "Demonstrate local sideband normalization for a high-resolution "
             "line window. This is preprocessing/diagnostics, not a PHOENIX fit."
-        )
+        ),
+        epilog=(
+            "Example:\n"
+            "  python examples/high_resolution_sideband_normalization.py "
+            "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
+            "--instrument xshooter --line-center 4861.33 "
+            "--wmin 4830 --wmax 4895 --no-show"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument("spectrum", help="Input reduced one-dimensional spectrum.")
     parser.add_argument("--instrument", required=True, help="Registered reader name.")

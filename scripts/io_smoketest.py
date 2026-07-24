@@ -1,5 +1,12 @@
 import os
 import argparse
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import numpy as np
 from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
@@ -81,6 +88,7 @@ def build_parser():
             "unless that spectrum is bundled under examples/data/."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
 
 

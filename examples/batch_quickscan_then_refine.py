@@ -94,6 +94,7 @@ def build_parser():
             "instrument, R/resolution_R."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "spectra",

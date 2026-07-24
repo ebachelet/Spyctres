@@ -24,6 +24,13 @@ from .io import (
 )
 
 
+class _RawDefaultsHelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter,
+    argparse.RawDescriptionHelpFormatter,
+):
+    """Argparse formatter that preserves examples and shows defaults."""
+
+
 def _json_default(value):
     if isinstance(value, np.generic):
         return value.item()
@@ -154,6 +161,17 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="spyctres",
         description="Read-only Spyctres discovery and spectrum-inspection helpers.",
+        epilog=(
+            "Examples:\n"
+            "  spyctres instruments\n"
+            "  spyctres instrument-info xshooter\n"
+            "  spyctres inspect-spectrum "
+            "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
+            "--instrument xshooter\n\n"
+            "This CLI is read-only. Use the Python API or examples/ scripts for fitting."
+        ),
+        formatter_class=_RawDefaultsHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--version",
@@ -166,6 +184,8 @@ def build_parser():
         "instruments",
         help="List registered spectrum readers.",
         description="List registered Spyctres spectrum readers.",
+        formatter_class=_RawDefaultsHelpFormatter,
+        allow_abbrev=False,
     )
     instruments.add_argument(
         "--aliases",
@@ -179,6 +199,8 @@ def build_parser():
         "instrument-info",
         help="Show metadata for one registered reader.",
         description="Show read-only metadata for one registered spectrum reader.",
+        formatter_class=_RawDefaultsHelpFormatter,
+        allow_abbrev=False,
     )
     instrument_info.add_argument("instrument", help="Canonical name or alias.")
     instrument_info.add_argument("--json", action="store_true", help="Emit JSON.")
@@ -192,6 +214,13 @@ def build_parser():
             "resulting SpectrumSegment/SpectrumCollection. This command does "
             "not fit, normalize, resample, or write outputs."
         ),
+        epilog=(
+            "Minimal call:\n"
+            "  spyctres inspect-spectrum my_spectrum.fits --instrument xshooter\n\n"
+            "Tip: run 'spyctres instruments --aliases' to see accepted reader names."
+        ),
+        formatter_class=_RawDefaultsHelpFormatter,
+        allow_abbrev=False,
     )
     inspect.add_argument("path", help="Spectrum file to inspect.")
     inspect.add_argument(

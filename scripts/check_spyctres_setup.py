@@ -259,6 +259,17 @@ def check_spectrum(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Setup diagnostic for a local Spyctres + PHOENIX development environment.",
+        epilog=(
+            "Examples:\n"
+            "  python scripts/check_spyctres_setup.py --skip-phoenix\n"
+            "  python scripts/check_spyctres_setup.py "
+            "--spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
+            "--instrument xshooter\n\n"
+            "Minimal advice: use --skip-phoenix for an I/O-only environment check, "
+            "or configure PHOENIX with SPYCTRES_PHOENIX_DIR / ~/.config/spyctres/config.toml."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument("--phoenix-dir", default=None, help="Explicit PHOENIX root.")
     parser.add_argument(

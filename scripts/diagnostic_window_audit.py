@@ -114,6 +114,7 @@ def build_parser():
             "instrument, spectral_type, teff_ref, validation_role."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "manifest",

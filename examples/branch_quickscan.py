@@ -29,7 +29,12 @@ Example opt-in bounded fit run:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from Spyctres import (
     plot_branch_quickscan,
@@ -66,6 +71,7 @@ def build_parser():
             "--instrument xshooter --run-fits --R 6200 --max-branches 3"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "spectrum",
@@ -247,4 +253,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -61,6 +61,7 @@ def build_parser():
             "assumed_resolution_R, fit_wmin, fit_wmax."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "files",

@@ -38,6 +38,7 @@ def build_parser():
             "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
 
 

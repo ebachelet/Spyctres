@@ -37,7 +37,12 @@ python examples/simple_phoenix_fit.py \
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np
 from Spyctres import ensure_matplotlib_config_dir
@@ -78,24 +83,27 @@ def build_parser():
             "--instrument xshooter "
             "--output-json /tmp/spyctres_result.json "
             "--output-plot /tmp/spyctres_fit.png\n\n"
-            "Approximate SDSS quicklook example:\n"
-            "  python examples/simple_phoenix_fit.py spec-PLATE-MJD-FIBER.fits "
-            "--instrument sdss --R 2000 --sdss-mask-policy stellar_strict\n"
-            "  SDSS reader metadata intentionally keeps resolution=None; "
-            "--R 2000 is an explicit quicklook approximation, not precision "
-            "SDSS LSF modelling.\n\n"
-            "UVES-POP ASCII quicklook with documented metadata overrides:\n"
-            "  python examples/simple_phoenix_fit.py hd115617.dat "
-            "--instrument uves_pop --R 80000 --wave-medium air "
-            "--uves-err-column 2\n"
-            "  UVES-POP resolving power and wavelength-medium assumptions should "
-            "be verified from the product documentation before precision work."
+            "Notes for user-supplied external spectra:\n"
+            "  SDSS reader metadata intentionally keeps resolution=None. If "
+            "you run your own SDSS quicklook, --R 2000 is an explicit "
+            "approximation, not precision SDSS LSF modelling.\n"
+            "  UVES-POP resolving power, wavelength medium, and any error "
+            "column should be verified from the product documentation before "
+            "precision work. No SDSS/UVES-POP spectra are bundled with this "
+            "example."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
-    parser.add_argument("spectrum", help="Reduced one-dimensional spectrum file.")
-    parser.add_argument("--instrument", required=True, help="Registered reader name.")
-    parser.add_argument(
+    input_group = parser.add_argument_group("minimal input")
+    reader_group = parser.add_argument_group("reader metadata and archive options")
+    fit_group = parser.add_argument_group("fit search controls")
+    mask_group = parser.add_argument_group("mask and residual diagnostics")
+    output_group = parser.add_argument_group("plots and outputs")
+
+    input_group.add_argument("spectrum", help="Reduced one-dimensional spectrum file.")
+    input_group.add_argument("--instrument", required=True, help="Registered reader name.")
+    reader_group.add_argument(
         "--sdss-mask-policy",
         choices=("auto", "ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
         default="auto",
@@ -104,7 +112,7 @@ def build_parser():
             "PHOENIX fitting example; other instruments ignore this option."
         ),
     )
-    parser.add_argument(
+    reader_group.add_argument(
         "--wave-medium",
         choices=("keep", "unknown", "air", "vacuum"),
         default="keep",
@@ -115,7 +123,7 @@ def build_parser():
             "The default 'keep' preserves reader metadata."
         ),
     )
-    parser.add_argument(
+    reader_group.add_argument(
         "--uves-err-column",
         type=int,
         default=None,
@@ -125,8 +133,8 @@ def build_parser():
             "the third numeric column is a 1-sigma error for your product."
         ),
     )
-    parser.add_argument("--phoenix-dir", default=None)
-    parser.add_argument(
+    fit_group.add_argument("--phoenix-dir", default=None)
+    fit_group.add_argument(
         "--auto-defaults",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -135,28 +143,28 @@ def build_parser():
             "Expert CLI values still override the suggestions."
         ),
     )
-    parser.add_argument(
+    fit_group.add_argument(
         "--defaults-mode",
         choices=("quicklook", "standard", "diagnostic"),
         default="quicklook",
         help="Search-budget mode used by --auto-defaults.",
     )
-    parser.add_argument("--teff", type=float, default=None)
-    parser.add_argument("--feh", type=float, default=None)
-    parser.add_argument("--logg", type=float, default=None)
-    parser.add_argument("--rv", type=float, default=None)
-    parser.add_argument("--teff-min", type=float, default=None)
-    parser.add_argument("--teff-max", type=float, default=None)
-    parser.add_argument("--feh-min", type=float, default=None)
-    parser.add_argument("--feh-max", type=float, default=None)
-    parser.add_argument("--logg-min", type=float, default=None)
-    parser.add_argument("--logg-max", type=float, default=None)
-    parser.add_argument("--rv-min", type=float, default=None)
-    parser.add_argument("--rv-max", type=float, default=None)
-    parser.add_argument("--wmin", type=float, default=None, help="Override fit-window minimum wavelength in Angstrom.")
-    parser.add_argument("--wmax", type=float, default=None, help="Override fit-window maximum wavelength in Angstrom.")
-    parser.add_argument("--R", type=float, default=None, dest="resolution_R")
-    parser.add_argument(
+    fit_group.add_argument("--teff", type=float, default=None)
+    fit_group.add_argument("--feh", type=float, default=None)
+    fit_group.add_argument("--logg", type=float, default=None)
+    fit_group.add_argument("--rv", type=float, default=None)
+    fit_group.add_argument("--teff-min", type=float, default=None)
+    fit_group.add_argument("--teff-max", type=float, default=None)
+    fit_group.add_argument("--feh-min", type=float, default=None)
+    fit_group.add_argument("--feh-max", type=float, default=None)
+    fit_group.add_argument("--logg-min", type=float, default=None)
+    fit_group.add_argument("--logg-max", type=float, default=None)
+    fit_group.add_argument("--rv-min", type=float, default=None)
+    fit_group.add_argument("--rv-max", type=float, default=None)
+    fit_group.add_argument("--wmin", type=float, default=None, help="Override fit-window minimum wavelength in Angstrom.")
+    fit_group.add_argument("--wmax", type=float, default=None, help="Override fit-window maximum wavelength in Angstrom.")
+    fit_group.add_argument("--R", type=float, default=None, dest="resolution_R")
+    mask_group.add_argument(
         "--show-dibs",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -166,7 +174,7 @@ def build_parser():
             "the spectrum."
         ),
     )
-    parser.add_argument(
+    mask_group.add_argument(
         "--mask-dibs",
         action="store_true",
         help=(
@@ -174,7 +182,7 @@ def build_parser():
             "to --nonstellar-feature-policy mask_known."
         ),
     )
-    parser.add_argument(
+    mask_group.add_argument(
         "--nonstellar-feature-policy",
         choices=("warn", "mask_known", "ignore"),
         default="warn",
@@ -186,13 +194,13 @@ def build_parser():
             "residual diagnostics are controlled separately."
         ),
     )
-    parser.add_argument(
+    mask_group.add_argument(
         "--dib-padding",
         type=float,
         default=0.0,
         help="Extra Angstrom half-width padding for DIB annotations/masks.",
     )
-    parser.add_argument(
+    mask_group.add_argument(
         "--archive-mask-policy",
         choices=("apply", "warn", "ignore"),
         default="apply",
@@ -204,7 +212,7 @@ def build_parser():
             "ignored archive mask advice."
         ),
     )
-    parser.add_argument(
+    mask_group.add_argument(
         "--known-residual-diagnostics",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -213,7 +221,7 @@ def build_parser():
             "and flag coherent residuals without automatically masking them."
         ),
     )
-    parser.add_argument(
+    mask_group.add_argument(
         "--known-residual-threshold",
         type=float,
         default=2.5,
@@ -222,9 +230,9 @@ def build_parser():
             "RMS residual exceeds this sigma threshold."
         ),
     )
-    parser.add_argument("--output-json", default=None)
-    parser.add_argument("--output-plot", default=None)
-    parser.add_argument(
+    output_group.add_argument("--output-json", default=None)
+    output_group.add_argument("--output-plot", default=None)
+    output_group.add_argument(
         "--plot-layout",
         choices=("stacked", "side_by_side"),
         default="stacked",
@@ -233,7 +241,7 @@ def build_parser():
             "wide data/model panel over a wide residual panel."
         ),
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--plot-xlim",
         choices=("fit", "all"),
         default="fit",
@@ -244,7 +252,7 @@ def build_parser():
             "pixels."
         ),
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--line-diagnostics",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -254,7 +262,7 @@ def build_parser():
             "--no-line-diagnostics to disable it."
         ),
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--line-groups",
         default="auto",
         help=(
@@ -262,7 +270,7 @@ def build_parser():
             "'auto'. Known groups include balmer, caii, nai, mgii, and hei."
         ),
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--hot-line-teff-threshold",
         type=float,
         default=10500.0,
@@ -271,13 +279,13 @@ def build_parser():
             "hot-star He I panels."
         ),
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--line-window-half-width",
         type=float,
         default=30.0,
         help="Half-width in Angstrom for each zoomed diagnostic line panel.",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--output-line-plot",
         default=None,
         help=(
@@ -285,7 +293,7 @@ def build_parser():
             "and --output-plot is supplied, a *_lines companion path is used."
         ),
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--no-show",
         action="store_true",
         help="Do not open the interactive fit figure (useful for batch runs).",

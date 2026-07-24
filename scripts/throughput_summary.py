@@ -150,7 +150,8 @@ def build_parser():
         description=(
             "Read a Spyctres batch JSON checkpoint and summarize quickscan/"
             "refine timing. This does not run fits."
-        )
+        ),
+        allow_abbrev=False,
     )
     parser.add_argument("json_files", nargs="+", help="Batch JSON checkpoint(s).")
     parser.add_argument(

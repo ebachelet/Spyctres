@@ -69,6 +69,7 @@ def build_parser():
             "--output /tmp/xsl_validation_results.json"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument("manifest", help="CSV containing path and reference parameters.")
     parser.add_argument("--phoenix-dir", default=None)

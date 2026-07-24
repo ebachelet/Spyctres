@@ -63,6 +63,7 @@ def build_parser():
             "--output-dir /tmp/xsl_plots --output-pdf /tmp/xsl_plots.pdf"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument("results_json", help="JSON output from scripts/xsl_validation.py.")
     parser.add_argument(
