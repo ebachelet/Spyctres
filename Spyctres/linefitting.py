@@ -10,6 +10,38 @@ from .io import SpectrumSegment
 from .waveutils import C_KMS, convert_wavelength_medium
 
 
+_LINE_ALIASES = {
+    "halpha": ("Halpha", 6562.80, "air", 22.0),
+    "h_alpha": ("Halpha", 6562.80, "air", 22.0),
+    "hα": ("Halpha", 6562.80, "air", 22.0),
+    "hbeta": ("Hbeta", 4861.33, "air", 18.0),
+    "h_beta": ("Hbeta", 4861.33, "air", 18.0),
+    "hβ": ("Hbeta", 4861.33, "air", 18.0),
+    "hgamma": ("Hgamma", 4340.47, "air", 16.0),
+    "h_gamma": ("Hgamma", 4340.47, "air", 16.0),
+    "hγ": ("Hgamma", 4340.47, "air", 16.0),
+    "hdelta": ("Hdelta", 4101.74, "air", 14.0),
+    "h_delta": ("Hdelta", 4101.74, "air", 14.0),
+    "hδ": ("Hdelta", 4101.74, "air", 14.0),
+    "caiik": ("Ca II K", 3933.66, "air", 8.0),
+    "ca_ii_k": ("Ca II K", 3933.66, "air", 8.0),
+    "ca ii k": ("Ca II K", 3933.66, "air", 8.0),
+    "caiih": ("Ca II H", 3968.47, "air", 8.0),
+    "ca_ii_h": ("Ca II H", 3968.47, "air", 8.0),
+    "ca ii h": ("Ca II H", 3968.47, "air", 8.0),
+    "hei4471": ("He I 4471", 4471.48, "air", 8.0),
+    "he_i_4471": ("He I 4471", 4471.48, "air", 8.0),
+    "he i 4471": ("He I 4471", 4471.48, "air", 8.0),
+    "mgii4481": ("Mg II 4481", 4481.13, "air", 8.0),
+    "mg_ii_4481": ("Mg II 4481", 4481.13, "air", 8.0),
+    "mg ii 4481": ("Mg II 4481", 4481.13, "air", 8.0),
+}
+
+
+def _normalize_line_alias(value):
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
 @dataclass(frozen=True)
 class LineSpec:
     name: str
@@ -107,13 +139,181 @@ def _parabolic_seed(wave, flux, kind):
     return float(x[1] + offset)
 
 
-def fit_line(segment, line, config=None):
-    """Fit a Gaussian local line plus multiplicative Legendre continuum."""
-    if not isinstance(segment, SpectrumSegment):
-        raise TypeError("segment must be a SpectrumSegment.")
-    if not isinstance(line, LineSpec):
-        line = LineSpec(**line) if isinstance(line, dict) else LineSpec(*line)
+def known_line_spec(name, **overrides):
+    """Return a :class:`LineSpec` for a small built-in line alias.
+
+    The alias catalog is intentionally modest and aimed at beginner diagnostics:
+    Balmer Hα/Hβ/Hγ/Hδ, Ca II H/K, He I 4471, and Mg II 4481.  Expert users can
+    pass a full :class:`LineSpec` or ``center=...`` to :func:`fit_line`.
+    """
+    key = _normalize_line_alias(name)
+    if key not in _LINE_ALIASES:
+        known = ", ".join(sorted(_LINE_ALIASES))
+        raise ValueError(
+            "Unknown line name {0!r}. Pass center=... for a custom line or use "
+            "one of: {1}.".format(name, known)
+        )
+    label, rest_wave, medium, window_A = _LINE_ALIASES[key]
+    values = {
+        "name": label,
+        "rest_wave": float(rest_wave),
+        "kind": "absorption",
+        "window_A": float(window_A),
+        "wave_medium": medium,
+    }
+    values.update({key: value for key, value in overrides.items() if value is not None})
+    return LineSpec(**values)
+
+
+def _line_spec_from_input(
+    line=None,
+    *,
+    center=None,
+    rest_wave=None,
+    name=None,
+    kind=None,
+    window_A=None,
+    wave_medium=None,
+):
+    if isinstance(line, LineSpec):
+        spec = line
+        updates = {}
+        if kind is not None:
+            updates["kind"] = str(kind)
+        if window_A is not None:
+            updates["window_A"] = float(window_A)
+        if wave_medium is not None:
+            updates["wave_medium"] = str(wave_medium)
+        if updates:
+            spec = replace(spec, **updates)
+    elif isinstance(line, str):
+        spec = known_line_spec(
+            line,
+            kind=kind,
+            window_A=window_A,
+            wave_medium=wave_medium,
+        )
+    elif isinstance(line, dict):
+        values = dict(line)
+        if kind is not None:
+            values["kind"] = kind
+        if window_A is not None:
+            values["window_A"] = window_A
+        if wave_medium is not None:
+            values["wave_medium"] = wave_medium
+        spec = LineSpec(**values)
+    elif line is None:
+        custom_center = center if center is not None else rest_wave
+        if custom_center is None:
+            raise ValueError(
+                "fit_line requires a LineSpec, a known line name such as "
+                "'Hgamma', or center=... for a custom wavelength."
+            )
+        spec = LineSpec(
+            name=str(name or "{0:.3f} A".format(float(custom_center))),
+            rest_wave=float(custom_center),
+            kind="absorption" if kind is None else str(kind),
+            window_A=10.0 if window_A is None else float(window_A),
+            wave_medium="unknown" if wave_medium is None else str(wave_medium),
+        )
+    elif np.isscalar(line):
+        spec = LineSpec(
+            name=str(name or "{0:.3f} A".format(float(line))),
+            rest_wave=float(line),
+            kind="absorption" if kind is None else str(kind),
+            window_A=10.0 if window_A is None else float(window_A),
+            wave_medium="unknown" if wave_medium is None else str(wave_medium),
+        )
+    else:
+        spec = LineSpec(*line)
+        updates = {}
+        if kind is not None:
+            updates["kind"] = str(kind)
+        if window_A is not None:
+            updates["window_A"] = float(window_A)
+        if wave_medium is not None:
+            updates["wave_medium"] = str(wave_medium)
+        if updates:
+            spec = replace(spec, **updates)
+    return spec
+
+
+def _line_center_for_segment(line, segment, config):
+    segment_medium = str(segment.wave_medium).lower()
+    rest_wave_data = float(line.rest_wave)
+    if (
+        line.wave_medium in {"air", "vacuum"}
+        and segment_medium in {"air", "vacuum"}
+        and line.wave_medium != segment_medium
+    ):
+        rest_wave_data = float(
+            convert_wavelength_medium(
+                [rest_wave_data],
+                from_medium=line.wave_medium,
+                to_medium=segment_medium,
+            )[0]
+        )
+    return rest_wave_data * (1.0 + float(config.rv_guess_kms) / C_KMS)
+
+
+def _choose_line_segment(spectrum, line, config):
+    if isinstance(spectrum, SpectrumSegment):
+        return spectrum
+    if hasattr(spectrum, "segments"):
+        segments = list(spectrum.segments)
+    elif isinstance(spectrum, (list, tuple)) and spectrum and hasattr(spectrum[0], "wave"):
+        segments = list(spectrum)
+    else:
+        raise TypeError("segment must be a SpectrumSegment or SpectrumCollection.")
+    for segment in segments:
+        wave = np.asarray(segment.wave, dtype=float)
+        good = np.isfinite(wave)
+        if not np.any(good):
+            continue
+        expected = _line_center_for_segment(line, segment, config)
+        margin = float(line.window_A)
+        if np.nanmin(wave[good]) - margin <= expected <= np.nanmax(wave[good]) + margin:
+            return segment
+    raise ValueError(
+        "No spectrum segment covers line {0!r} near {1:.3f} A.".format(
+            line.name,
+            float(line.rest_wave),
+        )
+    )
+
+
+def fit_line(
+    segment,
+    line=None,
+    config=None,
+    *,
+    center=None,
+    rest_wave=None,
+    name=None,
+    kind=None,
+    window_A=None,
+    wave_medium=None,
+):
+    """Fit a Gaussian local line plus multiplicative Legendre continuum.
+
+    Beginner calls may use a built-in line name or a custom wavelength:
+
+    ``fit_line(spec, "Hgamma")`` or ``fit_line(spec, center=4340.47)``.
+
+    Expert calls using :class:`LineSpec`, dictionaries, or tuple-style line
+    specifications remain supported.
+    """
     config = LineFitConfig() if config is None else config
+    line = _line_spec_from_input(
+        line,
+        center=center,
+        rest_wave=rest_wave,
+        name=name,
+        kind=kind,
+        window_A=window_A,
+        wave_medium=wave_medium,
+    )
+    segment = _choose_line_segment(segment, line, config)
 
     segment_medium = str(segment.wave_medium).lower()
     rest_wave_data = float(line.rest_wave)
@@ -268,7 +468,7 @@ def fit_line(segment, line, config=None):
 
 def fit_lines(segment, lines, config=None):
     """Fit multiple lines and flag independently fitted close neighbours."""
-    specs = [item if isinstance(item, LineSpec) else LineSpec(**item) for item in lines]
+    specs = [_line_spec_from_input(item) for item in lines]
     results = [fit_line(segment, item, config=config) for item in specs]
     for i, spec in enumerate(specs):
         close = any(

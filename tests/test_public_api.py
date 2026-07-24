@@ -8,6 +8,7 @@ from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
     PhoenixFitDiagnostics,
     PhoenixFitResult,
+    compare_fits,
     compare_fit_results,
     describe_quality_flags,
     format_fit_quality_report,
@@ -245,6 +246,29 @@ def test_compare_fit_results_is_top_level_public_api():
     assert out["quality_flags"]["only_comparison"] == ["high_chi2"]
 
 
+def test_compare_fits_facade_compares_multiple_results():
+    baseline = {"teff": 6000.0, "chi2_red": 2.0, "quality_flags": ["ok"]}
+    masked = {"teff": 6100.0, "chi2_red": 1.5, "quality_flags": ["ok"]}
+    refined = {"teff": 6200.0, "chi2_red": 1.2, "quality_flags": ["high_chi2"]}
+
+    direct = compare_fits(baseline, masked, labels=("baseline", "masked"))
+    bundle = compare_fits(
+        baseline,
+        masked,
+        refined,
+        labels=("baseline", "masked", "refined"),
+    )
+
+    assert direct["labels"] == ["baseline", "masked"]
+    assert bundle["operation"] == "compare_fits"
+    assert bundle["baseline_label"] == "baseline"
+    assert len(bundle["comparisons"]) == 2
+    assert (
+        bundle["comparisons"][1]["comparison"]["parameters"]["teff"]["delta"]
+        == 200.0
+    )
+
+
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
     descriptions = describe_quality_flags(
         [
@@ -289,6 +313,38 @@ def test_exclusion_mask_helper_is_top_level_public_api():
     assert spec.name == "demo"
 
 
+def test_build_mask_facade_is_top_level_and_iterable():
+    import Spyctres
+
+    segment = SpectrumSegment(
+        np.linspace(4400.0, 4450.0, 100),
+        np.ones(100),
+        meta={
+            "archive_mask_catalog": [
+                {
+                    "id": "demo_bad",
+                    "name": "demo bad region",
+                    "region_A": [4410.0, 4415.0],
+                }
+            ]
+        },
+    )
+
+    bundle = Spyctres.build_mask(
+        segment,
+        archive=True,
+        tellurics="warn",
+        dibs=True,
+    )
+
+    assert isinstance(bundle, Spyctres.MaskBundle)
+    assert len(bundle) >= 2
+    assert any(mask.name == "archive:demo_bad" for mask in bundle)
+    assert any(mask.name == "nonstellar:dib_4428" for mask in bundle)
+    assert bundle.warning_regions
+    assert bundle.to_metadata()["n_exclusion_masks"] == len(bundle)
+
+
 def test_nonstellar_feature_helpers_are_top_level_public_api():
     import Spyctres
 
@@ -313,6 +369,9 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
     assert callable(Spyctres.combine_exclusion_masks)
     assert callable(Spyctres.dilate_boolean_mask)
     assert callable(Spyctres.telluric_transmission_exclusion_mask)
+    assert callable(Spyctres.plot_spectrum)
+    assert callable(Spyctres.plot_diagnostic_windows)
+    assert callable(Spyctres.compare_fits)
     assert Spyctres.KNOWN_RESIDUAL_WINDOWS[0]["linked_feature"] == "dib_4882"
 
 
@@ -504,11 +563,16 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
 
     monkeypatch.setattr("Spyctres.api.read_spectrum", fake_read)
     monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+    user_mask = [lambda wave: np.zeros_like(wave, dtype=bool)]
 
     result = fit_stellar_spectrum(
         "example.fits",
         instrument="xshooter",
         phoenix_lib=object(),
+        mode="standard",
+        mask=user_mask,
+        resolution_R=6200.0,
+        continuum_degree=3,
         reader_kwargs={"product_profile": "demo"},
         regions=[(4000.0, 5000.0)],
         rv_grid_n=11,
@@ -519,11 +583,15 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
     assert captured["fit_spectrum"] is segment
     assert captured["fit_kwargs"]["regions"] == [(4000.0, 5000.0)]
     assert captured["fit_kwargs"]["rv_grid_n"] == 11
+    assert captured["fit_kwargs"]["exclude_masks"] is user_mask
+    assert captured["fit_kwargs"]["R"] == 6200.0
+    assert captured["fit_kwargs"]["mdeg"] == 3
     assert captured["fit_kwargs"]["forward_model"] == "native_interp"
     assert "fit_default_suggestion" in result.summary
     assert result.provenance["workflow_api"] == "fit_stellar_spectrum"
     assert result.provenance["input_was_path"] is True
     assert result.provenance["instrument"] == "xshooter"
+    assert result.provenance["defaults_mode"] == "standard"
 
 
 def test_classify_spectrum_alias_and_manual_defaults(monkeypatch):

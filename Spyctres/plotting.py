@@ -607,6 +607,266 @@ def plot_spectrum_audit(
     return fig, axes
 
 
+def plot_spectrum(
+    spectrum,
+    *,
+    show_masks=False,
+    show_error=False,
+    mask=None,
+    diagnostic_selection=None,
+    show_diagnostic_windows=False,
+    show_tellurics=False,
+    show_nonstellar=False,
+    use_mask=True,
+    ax=None,
+    title=None,
+    max_plot_points=8000,
+    figsize=(12.0, 4.5),
+):
+    """Plot a reduced spectrum with beginner-friendly optional overlays.
+
+    ``plot_spectrum(spec)`` is the one-panel first-look plot intended for
+    notebooks.  Set ``show_masks=True`` to switch to the existing three-panel
+    audit view, where mask polarity and diagnostic overlays are clearer.
+    """
+    warning_regions = _plot_warning_regions(
+        mask=mask,
+        show_tellurics=show_tellurics,
+        show_nonstellar=show_nonstellar,
+    )
+    if show_masks:
+        return plot_spectrum_audit(
+            spectrum,
+            title=title,
+            diagnostic_selection=(
+                diagnostic_selection if show_diagnostic_windows else None
+            ),
+            warning_regions=warning_regions,
+            max_plot_points=max_plot_points,
+            figsize=(max(figsize[0], 12.0), 9.0),
+        )
+
+    segments = _plot_audit_segments(spectrum)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["tab:blue"])
+    plotted_values = []
+    plotted_wave_ranges = []
+    mask_label_used = False
+    window_label_used = False
+    warning_label_used = False
+    for segment_index, segment in enumerate(segments):
+        if not hasattr(segment, "wave") or not hasattr(segment, "flux"):
+            raise TypeError("plot_spectrum requires spectrum-like objects.")
+        color = colors[segment_index % len(colors)]
+        wave = _as_float_array(segment.wave)
+        flux = _as_float_array(segment.flux)
+        segment_mask = getattr(segment, "mask", None)
+        if segment_mask is None:
+            segment_mask = np.ones(wave.shape, dtype=bool)
+        segment_mask = _as_bool_array(segment_mask, n_expected=wave.size)
+        good = np.isfinite(wave) & np.isfinite(flux)
+        if use_mask:
+            good &= segment_mask
+        order = np.argsort(wave[good]) if np.any(good) else np.array([], dtype=int)
+        wave_plot = wave[good][order]
+        flux_plot = flux[good][order]
+        idx = _plot_downsample_indices(wave_plot.size, max_plot_points)
+        label = getattr(segment, "name", None) or "segment {0}".format(
+            segment_index + 1
+        )
+        if idx.size:
+            ax.plot(
+                wave_plot[idx],
+                flux_plot[idx],
+                lw=0.8,
+                color=color,
+                label=str(label),
+            )
+            plotted_values.append(flux_plot[idx])
+            plotted_wave_ranges.append(
+                (float(np.nanmin(wave_plot[idx])), float(np.nanmax(wave_plot[idx])))
+            )
+        if show_error and getattr(segment, "err", None) is not None and idx.size:
+            err = _as_float_array(segment.err)
+            err_plot = err[good][order]
+            ax.plot(
+                wave_plot[idx],
+                err_plot[idx],
+                lw=0.6,
+                color=color,
+                alpha=0.45,
+                ls=":",
+            )
+
+        for wmin, wmax in _plot_mask_spans(mask, wave, segment_index):
+            ax.axvspan(
+                wmin,
+                wmax,
+                color="tab:red",
+                alpha=0.10,
+                lw=0,
+                label="explicit exclusion mask" if not mask_label_used else None,
+            )
+            mask_label_used = True
+
+        if show_diagnostic_windows or diagnostic_selection is not None:
+            for window in _diagnostic_window_regions_for_segment(
+                diagnostic_selection,
+                segment_index,
+            ):
+                wmin, wmax = window["region_A"]
+                ax.axvspan(
+                    wmin,
+                    wmax,
+                    color="tab:green",
+                    alpha=0.08,
+                    lw=0,
+                    label=(
+                        "suggested diagnostic window"
+                        if not window_label_used
+                        else None
+                    ),
+                )
+                window_label_used = True
+
+    data_wmin = min((item[0] for item in plotted_wave_ranges), default=None)
+    data_wmax = max((item[1] for item in plotted_wave_ranges), default=None)
+    for region in warning_regions:
+        values = region.get("region_A") or region.get("region")
+        if not values or len(values) != 2:
+            continue
+        wmin, wmax = float(values[0]), float(values[1])
+        if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+            continue
+        if data_wmin is not None and (wmax < data_wmin or wmin > data_wmax):
+            continue
+        ax.axvspan(
+            wmin,
+            wmax,
+            color="tab:orange",
+            alpha=0.09,
+            lw=0,
+            label="warning region" if not warning_label_used else None,
+        )
+        warning_label_used = True
+
+    if plotted_values:
+        ax.set_ylim(*_compute_robust_ylim(np.concatenate(plotted_values), 0.5, 99.5))
+    ax.set_xlabel("Wavelength [Å]")
+    ax.set_ylabel("Flux")
+    if title is not None:
+        ax.set_title(title)
+    ax.grid(alpha=0.18)
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(frameon=False, loc="best", fontsize=8)
+    return fig, ax
+
+
+def plot_diagnostic_windows(
+    spectrum,
+    selection=None,
+    *,
+    title="Suggested diagnostic windows",
+    **kwargs,
+):
+    """Plot a spectrum with Spyctres diagnostic-window overlays.
+
+    If ``selection`` is omitted, the function calls
+    :func:`Spyctres.diagnostic_windows.select_diagnostic_windows` using default
+    advisory settings.  The plotted windows are suggestions only; they are not
+    masks and they do not prove spectral type.
+    """
+    if selection is None:
+        from .diagnostic_windows import select_diagnostic_windows
+
+        selection = select_diagnostic_windows(spectrum)
+    return plot_spectrum(
+        spectrum,
+        diagnostic_selection=selection,
+        show_diagnostic_windows=True,
+        title=title,
+        **kwargs,
+    )
+
+
+def _plot_warning_regions(*, mask=None, show_tellurics=False, show_nonstellar=False):
+    regions = []
+    if hasattr(mask, "warning_regions"):
+        regions.extend(list(mask.warning_regions))
+    if show_tellurics:
+        from .preprocessing import (
+            OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
+            nonstellar_feature_metadata,
+        )
+
+        regions.extend(
+            nonstellar_feature_metadata(OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES)
+        )
+    if show_nonstellar:
+        from .preprocessing import (
+            OPTICAL_DIB_DIAGNOSTIC_FEATURES,
+            nonstellar_feature_metadata,
+        )
+
+        regions.extend(nonstellar_feature_metadata(OPTICAL_DIB_DIAGNOSTIC_FEATURES))
+    return regions
+
+
+def _plot_mask_spans(mask, wave, segment_index):
+    if mask is None:
+        return []
+    if hasattr(mask, "exclude_masks"):
+        specs = list(mask.exclude_masks)
+    elif callable(mask) or isinstance(mask, dict) or _is_named_plot_mask(mask):
+        specs = [mask]
+    else:
+        arr = np.asarray(mask)
+        if arr.shape == wave.shape:
+            return _mask_to_spans(wave, arr.astype(bool))
+        specs = list(mask)
+
+    spans = []
+    for spec in specs:
+        fn = _plot_mask_callable(spec)
+        raw = np.asarray(fn(wave))
+        if raw.shape != wave.shape:
+            raise ValueError(
+                "Plot mask for segment {0} returned the wrong shape.".format(
+                    segment_index
+                )
+            )
+        if raw.dtype == bool:
+            reject = raw
+        else:
+            reject = raw > 0.5
+        spans.extend(_mask_to_spans(wave, reject))
+    return spans
+
+
+def _is_named_plot_mask(mask):
+    return isinstance(mask, tuple) and len(mask) == 2 and isinstance(mask[0], str)
+
+
+def _plot_mask_callable(mask):
+    if hasattr(mask, "callable"):
+        return mask.callable
+    if isinstance(mask, dict):
+        if "callable" in mask:
+            return mask["callable"]
+        if "func" in mask:
+            return mask["func"]
+    if _is_named_plot_mask(mask):
+        return mask[1]
+    if callable(mask):
+        return mask
+    raise TypeError("Mask overlays must be callables, named mask specs, or arrays.")
+
+
 def _resolve_line_group(group):
     """
     Resolve a line-group specification into a list of (label, wavelength_A).

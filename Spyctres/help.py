@@ -82,7 +82,7 @@ PUBLIC_FUNCTION_HELP = {
             {
                 "name": "defaults_mode",
                 "default": "quicklook",
-                "description": "Search-budget mode: quicklook, standard, or diagnostic.",
+                "description": "Search-budget mode: quicklook, standard, or diagnostic. The alias mode=... is also accepted.",
             },
             {
                 "name": "reader_kwargs",
@@ -105,19 +105,19 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "List of wavelength windows to fit, e.g. [(3800, 5200)].",
             },
             {
-                "name": "exclude_masks / exclude_regions",
+                "name": "mask / exclude_masks / exclude_regions",
                 "default": "None",
-                "description": "Explicit masks or wavelength ranges to exclude from the fit.",
+                "description": "Explicit masks or wavelength ranges to exclude from the fit; mask=... is the beginner-facing alias for exclude_masks.",
             },
             {
-                "name": "R or fwhm_kms",
+                "name": "resolution_R / R or fwhm_kms",
                 "default": "metadata/None",
-                "description": "Constant Gaussian instrumental broadening assumption.",
+                "description": "Constant Gaussian instrumental broadening assumption; resolution_R=... is the beginner-facing alias for R.",
             },
             {
-                "name": "p0, bounds, rv_grid_n, multistart, mdeg, max_nfev",
+                "name": "continuum_degree / p0, bounds, rv_grid_n, multistart, mdeg, max_nfev",
                 "default": "auto/default",
-                "description": "Expert controls for initialization, search bounds, continuum degree, and optimizer budget.",
+                "description": "Expert controls for initialization, search bounds, continuum degree, and optimizer budget; continuum_degree=... aliases mdeg.",
             },
         ],
         "advice": (
@@ -146,6 +146,116 @@ PUBLIC_FUNCTION_HELP = {
             },
         ],
         "advice": "Use describe_public_function('fit_stellar_spectrum') for the full option list.",
+    },
+    "plot_spectrum": {
+        "name": "plot_spectrum",
+        "purpose": "Make a quick first-look plot of a loaded spectrum.",
+        "minimal_call": "plot_spectrum(spec)",
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "SpectrumSegment, SpectrumCollection, or compatible spectrum.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "show_masks",
+                "default": "False",
+                "description": "Switch to the three-panel audit plot showing raw flux, normalized flux, and mask status.",
+            },
+            {
+                "name": "mask",
+                "default": "None",
+                "description": "Optional MaskBundle or exclusion-mask callable to overlay explicitly rejected regions.",
+            },
+            {
+                "name": "show_tellurics / show_nonstellar",
+                "default": "False",
+                "description": "Overlay broad warning regions for telluric or non-stellar features.",
+            },
+        ],
+        "advice": "Call plot_spectrum(spec) immediately after read_spectrum(); use plot_fit_referee(result) after fitting.",
+    },
+    "plot_diagnostic_windows": {
+        "name": "plot_diagnostic_windows",
+        "purpose": "Plot advisory diagnostic-window coverage on a spectrum.",
+        "minimal_call": "plot_diagnostic_windows(spec)",
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "Loaded spectrum whose wavelength coverage should be inspected.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "selection",
+                "default": "auto",
+                "description": "Precomputed select_diagnostic_windows() output.",
+            },
+            {
+                "name": "plot_spectrum options",
+                "default": "varies",
+                "description": "Options such as mask, show_tellurics, show_nonstellar, title, and max_plot_points.",
+            },
+        ],
+        "advice": "Diagnostic windows are suggestions for inspection and controlled fits; they are not spectral-type labels.",
+    },
+    "build_mask": {
+        "name": "build_mask",
+        "purpose": "Create an explicit bundle of named masks and warning regions.",
+        "minimal_call": 'build_mask(spec, archive=True, tellurics="warn")',
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "Optional but recommended; reader metadata can provide archive/product bad-region catalogs.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "archive",
+                "default": "False",
+                "description": "True/'mask' applies archive masks; 'warn' records archive warning regions only.",
+            },
+            {
+                "name": "tellurics",
+                "default": "warn",
+                "description": "Use 'warn', 'mask' for the transmission model, 'fallback' for broad catalog masks, or 'none'.",
+            },
+            {
+                "name": "dibs / names",
+                "default": "False / None",
+                "description": "Explicit known non-stellar feature masks, such as DIB regions.",
+            },
+        ],
+        "advice": "Warning regions are not applied. Pass the returned bundle explicitly as exclude_masks=mask.",
+    },
+    "fit_line": {
+        "name": "fit_line",
+        "purpose": "Fit one local spectral line as a fast diagnostic.",
+        "minimal_call": 'fit_line(spec, "Hgamma")',
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "SpectrumSegment or SpectrumCollection containing the line.",
+            },
+            {
+                "name": "line or center",
+                "description": "Known line name such as Hgamma, or center=4340.47 for a custom wavelength.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "config",
+                "default": "LineFitConfig()",
+                "description": "Expert local-continuum/retry/bounds settings.",
+            },
+            {
+                "name": "kind, window_A, wave_medium",
+                "default": "line default",
+                "description": "Override the line type, fitting half-window, or line wavelength medium.",
+            },
+        ],
+        "advice": "Use fit_line for local diagnostics and seeding; use fit_stellar_spectrum for atmospheric parameters.",
     },
     "fit_phoenix_spectrum": {
         "name": "fit_phoenix_spectrum",

@@ -15,6 +15,9 @@ def test_public_function_help_is_structured_and_formatted():
     topics = list_public_functions()
 
     assert "fit_stellar_spectrum" in topics
+    assert "fit_line" in topics
+    assert "build_mask" in topics
+    assert "plot_spectrum" in topics
     assert "read_spectrum" in topics
 
     record = describe_public_function("fit_stellar_spectrum")
@@ -26,6 +29,9 @@ def test_public_function_help_is_structured_and_formatted():
     assert "Minimal call:" in text
     assert "Optional extras:" in text
     assert "list_instruments()" in text
+
+    line_text = format_public_function_help("fit_line")
+    assert 'fit_line(spec, "Hgamma")' in line_text
 
 
 def test_unknown_public_function_help_lists_known_topics():

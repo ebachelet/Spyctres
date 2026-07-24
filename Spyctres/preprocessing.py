@@ -563,6 +563,52 @@ class ExclusionMaskSpec:
         return self.callable(wave)
 
 
+@dataclass(frozen=True)
+class MaskBundle:
+    """Beginner-facing bundle of explicit exclusion masks and warnings.
+
+    ``MaskBundle`` is intentionally lightweight: iterating over it yields the
+    contained :class:`ExclusionMaskSpec` objects, so existing fitting calls can
+    use ``exclude_masks=sp.build_mask(...)`` without a special adapter.  Warning
+    regions are kept separately for plotting/provenance and are not silently
+    applied.
+    """
+
+    exclude_masks: tuple = ()
+    warning_regions: tuple = ()
+    metadata: dict | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "exclude_masks", tuple(self.exclude_masks or ()))
+        object.__setattr__(self, "warning_regions", tuple(self.warning_regions or ()))
+        object.__setattr__(
+            self,
+            "metadata",
+            {} if self.metadata is None else dict(self.metadata),
+        )
+
+    def __iter__(self):
+        return iter(self.exclude_masks)
+
+    def __len__(self):
+        return len(self.exclude_masks)
+
+    def __getitem__(self, index):
+        return self.exclude_masks[index]
+
+    def to_metadata(self):
+        return _json_safe(
+            {
+                "n_exclusion_masks": len(self.exclude_masks),
+                "exclude_mask_names": [
+                    getattr(mask, "name", str(mask)) for mask in self.exclude_masks
+                ],
+                "warning_regions": list(self.warning_regions),
+                "metadata": self.metadata,
+            }
+        )
+
+
 def exclusion_mask(name, fn, metadata=None):
     """Return a named exclusion-mask specification.
 
@@ -756,6 +802,188 @@ def nonstellar_feature_masks(names=("dib_4428",), padding_A=0.0):
 def known_feature_masks(names=("dib_4428",), padding_A=0.0):
     """Alias for non-stellar feature masks using public diagnostic terminology."""
     return nonstellar_feature_masks(names=names, padding_A=padding_A)
+
+
+def build_mask(
+    spectrum=None,
+    *,
+    archive=False,
+    tellurics="warn",
+    nonstellar=False,
+    dibs=False,
+    names=None,
+    padding_A=0.0,
+    telluric_threshold=0.95,
+    archive_only_ids=None,
+):
+    """Build an explicit beginner-friendly mask bundle.
+
+    This is a convenience facade over the named-mask helpers.  It does not
+    mutate the spectrum and it does not apply warning regions as masks.  Pass
+    the returned bundle explicitly to fitters as ``exclude_masks=mask`` or use
+    it in plotting helpers for overlays.
+
+    Parameters
+    ----------
+    spectrum : SpectrumSegment or SpectrumCollection, optional
+        Spectrum whose reader metadata may define archive/product bad regions.
+    archive : bool or {"warn", "mask"} or str, optional
+        If True or ``"mask"``, include archive/product masks from the loaded
+        spectrum metadata.  ``"warn"`` records those regions for plotting only.
+        Any other string is interpreted as an archive profile name such as
+        ``"uves_pop"``.
+    tellurics : {False, "none", "warn", "mask", "fallback"}, optional
+        ``"warn"`` records broad telluric catalog regions only. ``"mask"``
+        uses the preferred high-resolution transmission-threshold helper.
+        ``"fallback"`` uses the broad catalog as an explicit quicklook/product
+        fallback mask.
+    nonstellar, dibs, names : optional
+        Explicit known non-stellar feature masks.  ``dibs=True`` masks the
+        curated optical DIB diagnostic features.  ``names`` accepts one feature
+        id or a sequence of ids.
+
+    Returns
+    -------
+    MaskBundle
+        Iterable bundle of :class:`ExclusionMaskSpec` objects plus warning
+        regions and provenance metadata.
+    """
+    masks = []
+    warning_regions = []
+    components = []
+
+    def append_mask(mask):
+        existing = {item.name for item in masks}
+        if mask.name not in existing:
+            masks.append(mask)
+
+    def append_warning_regions(regions, *, source):
+        for item in regions or ():
+            if not isinstance(item, dict):
+                continue
+            region = item.get("region_A") or item.get("region")
+            if not region or len(region) != 2:
+                continue
+            record = dict(item)
+            record["source"] = record.get("source", source)
+            record["action"] = record.get("action", "warn_only")
+            warning_regions.append(record)
+
+    segments = [] if spectrum is None else _audit_segments(spectrum)
+
+    archive_policy = archive
+    if isinstance(archive_policy, str):
+        archive_key = archive_policy.strip().lower().replace("-", "_")
+    else:
+        archive_key = archive_policy
+    if archive_key not in {False, None, "none", "ignore"}:
+        archive_action = "mask"
+        archive_profile = None
+        if archive_key == "warn":
+            archive_action = "warn"
+        elif archive_key in {True, "true", "mask", "apply"}:
+            archive_action = "mask"
+        elif isinstance(archive_policy, str):
+            archive_profile = archive_policy
+
+        archive_regions = []
+        if segments:
+            for segment in segments:
+                meta = getattr(segment, "meta", {}) or {}
+                catalog = meta.get("archive_mask_catalog")
+                if catalog is not None:
+                    archive_regions.extend(catalog)
+                profile = (
+                    archive_profile
+                    or meta.get("archive_product_profile")
+                    or meta.get("product_profile")
+                )
+                if catalog is None and profile:
+                    archive_regions.extend(archive_mask_catalog(profile))
+                if archive_action == "mask":
+                    for mask in archive_exclusion_masks_for_segment(
+                        segment,
+                        only_ids=archive_only_ids,
+                    ):
+                        append_mask(mask)
+        elif archive_profile is not None:
+            archive_regions.extend(archive_mask_catalog(archive_profile))
+            if archive_action == "mask":
+                for mask in archive_exclusion_masks(
+                    archive_profile,
+                    only_ids=archive_only_ids,
+                ):
+                    append_mask(mask)
+        elif archive_action == "mask":
+            raise ValueError(
+                "archive=True requires a spectrum with archive metadata, or "
+                "pass archive='uves_pop' for a known profile."
+            )
+        append_warning_regions(archive_regions, source="archive_product_catalog")
+        components.append({"component": "archive", "action": archive_action})
+
+    if tellurics is True:
+        telluric_policy = "mask"
+    elif tellurics is False or tellurics is None:
+        telluric_policy = "none"
+    else:
+        telluric_policy = str(tellurics).strip().lower()
+    if telluric_policy not in {"none", "ignore", "warn", "mask", "fallback"}:
+        raise ValueError("tellurics must be one of none, warn, mask, or fallback.")
+    if telluric_policy == "warn":
+        append_warning_regions(
+            nonstellar_feature_metadata(OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES),
+            source="broad_telluric_catalog_warning",
+        )
+    elif telluric_policy == "mask":
+        append_mask(telluric_transmission_exclusion_mask(threshold=telluric_threshold))
+    elif telluric_policy == "fallback":
+        append_mask(broad_telluric_catalog_fallback_mask())
+    if telluric_policy not in {"none", "ignore"}:
+        components.append({"component": "tellurics", "action": telluric_policy})
+
+    feature_names = []
+    if dibs is True:
+        feature_names.extend(OPTICAL_DIB_DIAGNOSTIC_FEATURES)
+    if nonstellar is True:
+        feature_names.extend(OPTICAL_DIB_DIAGNOSTIC_FEATURES)
+    elif isinstance(nonstellar, str):
+        feature_names.append(nonstellar)
+    elif nonstellar:
+        feature_names.extend(list(nonstellar))
+    if names is not None:
+        if isinstance(names, str):
+            feature_names.append(names)
+        else:
+            feature_names.extend(list(names))
+    if feature_names:
+        for mask in nonstellar_feature_masks(
+            tuple(dict.fromkeys(str(name).strip().lower() for name in feature_names)),
+            padding_A=padding_A,
+        ):
+            append_mask(mask)
+        components.append(
+            {
+                "component": "nonstellar_features",
+                "action": "mask",
+                "feature_ids": list(
+                    dict.fromkeys(str(name).strip().lower() for name in feature_names)
+                ),
+            }
+        )
+
+    return MaskBundle(
+        exclude_masks=tuple(masks),
+        warning_regions=tuple(_json_safe(item) for item in warning_regions),
+        metadata={
+            "operation": "build_mask",
+            "mask_true_means": "reject_for_exclusion_masks",
+            "warning_regions_are_not_applied": True,
+            "components": components,
+            "n_exclusion_masks": len(masks),
+            "n_warning_regions": len(warning_regions),
+        },
+    )
 
 
 def _catalog_feature_mask_metadata(names, padding_A=0.0):

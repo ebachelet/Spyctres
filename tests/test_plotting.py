@@ -6,10 +6,13 @@ import numpy as np
 
 from Spyctres.io import SpectrumCollection, SpectrumSegment
 from Spyctres.plotting import (
+    plot_diagnostic_windows,
     plot_fit_referee,
+    plot_spectrum,
     plot_spectrum_audit,
     plot_xsl_validation_payload,
 )
+from Spyctres.preprocessing import build_mask
 from Spyctres.results import PhoenixFitResult
 
 
@@ -347,6 +350,79 @@ def test_plot_spectrum_audit_is_generic_and_labelled(tmp_path):
     assert "metadata warning region" in legend_labels
     assert "near-zero block" in legend_labels
     assert "diagnostic only" in axes[2].texts[0].get_text()
+    fig.clf()
+
+
+def test_plot_spectrum_facade_draws_single_panel_and_overlays():
+    wave = np.linspace(4300.0, 4450.0, 240)
+    flux = 1.0 - 0.2 * np.exp(-0.5 * ((wave - 4340.47) / 4.0) ** 2)
+    segment = SpectrumSegment(
+        wave,
+        flux,
+        err=np.full(wave.size, 0.02),
+        mask=np.ones(wave.size, dtype=bool),
+        name="facade",
+        wave_medium="air",
+    )
+    mask = build_mask(
+        names="dib_4428",
+        tellurics="warn",
+    )
+    selection = {
+        "selected": [
+            {
+                "id": "hgamma",
+                "label": "Hgamma",
+                "region_A": [4310.0, 4372.0],
+            }
+        ]
+    }
+
+    fig, ax = plot_spectrum(
+        segment,
+        mask=mask,
+        diagnostic_selection=selection,
+        show_nonstellar=True,
+    )
+
+    assert ax.get_xlabel() == "Wavelength [Å]"
+    assert ax.lines
+    assert ax.patches
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert "suggested diagnostic window" in labels
+    assert "explicit exclusion mask" in labels
+    assert "warning region" in labels
+    fig.clf()
+
+
+def test_plot_spectrum_facade_show_masks_uses_audit_view():
+    segment = SpectrumSegment(
+        np.linspace(4000.0, 4100.0, 80),
+        np.ones(80),
+        mask=np.ones(80, dtype=bool),
+    )
+
+    fig, axes = plot_spectrum(segment, show_masks=True)
+
+    assert len(axes) == 3
+    assert axes[2].get_ylabel() == "Mask\nTrue=use"
+    fig.clf()
+
+
+def test_plot_diagnostic_windows_selects_when_needed():
+    segment = SpectrumSegment(
+        np.linspace(4300.0, 4380.0, 200),
+        np.ones(200),
+        err=np.full(200, 0.02),
+        mask=np.ones(200, dtype=bool),
+        wave_medium="air",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+    )
+
+    fig, ax = plot_diagnostic_windows(segment)
+
+    assert ax.patches
     fig.clf()
 
 

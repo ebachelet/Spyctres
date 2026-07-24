@@ -309,6 +309,70 @@ def compare_fit_results(
     return _jsonable(out)
 
 
+def compare_fits(
+    *results,
+    labels=None,
+    baseline_index=0,
+    **kwargs,
+):
+    """Compare two or more fit results against a baseline.
+
+    ``compare_fit_results(a, b)`` remains the precise two-result helper.
+    ``compare_fits(a, b, c, labels=(...))`` is the notebook-friendly facade:
+    it compares every non-baseline result to the chosen baseline and returns a
+    compact JSON-safe bundle.
+    """
+    if len(results) == 1 and isinstance(results[0], (list, tuple)):
+        results = tuple(results[0])
+    if len(results) < 2:
+        raise ValueError("compare_fits requires at least two fit results.")
+    baseline_index = int(baseline_index)
+    if baseline_index < 0 or baseline_index >= len(results):
+        raise ValueError("baseline_index is out of range.")
+    if labels is None:
+        labels = tuple("fit_{0}".format(index) for index in range(len(results)))
+    labels = tuple(str(label) for label in labels)
+    if len(labels) != len(results):
+        raise ValueError("labels must match the number of fit results.")
+    if len(results) == 2 and baseline_index == 0:
+        return compare_fit_results(results[0], results[1], labels=labels, **kwargs)
+
+    baseline = results[baseline_index]
+    baseline_label = labels[baseline_index]
+    comparisons = []
+    for index, result in enumerate(results):
+        if index == baseline_index:
+            continue
+        comparisons.append(
+            {
+                "comparison_index": int(index),
+                "label": labels[index],
+                "relative_to": baseline_label,
+                "comparison": compare_fit_results(
+                    baseline,
+                    result,
+                    labels=(baseline_label, labels[index]),
+                    **kwargs,
+                ),
+            }
+        )
+    return _jsonable(
+        {
+            "schema_version": 1,
+            "operation": "compare_fits",
+            "baseline_index": int(baseline_index),
+            "baseline_label": baseline_label,
+            "labels": list(labels),
+            "comparisons": comparisons,
+            "interpretation": (
+                "Compare parameter changes, metrics, quality flags, known "
+                "feature flags, and residual-window changes. This helper does "
+                "not decide which fit is scientifically correct."
+            ),
+        }
+    )
+
+
 QUALITY_FLAG_DESCRIPTIONS = {
     "ok": "No fit-quality warning flags were raised.",
     "optimizer_local_minimum_suspected": (

@@ -95,7 +95,11 @@ def fit_stellar_spectrum(
     phoenix_dir=None,
     auto_defaults=True,
     defaults_mode="quicklook",
+    mode=None,
     science_case="classification",
+    mask=None,
+    resolution_R=None,
+    continuum_degree=None,
     reader_kwargs=None,
     reconstruct=True,
     warn_unknown=True,
@@ -123,6 +127,32 @@ def fit_stellar_spectrum(
         raise ValueError(
             "fit_stellar_spectrum currently supports model='phoenix' only."
         )
+
+    if mode is not None:
+        if (
+            str(defaults_mode).strip().lower() != "quicklook"
+            and str(defaults_mode).strip().lower() != str(mode).strip().lower()
+        ):
+            raise ValueError("Pass mode or defaults_mode, not conflicting values.")
+        defaults_mode = str(mode).strip().lower()
+
+    if mask is not None:
+        if "exclude_mask" in fit_kwargs or "exclude_masks" in fit_kwargs:
+            raise ValueError(
+                "Pass mask or exclude_mask(s), not both. mask is the "
+                "beginner-facing alias for exclude_masks."
+            )
+        fit_kwargs["exclude_masks"] = mask
+    if resolution_R is not None:
+        if "R" in fit_kwargs or "fwhm_kms" in fit_kwargs:
+            raise ValueError(
+                "Pass resolution_R or R/fwhm_kms, not multiple resolution aliases."
+            )
+        fit_kwargs["R"] = float(resolution_R)
+    if continuum_degree is not None:
+        if "mdeg" in fit_kwargs:
+            raise ValueError("Pass continuum_degree or mdeg, not both.")
+        fit_kwargs["mdeg"] = int(continuum_degree)
 
     reader_kwargs = {} if reader_kwargs is None else dict(reader_kwargs)
     input_was_path = isinstance(spectrum, (str, os.PathLike))

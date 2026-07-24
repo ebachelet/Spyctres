@@ -148,7 +148,20 @@ Use this checklist for a first local run from a source checkout.
    Expert users can override the suggested values with flags such as `--wmin`,
    `--wmax`, `--teff`, `--teff-min`, or `--no-auto-defaults`.
 
-5. For many spectra, first run a cheap quicklook batch to identify sensible
+5. If you want to inspect the plausible classification branches before
+   fitting, run the dry-run branch quickscan. This is cheap and does not load
+   PHOENIX unless you explicitly add `--run-fits`:
+
+   ```bash
+   python examples/branch_quickscan.py \
+     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+     --instrument xshooter \
+     --output-json /tmp/spyctres_branches.json \
+     --output-csv /tmp/spyctres_branches.csv \
+     --output-plot /tmp/spyctres_branches.png
+   ```
+
+6. For many spectra, first run a cheap quicklook batch to identify sensible
    local parameter ranges:
 
    ```bash
@@ -161,7 +174,7 @@ Use this checklist for a first local run from a source checkout.
      --resume
    ```
 
-6. Then rerun with focused refinement. The script reuses the quick-pass result
+7. Then rerun with focused refinement. The script reuses the quick-pass result
    to build local Teff/[Fe/H]/logg/RV bounds, rather than blindly searching the
    broad classification box for every spectrum:
 
@@ -208,20 +221,58 @@ Recommended example order:
 
 1. `examples/simple_phoenix_fit.py` for the shortest command-line public-API
    path.
-2. `examples/batch_quickscan_then_refine.py` for fitting many spectra with a
+2. `examples/branch_quickscan.py` for quickly inspecting which broad
+   classification branches are plausible before running branch-specific fits.
+3. `examples/batch_quickscan_then_refine.py` for fitting many spectra with a
    cheap quick scan followed by focused local refinement.
-3. `examples/high_resolution_sideband_normalization.py` for local
+4. `examples/high_resolution_sideband_normalization.py` for local
    sideband-normalized line-window diagnostics.
-4. `examples/full_spectrum_classification.ipynb` for the first worked
+5. `examples/full_spectrum_classification.ipynb` for the first worked
    PHOENIX classification notebook.
-5. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
+6. `examples/xshooter_multiarm_classification.ipynb` for advanced multi-arm
    fitting diagnostics.
-6. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
-7. `examples/publication_quality_xshooter_uvb.py` and
+7. `examples/xsl_figure1_validation.ipynb` for real-library XSL validation.
+8. `examples/publication_quality_xshooter_uvb.py` and
    `examples/publication_quality_xshooter_uvb.ipynb` for the expert
    publication-oriented X-SHOOTER UVB scaffold.
-8. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
+9. `examples/pepsi_legacy_linefit_validation.ipynb` for the PEPSI legacy
    line-window validation path.
+
+The same beginner workflow is available from one Python import:
+
+```python
+import Spyctres as sp
+
+spec = sp.read_spectrum(
+    "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
+    instrument="xshooter",
+)
+sp.plot_spectrum(spec)
+
+audit = sp.audit_spectrum_for_fit(spec)
+windows = sp.select_diagnostic_windows(spec)
+sp.plot_diagnostic_windows(spec, windows)
+
+line = sp.fit_line(spec, "Hgamma")
+sp.plot_line_fit(line)
+
+result = sp.fit_stellar_spectrum(spec, model="phoenix")
+sp.plot_fit_referee(result)
+```
+
+For explicit mask review, keep warning and masking choices visible:
+
+```python
+mask = sp.build_mask(spec, archive=True, tellurics="warn")
+sp.plot_spectrum(spec, mask=mask, show_nonstellar=True)
+result_masked = sp.fit_stellar_spectrum(spec, mask=mask, resolution_R=6200)
+comparison = sp.compare_fits(result, result_masked, labels=("baseline", "masked"))
+```
+
+The short calls use conservative quicklook defaults. They do not hide
+wavelength medium, observer frame, stellar-rest status, uncertainty source,
+resolution assumptions, or mask policy; those remain in audit output, fit
+provenance, quality flags, and plots.
 
 `quick_example.py` is retained only as a compatibility pointer to these
 maintained workflows; smoke tests live under `scripts/`. See
@@ -611,17 +662,17 @@ Local Gaussian measurements provide quick RV, width, equivalent-width, and
 residual checks without replacing the physical PHOENIX fit:
 
 ```python
-from Spyctres import LineSpec, fit_line, plot_line_fit
+import Spyctres as sp
 
-line = LineSpec("Halpha", 6562.80, kind="absorption", wave_medium="air")
-diagnostic = fit_line(segment, line)
-fig, axes = plot_line_fit(diagnostic)
+diagnostic = sp.fit_line(segment, "Halpha")
+fig, axes = sp.plot_line_fit(diagnostic)
 ```
 
 Results report laboratory and segment wavelength media, observed line width,
 instrumental FWHM when available, uncertainty estimates, and quality flags.
 Positive equivalent width denotes absorption; emission-line area is reported
 as positive `line_flux` in flux-times-Angstrom units.
+For expert control, pass a `LineSpec` and `LineFitConfig` explicitly.
 
 Air/vacuum conversion conventions are explicit. `ciddor1996` remains the
 PHOENIX workflow default, while `vald3` preserves the historical Spyctres line-

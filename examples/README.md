@@ -38,6 +38,24 @@ workflows:
 The examples are ordered by how much Spyctres-specific context they assume.
 The first three are the best place for a new user to start.
 
+The beginner Python mental model is deliberately one import:
+
+```python
+import Spyctres as sp
+
+spec = sp.read_spectrum("examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits", instrument="xshooter")
+sp.plot_spectrum(spec)
+audit = sp.audit_spectrum_for_fit(spec)
+windows = sp.select_diagnostic_windows(spec)
+sp.plot_diagnostic_windows(spec, windows)
+result = sp.fit_stellar_spectrum(spec, model="phoenix")
+sp.plot_fit_referee(result)
+```
+
+More detailed examples below add one idea at a time: branch choice, batch
+throughput, local line/mask diagnostics, multi-arm fitting, real-library
+validation, and publication-oriented stress tests.
+
 ## Example 1: command-line public API quickstart
 
 For a shorter non-notebook workflow, use `simple_phoenix_fit.py`. It reads any

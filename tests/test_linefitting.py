@@ -1,7 +1,13 @@
 import numpy as np
 
-from Spyctres.io import ResolutionDescriptor, SpectrumSegment
-from Spyctres.linefitting import LineFitConfig, LineSpec, fit_line, fit_lines
+from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegment
+from Spyctres.linefitting import (
+    LineFitConfig,
+    LineSpec,
+    fit_line,
+    fit_lines,
+    known_line_spec,
+)
 from Spyctres.waveutils import C_KMS
 
 
@@ -41,6 +47,42 @@ def test_absorption_line_recovers_center_rv_width_and_equivalent_width():
     assert result.line_flux != result.line_flux
 
 
+def test_beginner_line_alias_and_center_calls_are_supported():
+    segment, rest, center = make_line()
+
+    alias_result = fit_line(segment, "Halpha", LineFitConfig(rv_guess_kms=24.0))
+    custom_result = fit_line(
+        segment,
+        center=rest,
+        name="custom_halpha",
+        window_A=4.0,
+        wave_medium="air",
+        config=LineFitConfig(rv_guess_kms=24.0),
+    )
+
+    assert alias_result.success
+    assert custom_result.success
+    assert abs(alias_result.center_wave - center) < 0.01
+    assert abs(custom_result.center_wave - center) < 0.01
+    assert known_line_spec("Hgamma").name == "Hgamma"
+
+
+def test_line_alias_selects_covering_segment_from_collection():
+    segment, _rest, center = make_line()
+    blue = SpectrumSegment(
+        np.linspace(4300.0, 4355.0, 200),
+        np.ones(200),
+        err=np.full(200, 0.02),
+        wave_medium="air",
+    )
+    collection = SpectrumCollection([blue, segment])
+
+    result = fit_line(collection, "Halpha", LineFitConfig(rv_guess_kms=24.0))
+
+    assert result.success
+    assert abs(result.center_wave - center) < 0.01
+
+
 def test_emission_line_has_positive_flux_and_negative_equivalent_width():
     segment, rest, _ = make_line(kind="emission")
     result = fit_line(
@@ -75,7 +117,7 @@ def test_nearby_independent_lines_are_flagged_as_blend_candidates():
     results = fit_lines(
         segment,
         [
-            LineSpec("first", rest, window_A=4.0),
+            "Halpha",
             LineSpec("second", rest + 1.0, window_A=4.0),
         ],
         LineFitConfig(rv_guess_kms=24.0),
