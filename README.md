@@ -737,4 +737,4 @@ In particular:
 - the example notebook is a first-pass classification workflow, not a final precision analysis
 - some workflows still require user judgment for wavelength windows, masking, resolving power, and continuum treatment
 - instrument-specific metadata quality varies across input formats
-- packaging and documentation are still minimal
+- packaging and documentation are still being stabilized

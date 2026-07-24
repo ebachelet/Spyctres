@@ -895,8 +895,13 @@ def bin_spectrum(data,lambda_ref):
                 cij_line[index] = 1
                 cij.append(cij_line)
                 
-        except:
-                breakpoint()
+        except Exception as exc:
+                raise RuntimeError(
+                    "Legacy bin_spectrum failed while rebinning wavelength "
+                    "{0}; check that input data have wavelength, flux, and "
+                    "uncertainty columns and that the wavelength grids overlap."
+                    .format(lamb)
+                ) from exc
                      
     covariance = np.array(cij)
     
@@ -1100,4 +1105,3 @@ def derive_AB_correction(filters):
         correction.append(fil.get_ab_magnitude(VEGA(wave).value*1.98644746*10**-8/wave,wave))
         
     return np.array(correction)
-

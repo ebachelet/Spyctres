@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages, Extension
+from setuptools import setup, find_packages
 
 setup(
     name="Spyctres",
@@ -23,7 +23,7 @@ setup(
     ],
     python_requires='>=3.12,<4',
     classifiers=[
-		'Development Status :: 5 - Production/Stable',
+		'Development Status :: 3 - Alpha',
 		'Intended Audience :: Developers',
 		'Topic :: Software Development :: Build Tools',
                 'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',

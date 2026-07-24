@@ -910,8 +910,13 @@ def bin_spectrum(data,lambda_ref):
                 cij_line[index] = 1
                 cij.append(cij_line)
                 
-        except:
-                breakpoint()
+        except Exception as exc:
+                raise RuntimeError(
+                    "Legacy bin_spectrum failed while rebinning wavelength "
+                    "{0}; check that input data have wavelength, flux, and "
+                    "uncertainty columns and that the wavelength grids overlap."
+                    .format(lamb)
+                ) from exc
                      
     covariance = np.array(cij)
     
