@@ -80,6 +80,15 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "Let Spyctres suggest first-pass bounds, windows, and RV scan. Use suggest_fit_setup(spec) to inspect those assumptions before fitting.",
             },
             {
+                "name": "setup",
+                "default": "None",
+                "description": (
+                    "Reviewed FitSetup from suggest_fit_setup(spec). When "
+                    "supplied, the fitter uses those exact fit_kwargs and "
+                    "embeds the setup hash in the result."
+                ),
+            },
+            {
                 "name": "defaults_mode",
                 "default": "quicklook",
                 "description": "Search-budget mode: quicklook, standard, or diagnostic. The alias mode=... is also accepted.",
@@ -121,8 +130,8 @@ PUBLIC_FUNCTION_HELP = {
             },
         ],
         "advice": (
-            "For a first run, use examples/simple_phoenix_fit.py; for many spectra, "
-            "use examples/batch_quickscan_then_refine.py."
+            "For an auditable path, run setup = suggest_fit_setup(spec), inspect "
+            "setup.summary(), then call fit_stellar_spectrum(spec, setup=setup)."
         ),
     },
     "suggest_fit_setup": {
@@ -166,7 +175,7 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "Optional assumptions passed into the readiness audit, without mutating the spectrum.",
             },
         ],
-        "advice": "Use this immediately after read_spectrum() to see windows, branches, warnings, and next steps before launching a fit.",
+        "advice": "Use this immediately after read_spectrum(); inspect setup.summary(), then pass setup=setup to fit_stellar_spectrum() when ready.",
     },
     "readiness_flag_actions": {
         "name": "readiness_flag_actions",

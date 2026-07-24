@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from Spyctres.api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
+from Spyctres.defaults import suggest_fit_setup
 from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
     PhoenixFitDiagnostics,
@@ -592,6 +593,77 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
     assert result.provenance["input_was_path"] is True
     assert result.provenance["instrument"] == "xshooter"
     assert result.provenance["defaults_mode"] == "standard"
+
+
+def test_fit_stellar_spectrum_uses_reviewed_setup(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 120),
+        np.ones(120),
+        err=np.full(120, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "XSHOOTER", "arm": "UVB"},
+        resolution=5000.0,
+    )
+    setup = suggest_fit_setup(segment, mode="standard")
+
+    def fake_fit(spectrum, **kwargs):
+        captured["spectrum"] = spectrum
+        captured["kwargs"] = kwargs
+        return PhoenixFitResult(
+            summary={
+                "success": True,
+                "teff": 6000.0,
+                "feh": 0.0,
+                "logg": 4.0,
+                "rv_kms": 0.0,
+                "chi2_red": 1.0,
+            },
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    result = fit_stellar_spectrum(
+        segment,
+        setup=setup,
+        phoenix_lib=object(),
+        progress_callback=lambda _event: None,
+    )
+
+    expected_fit_kwargs = setup.fit_kwargs
+    assert np.allclose(captured["spectrum"].wave, segment.wave)
+    assert captured["kwargs"]["regions"] == expected_fit_kwargs["regions"]
+    assert captured["kwargs"]["rv_grid_n"] == expected_fit_kwargs["rv_grid_n"]
+    assert captured["kwargs"]["forward_model"] == expected_fit_kwargs["forward_model"]
+    assert "progress_callback" in captured["kwargs"]
+    assert result.summary["fit_setup_hash"] == setup.setup_hash
+    assert result.summary["fit_setup"]["setup_hash"] == setup.setup_hash
+    assert result.provenance["fit_setup_source"] == "explicit_setup"
+    assert result.provenance["fit_setup_hash"] == setup.setup_hash
+
+
+def test_fit_stellar_spectrum_rejects_setup_plus_fit_overrides():
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 120),
+        np.ones(120),
+        err=np.full(120, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+    setup = suggest_fit_setup(segment)
+
+    with pytest.raises(ValueError, match="Pass setup or explicit fit-control"):
+        fit_stellar_spectrum(
+            segment,
+            setup=setup,
+            phoenix_lib=object(),
+            regions=[(4000.0, 5000.0)],
+        )
 
 
 def test_classify_spectrum_alias_and_manual_defaults(monkeypatch):

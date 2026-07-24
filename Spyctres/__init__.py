@@ -8,6 +8,7 @@ from .help import (
     list_public_functions,
 )
 from .defaults import (
+    FitSetup,
     PhoenixFitDefaults,
     clip_grid_to_bounds,
     prepare_phoenix_fit_kwargs,
@@ -129,7 +130,7 @@ __all__ = [
     "SpectrumSegment", "SpectrumCollection",
     "ensure_matplotlib_config_dir",
     "PhoenixFitDiagnostics", "PhoenixFitResult",
-    "PhoenixFitDefaults", "clip_grid_to_bounds",
+    "FitSetup", "PhoenixFitDefaults", "clip_grid_to_bounds",
     "prepare_phoenix_fit_kwargs", "spectrum_wavelength_range",
     "suggest_fit_setup", "suggest_classification_branches",
     "suggest_phoenix_fit_defaults",

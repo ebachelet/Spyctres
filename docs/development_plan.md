@@ -21,7 +21,8 @@ from Spyctres import read_spectrum, suggest_fit_setup, fit_stellar_spectrum, plo
 
 spec = read_spectrum("my_spectrum.fits", instrument="xshooter")
 setup = suggest_fit_setup(spec)  # inspect windows, assumptions, readiness, and actions
-result = fit_stellar_spectrum(spec, model="phoenix")
+setup.summary()
+result = fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 plot_fit_referee(result)
 ```
 
@@ -29,17 +30,16 @@ Expert and publication-oriented workflows should build on the same components,
 but they must not silently relax metadata, LSF, mask, or uncertainty
 requirements.
 
-Near-term public-API work should make the reviewed setup object passable to the
-fit itself:
+The reviewed setup object is now passable to the fit itself:
 
 ```python
 setup = suggest_fit_setup(spec)
 result = fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 ```
 
-The fit result should then embed the exact reviewed setup, including a setup
-hash and readiness interpretation. Until that object exists, the existing
-dictionary output from `suggest_fit_setup()` remains an inspection aid.
+The fit result embeds the exact reviewed setup, including a setup hash and
+readiness interpretation. The remaining work is to promote this into the
+numbered examples and, later, the versioned report schema.
 
 ## Priority order
 
@@ -66,12 +66,13 @@ dictionary output from `suggest_fit_setup()` remains an inspection aid.
    validation.
 
 2. **Reviewed setup as a first-class object.**
-   Replace the current large nested setup dictionary with a compact
-   `FitSetup`-style object while preserving `to_dict()`/JSON provenance for
-   expert and batch use. A setup should include resolved windows, bounds, RV
-   scan settings, continuum degree, resolution/mask policy, readiness
-   interpretation, warnings, alternatives, and a configuration hash. The
-   fitter should accept `setup=setup` and embed the exact setup in the result.
+   Initial implementation is in place: `suggest_fit_setup()` returns a
+   `FitSetup` mapping-compatible object with `summary()`, `summary_text()`,
+   `to_dict()`, `to_json()`, and a stable setup hash, and
+   `fit_stellar_spectrum(..., setup=setup)` embeds the exact reviewed setup in
+   the result. Remaining work: use this object throughout the numbered
+   examples, migrate any ad-hoc setup summaries to `setup.summary()`, and fold
+   the setup hash into the later versioned report schema.
 
 3. **Intent-aware readiness and preprocessing discipline.**
    Continue hardening the common spectrum boundary, mask polarity, native

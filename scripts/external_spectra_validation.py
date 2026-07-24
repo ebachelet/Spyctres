@@ -769,9 +769,10 @@ def _fit_setup_recommendation(spectrum, args, assumed_resolution):
             include_readiness=False,
             assumed_resolution=assumed_resolution,
         )
-        setup["status"] = "ok"
-        setup["readiness_source"] = "external_validation.readiness"
-        return setup
+        payload = setup.to_dict()
+        payload["status"] = "ok"
+        payload["readiness_source"] = "external_validation.readiness"
+        return payload
     except Exception as exc:
         return {
             "schema_version": 1,

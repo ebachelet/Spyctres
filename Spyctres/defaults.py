@@ -10,6 +10,9 @@ returned in provenance so callers can display or override it.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,6 +45,144 @@ class PhoenixFitDefaults:
             "reasons": list(self.reasons),
             "warnings": list(self.warnings),
         }
+
+
+def _stable_json(value):
+    return json.dumps(
+        _jsonable(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _hash_payload(payload):
+    payload = dict(_jsonable(payload))
+    payload.pop("setup_hash", None)
+    payload.pop("configuration_hash", None)
+    encoded = _stable_json(payload).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class FitSetup(Mapping):
+    """Reviewed first-pass fitting setup with mapping compatibility.
+
+    ``FitSetup`` is the compact object returned by :func:`suggest_fit_setup`.
+    It behaves like a read-only mapping for compatibility with existing
+    notebooks and scripts, while adding a stable ``setup_hash`` plus helper
+    methods for user-facing summaries and JSON serialization.
+    """
+
+    payload: dict
+
+    def __post_init__(self):
+        payload = _jsonable(dict(self.payload))
+        setup_hash = payload.get("setup_hash") or _hash_payload(payload)
+        payload["setup_hash"] = str(setup_hash)
+        payload["configuration_hash"] = str(setup_hash)
+        object.__setattr__(self, "payload", payload)
+
+    def __getitem__(self, key):
+        return self.payload[key]
+
+    def __iter__(self):
+        return iter(self.payload)
+
+    def __len__(self):
+        return len(self.payload)
+
+    @property
+    def setup_hash(self):
+        return self.payload["setup_hash"]
+
+    @property
+    def fit_kwargs(self):
+        return dict(self.payload.get("fit_kwargs") or {})
+
+    @property
+    def readiness(self):
+        return self.payload.get("readiness")
+
+    def summary(self, max_actions=3):
+        """Return a compact JSON-safe user-facing setup summary."""
+        readiness = self.payload.get("readiness") or {}
+        window = self.payload.get("recommended_window") or {}
+        actions = list(readiness.get("actions_for_intent") or ())[: int(max_actions)]
+        warnings = list(readiness.get("warnings_for_intent") or ())[: int(max_actions)]
+        return _jsonable(
+            {
+                "schema_version": 1,
+                "setup_hash": self.setup_hash,
+                "model": self.payload.get("model"),
+                "mode": self.payload.get("mode"),
+                "science_case": self.payload.get("science_case"),
+                "recommended_window_label": window.get("label"),
+                "recommended_regions_A": window.get("regions"),
+                "recommended_branch_id": self.payload.get("recommended_branch_id"),
+                "readiness_intent": readiness.get("intent"),
+                "ready_for_intent": readiness.get("ready_for_intent"),
+                "blockers_for_intent": readiness.get("blockers_for_intent") or [],
+                "warnings_for_intent": warnings,
+                "top_actions": actions,
+                "risk_flags": list(self.payload.get("risk_flags") or []),
+                "next_steps": list(self.payload.get("next_steps") or [])[
+                    : int(max_actions)
+                ],
+            }
+        )
+
+    def summary_text(self, max_actions=3):
+        """Return a compact plain-text setup summary for notebooks/CLI use."""
+        summary = self.summary(max_actions=max_actions)
+        lines = [
+            "Spyctres fit setup",
+            "  hash: {0}".format(summary.get("setup_hash")),
+            "  model/mode: {0}/{1}".format(
+                summary.get("model"),
+                summary.get("mode"),
+            ),
+        ]
+        if summary.get("recommended_window_label"):
+            lines.append(
+                "  window: {0} {1}".format(
+                    summary.get("recommended_window_label"),
+                    summary.get("recommended_regions_A"),
+                )
+            )
+        lines.append(
+            "  readiness: intent={0}, ready={1}".format(
+                summary.get("readiness_intent"),
+                summary.get("ready_for_intent"),
+            )
+        )
+        if summary.get("blockers_for_intent"):
+            lines.append(
+                "  blockers: {0}".format(
+                    ", ".join(summary["blockers_for_intent"])
+                )
+            )
+        if summary.get("warnings_for_intent"):
+            lines.append(
+                "  warnings: {0}".format(
+                    ", ".join(summary["warnings_for_intent"])
+                )
+            )
+        actions = []
+        for item in summary.get("top_actions") or []:
+            if isinstance(item, Mapping) and item.get("flag") and item.get("action"):
+                actions.append("{0}: {1}".format(item["flag"], item["action"]))
+        if actions:
+            lines.append("  top actions:")
+            lines.extend("    - {0}".format(item) for item in actions)
+        return "\n".join(lines)
+
+    def to_dict(self):
+        return _jsonable(self.payload)
+
+    def to_json(self, **kwargs):
+        kwargs.setdefault("allow_nan", False)
+        return json.dumps(self.to_dict(), **kwargs)
 
 
 def spectrum_wavelength_range(spectrum):
@@ -183,7 +324,9 @@ def _jsonable(value):
         return value.tolist()
     if isinstance(value, np.generic):
         return value.item()
-    if isinstance(value, dict):
+    if isinstance(value, FitSetup):
+        return value.to_dict()
+    if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
@@ -1270,7 +1413,9 @@ def suggest_fit_setup(
     resolution/frame warnings, and readiness flags should be reviewed before a
     fit is launched?
 
-    The returned dictionary is JSON-safe and built from the canonical
+    The returned :class:`FitSetup` behaves like a read-only dictionary for
+    compatibility, is JSON-safe via ``to_dict()``/``to_json()``, and is built
+    from the canonical
     ``suggest_phoenix_fit_defaults()``, ``select_diagnostic_windows()``,
     ``suggest_classification_branches()``, and optional
     ``audit_spectrum_for_fit()`` layers. Expert users can still override every
@@ -1322,43 +1467,45 @@ def suggest_fit_setup(
         suggestion.warnings,
         assumed_resolution,
     )
-    return _jsonable(
-        {
-            "schema_version": 1,
-            "operation": "suggest_fit_setup",
-            "model": model,
-            "mode": str(mode).strip().lower(),
-            "science_case": str(science_case).strip().lower(),
-            "minimal_fit_call": "fit_stellar_spectrum(spec, model='phoenix')",
-            "fit_kwargs": fit_kwargs,
-            "recommended_window": window,
-            "recommended_branch_id": branch_plan.get("recommended_branch_id"),
-            "recommended_branch": branch_plan.get("recommended_branch"),
-            "diagnostic_windows": {
-                "selected": diagnostic_info.get("selection", {}).get("selected", []),
-                "recommended_combinations": diagnostic_info.get(
-                    "recommended_combinations",
-                    {},
-                ),
-            },
-            "readiness": readiness,
-            "warnings": list(dict.fromkeys(warnings)),
-            "risk_flags": risk_flags,
-            "reasons": list(suggestion.reasons),
-            "next_steps": _setup_next_steps(suggestion, readiness),
-            "provenance": {
-                "defaults": suggestion.provenance,
-                "readiness_included": bool(include_readiness),
-                "readiness_intent": None
-                if readiness is None
-                else readiness.get("intent"),
-                "assumed_resolution": _jsonable(assumed_resolution),
-                "mask_threshold": float(mask_threshold),
-                "expert_overrides": (
-                    "Pass explicit regions, bounds, p0, resolution_R/R, "
-                    "exclude_masks, defaults_mode, or mode to the fitter to "
-                    "override these suggestions."
-                ),
-            },
-        }
-    )
+    payload = {
+        "schema_version": 1,
+        "operation": "suggest_fit_setup",
+        "model": model,
+        "mode": str(mode).strip().lower(),
+        "science_case": str(science_case).strip().lower(),
+        "minimal_fit_call": "fit_stellar_spectrum(spec, model='phoenix')",
+        "minimal_setup_fit_call": (
+            "fit_stellar_spectrum(spec, model='phoenix', setup=setup)"
+        ),
+        "fit_kwargs": fit_kwargs,
+        "recommended_window": window,
+        "recommended_branch_id": branch_plan.get("recommended_branch_id"),
+        "recommended_branch": branch_plan.get("recommended_branch"),
+        "diagnostic_windows": {
+            "selected": diagnostic_info.get("selection", {}).get("selected", []),
+            "recommended_combinations": diagnostic_info.get(
+                "recommended_combinations",
+                {},
+            ),
+        },
+        "readiness": readiness,
+        "warnings": list(dict.fromkeys(warnings)),
+        "risk_flags": risk_flags,
+        "reasons": list(suggestion.reasons),
+        "next_steps": _setup_next_steps(suggestion, readiness),
+        "provenance": {
+            "defaults": suggestion.provenance,
+            "readiness_included": bool(include_readiness),
+            "readiness_intent": None
+            if readiness is None
+            else readiness.get("intent"),
+            "assumed_resolution": _jsonable(assumed_resolution),
+            "mask_threshold": float(mask_threshold),
+            "expert_overrides": (
+                "Pass explicit regions, bounds, p0, resolution_R/R, "
+                "exclude_masks, defaults_mode, or mode to build a new reviewed "
+                "setup before fitting."
+            ),
+        },
+    }
+    return FitSetup(payload)

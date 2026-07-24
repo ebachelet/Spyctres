@@ -2,9 +2,10 @@
 
 import inspect
 import os
+from collections.abc import Mapping
 
 from .config import resolve_phoenix_dir
-from .defaults import prepare_phoenix_fit_kwargs
+from .defaults import FitSetup, prepare_phoenix_fit_kwargs
 from .help import missing_call_error
 from .fitting import (
     fit_phoenix_full_spectrum,
@@ -23,6 +24,29 @@ _RECONSTRUCTION_KEYS = (
         ).parameters
     )
 )
+
+
+def _setup_payload(setup):
+    if setup is None:
+        return None
+    if isinstance(setup, FitSetup):
+        return setup.to_dict()
+    if hasattr(setup, "to_dict"):
+        payload = setup.to_dict()
+    elif isinstance(setup, Mapping):
+        payload = dict(setup)
+    else:
+        raise TypeError("setup must be a FitSetup, mapping, or to_dict()-compatible object.")
+    if not isinstance(payload, Mapping):
+        raise TypeError("setup.to_dict() must return a mapping.")
+    if str(payload.get("operation", "")) != "suggest_fit_setup":
+        raise ValueError("setup must come from suggest_fit_setup().")
+    fit_kwargs = payload.get("fit_kwargs")
+    if not isinstance(fit_kwargs, Mapping):
+        raise ValueError("setup payload must contain a fit_kwargs mapping.")
+    if "setup_hash" not in payload:
+        payload = FitSetup(dict(payload)).to_dict()
+    return dict(payload)
 
 
 def fit_phoenix_spectrum(
@@ -97,6 +121,7 @@ def fit_stellar_spectrum(
     defaults_mode="quicklook",
     mode=None,
     science_case="classification",
+    setup=None,
     mask=None,
     resolution_R=None,
     continuum_degree=None,
@@ -118,6 +143,8 @@ def fit_stellar_spectrum(
     default, records the reasons/warnings in the returned result, and lets any
     explicit fit keyword override the suggestion. For example, pass ``regions``,
     ``p0``, ``bounds``, ``rv_grid_n``, or ``mdeg`` to take expert control.
+    To fit exactly a reviewed plan, pass ``setup=suggest_fit_setup(spec)`` and
+    do not pass additional fit-control overrides.
     """
     if spectrum is None:
         raise ValueError(missing_call_error("fit_stellar_spectrum"))
@@ -127,6 +154,57 @@ def fit_stellar_spectrum(
         raise ValueError(
             "fit_stellar_spectrum currently supports model='phoenix' only."
         )
+
+    setup_payload = _setup_payload(setup)
+    if setup_payload is not None:
+        if not auto_defaults:
+            raise ValueError("Pass setup or auto_defaults=False, not both.")
+        setup_mode = str(setup_payload.get("mode", "")).strip().lower()
+        requested_mode = str(mode if mode is not None else defaults_mode).strip().lower()
+        if (mode is not None or requested_mode != "quicklook") and setup_mode:
+            if requested_mode != setup_mode:
+                raise ValueError(
+                    "setup mode is {0!r}, but requested mode/defaults_mode is "
+                    "{1!r}; build a new setup instead.".format(
+                        setup_mode,
+                        requested_mode,
+                    )
+                )
+        if setup_mode:
+            defaults_mode = setup_mode
+        setup_science_case = str(
+            setup_payload.get("science_case", "")
+        ).strip().lower()
+        requested_science_case = str(science_case).strip().lower()
+        if (
+            requested_science_case != "classification"
+            and setup_science_case
+            and requested_science_case != setup_science_case
+        ):
+            raise ValueError(
+                "setup science_case is {0!r}, but requested science_case is "
+                "{1!r}; build a new setup instead.".format(
+                    setup_science_case,
+                    requested_science_case,
+                )
+            )
+        if setup_science_case:
+            science_case = setup_science_case
+        explicit_controls = []
+        if mask is not None:
+            explicit_controls.append("mask")
+        if resolution_R is not None:
+            explicit_controls.append("resolution_R")
+        if continuum_degree is not None:
+            explicit_controls.append("continuum_degree")
+        explicit_controls.extend(sorted(fit_kwargs))
+        if explicit_controls:
+            raise ValueError(
+                "Pass setup or explicit fit-control overrides, not both. "
+                "Build a new setup if you want to change: {0}.".format(
+                    ", ".join(explicit_controls)
+                )
+            )
 
     if mode is not None:
         if (
@@ -178,21 +256,28 @@ def fit_stellar_spectrum(
             source="fit_stellar_spectrum",
         )
 
+    if setup_payload is not None:
+        setup_model = str(setup_payload.get("model", "phoenix")).strip().lower()
+        if setup_model != "phoenix":
+            raise ValueError("fit_stellar_spectrum currently supports PHOENIX setups only.")
+        resolved_fit_kwargs = dict(setup_payload["fit_kwargs"])
+        suggestion = None
+    else:
+        resolved_fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+            canonical,
+            auto_defaults=auto_defaults,
+            defaults_mode=defaults_mode,
+            science_case=science_case,
+            extra_kwargs=fit_kwargs,
+        )
+
     if progress_callback is not None:
-        if "progress_callback" in fit_kwargs:
+        if "progress_callback" in resolved_fit_kwargs:
             raise ValueError(
                 "Pass progress_callback either as a named argument or in "
-                "fit_kwargs, not both."
+                "fit_kwargs/setup, not both."
             )
-        fit_kwargs["progress_callback"] = progress_callback
-
-    resolved_fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
-        canonical,
-        auto_defaults=auto_defaults,
-        defaults_mode=defaults_mode,
-        science_case=science_case,
-        extra_kwargs=fit_kwargs,
-    )
+        resolved_fit_kwargs["progress_callback"] = progress_callback
 
     result = fit_phoenix_spectrum(
         canonical,
@@ -202,6 +287,9 @@ def fit_stellar_spectrum(
         warn_unknown=warn_unknown,
         **resolved_fit_kwargs,
     )
+    if setup_payload is not None:
+        result.summary["fit_setup"] = setup_payload
+        result.summary["fit_setup_hash"] = setup_payload.get("setup_hash")
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
     result.provenance.update(
@@ -213,6 +301,12 @@ def fit_stellar_spectrum(
             "auto_defaults": bool(auto_defaults),
             "defaults_mode": str(defaults_mode),
             "science_case": str(science_case),
+            "fit_setup_source": (
+                "explicit_setup" if setup_payload is not None else "auto_defaults"
+            ),
+            "fit_setup_hash": None
+            if setup_payload is None
+            else setup_payload.get("setup_hash"),
         }
     )
     return result

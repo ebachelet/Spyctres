@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from Spyctres import (
+    FitSetup,
     suggest_classification_branches,
     suggest_fit_setup,
     suggest_phoenix_fit_defaults,
@@ -88,9 +89,15 @@ def test_suggest_fit_setup_wraps_defaults_and_readiness_for_users():
 
     setup = suggest_fit_setup(segment)
 
+    assert isinstance(setup, FitSetup)
     assert setup["operation"] == "suggest_fit_setup"
     assert setup["model"] == "phoenix"
     assert setup["minimal_fit_call"] == "fit_stellar_spectrum(spec, model='phoenix')"
+    assert setup["minimal_setup_fit_call"] == (
+        "fit_stellar_spectrum(spec, model='phoenix', setup=setup)"
+    )
+    assert setup.setup_hash == setup["setup_hash"]
+    assert setup["configuration_hash"] == setup.setup_hash
     assert setup["recommended_branch_id"] == "blue_optical_balmer_metal"
     assert setup["fit_kwargs"]["forward_model"] == "native_interp"
     assert setup["readiness"]["fit_ready"] is True
@@ -100,6 +107,13 @@ def test_suggest_fit_setup_wraps_defaults_and_readiness_for_users():
     assert setup["risk_flags"] == []
     assert any("metadata" in item.lower() for item in setup["next_steps"])
     assert setup["provenance"]["readiness_included"] is True
+    compact = setup.summary()
+    assert compact["setup_hash"] == setup.setup_hash
+    assert compact["recommended_branch_id"] == "blue_optical_balmer_metal"
+    assert compact["ready_for_intent"] is True
+    assert setup.to_dict()["setup_hash"] == setup.setup_hash
+    assert '"setup_hash"' in setup.to_json()
+    assert "Spyctres fit setup" in setup.summary_text()
 
 
 def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():

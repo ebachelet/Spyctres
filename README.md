@@ -250,6 +250,7 @@ spec = sp.read_spectrum(
 sp.plot_spectrum(spec)
 
 setup = sp.suggest_fit_setup(spec)  # inspect suggested windows, risks, and assumptions
+setup.summary()
 audit = sp.audit_spectrum_for_fit(spec)
 windows = sp.select_diagnostic_windows(spec)
 sp.plot_diagnostic_windows(spec, windows)
@@ -257,7 +258,7 @@ sp.plot_diagnostic_windows(spec, windows)
 line = sp.fit_line(spec, "Hgamma")
 sp.plot_line_fit(line)
 
-result = sp.fit_stellar_spectrum(spec, model="phoenix")
+result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 sp.plot_fit_referee(result)
 ```
 
