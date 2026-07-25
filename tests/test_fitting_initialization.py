@@ -81,6 +81,74 @@ def test_default_coarse_grid_maps_targets_to_unique_nodes():
     assert np.array_equal(selected, [3000.0, 4000.0, 6000.0])
 
 
+def test_internally_selected_phoenix_grid_is_trimmed_to_complete_subgrid():
+    class IncompleteLocalGridLibrary:
+        DEFAULT_TEFF_GRID = np.array([5000.0, 5100.0, 5200.0])
+        DEFAULT_FEH_GRID = np.array([-0.5, 0.0, 0.5])
+        DEFAULT_LOGG_GRID = np.array([3.5, 4.0, 4.5])
+
+        def __init__(self):
+            self._n_wave = None
+            self.built_grid = None
+            self.evaluated = []
+
+        def interpolator_matches(self, observed_wave, *args, **kwargs):
+            return False
+
+        def complete_subgrid(self, teff_grid, feh_grid, logg_grid):
+            assert 3.5 in np.asarray(logg_grid, dtype=float)
+            return (
+                np.asarray(teff_grid, dtype=float),
+                np.asarray(feh_grid, dtype=float),
+                np.array([4.0, 4.5], dtype=float),
+            )
+
+        def build_interpolator(self, observed_wave, *args, **kwargs):
+            self._n_wave = len(observed_wave)
+            self.built_grid = {
+                "teff": np.asarray(kwargs["teff_grid"], dtype=float),
+                "feh": np.asarray(kwargs["feh_grid"], dtype=float),
+                "logg": np.asarray(kwargs["logg_grid"], dtype=float),
+            }
+
+        def evaluate(self, teff, feh, logg):
+            self.evaluated.append((float(teff), float(feh), float(logg)))
+            if float(logg) < 4.0:
+                raise ValueError("logg lies outside the complete fake subgrid")
+            return np.ones(self._n_wave, dtype=float)
+
+    library = IncompleteLocalGridLibrary()
+    messages = []
+    segment = SpectrumSegment(
+        wave=np.arange(5000.0, 5006.0),
+        flux=np.ones(6),
+        err=np.full(6, 0.05),
+        wave_medium="vacuum",
+        name="incomplete-grid",
+    )
+
+    result = fit_phoenix_full_spectrum(
+        segment,
+        phoenix_lib=library,
+        p0=(5100.0, 0.0, 3.5, 0.0),
+        mdeg=0,
+        rv_init=None,
+        multistart=1,
+        max_nfev=1,
+        forward_model="interp_observed",
+        progress_callback=messages.append,
+    )
+
+    assert result["success"] is True
+    assert np.array_equal(library.built_grid["logg"], [4.0, 4.5])
+    assert library.evaluated
+    assert all(logg >= 4.0 for _teff, _feh, logg in library.evaluated)
+    assert any(
+        "Trimmed local PHOENIX interpolation grid" in str(message)
+        for message in messages
+    )
+
+
 def test_local_multistarts_are_deterministic_and_inside_bounds():
     center = np.array([5000.0, -0.5, 4.0, 12.0])
     bounds = ((4500.0, -1.0, 3.0, -100.0), (5500.0, 0.5, 5.0, 100.0))

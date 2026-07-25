@@ -65,6 +65,7 @@ from Spyctres.phoenix import PhoenixLibrary
 
 DEFAULT_MANIFEST = REPO_ROOT / "examples" / "data" / "gaia_benchmark" / "manifest.json"
 ORDINARY_ROLES = {"standard"}
+STRESS_ROLE_MARKERS = ("stress", "peculiar", "diagnostic", "unsupported")
 
 RECOVERY_THRESHOLDS = {
     "teff": {
@@ -400,21 +401,41 @@ def _float_or_none(value):
     return out
 
 
-def _benchmark_fit_kwargs(setup_payload, args):
+def _is_stress_role(role):
+    role = str(role or "").strip().lower()
+    return role not in ORDINARY_ROLES or any(marker in role for marker in STRESS_ROLE_MARKERS)
+
+
+def _benchmark_fit_kwargs(setup_payload, args, row=None):
     fit_kwargs = dict(setup_payload.get("fit_kwargs") or {})
     if args.bounds_policy == "benchmark_fgk":
-        fit_kwargs.update(
-            {
-                "p0": (5500.0, -0.5, 4.0, 0.0),
-                "bounds": (
-                    (3000.0, -2.5, 0.5, -150.0),
-                    (8000.0, 0.5, 5.5, 150.0),
-                ),
-                "coarse_teff_grid": [3500.0, 4500.0, 5500.0, 6500.0, 7500.0],
-                "coarse_feh_grid": [-2.5, -1.5, -0.5, 0.0, 0.5],
-                "coarse_logg_grid": [1.0, 3.0, 4.5, 5.0],
-            }
-        )
+        role = None if row is None else row.get("validation_role")
+        if _is_stress_role(role):
+            fit_kwargs.update(
+                {
+                    "p0": (5500.0, -1.0, 3.5, 0.0),
+                    "bounds": (
+                        (4000.0, -2.5, 1.5, -150.0),
+                        (7000.0, 0.5, 5.5, 150.0),
+                    ),
+                    "coarse_teff_grid": [4500.0, 5500.0, 6500.0],
+                    "coarse_feh_grid": [-2.0, -1.0, 0.0],
+                    "coarse_logg_grid": [2.5, 3.5, 4.5],
+                }
+            )
+        else:
+            fit_kwargs.update(
+                {
+                    "p0": (5500.0, 0.0, 4.0, 0.0),
+                    "bounds": (
+                        (4000.0, -1.0, 1.0, -150.0),
+                        (7000.0, 0.5, 5.5, 150.0),
+                    ),
+                    "coarse_teff_grid": [4500.0, 5500.0, 6500.0],
+                    "coarse_feh_grid": [-1.0, 0.0, 0.5],
+                    "coarse_logg_grid": [1.5, 3.0, 4.5],
+                }
+            )
     fit_kwargs.update(
         {
             "multistart": int(args.multistart),
@@ -670,7 +691,7 @@ def _fit_record(segment, row, setup_payload, fit_kwargs, args, phoenix_lib):
         plot_dir = Path(args.fit_plot_dir).expanduser().resolve()
         plot_dir.mkdir(parents=True, exist_ok=True)
         plot_path = plot_dir / "{0}_fit.png".format(_safe_name(target_id))
-        fig, _axes = plot_fit_referee(result, savepath=str(plot_path))
+        fig, _axes = plot_fit_referee(result, segment=segment, savepath=str(plot_path))
         plt.close(fig)
         plot_paths["referee_fit"] = str(plot_path)
     result_payload = result.to_dict(
@@ -790,7 +811,7 @@ def main(argv=None):
                 include_readiness=True,
             )
             setup_payload = setup.to_dict()
-            fit_kwargs = _benchmark_fit_kwargs(setup_payload, args)
+            fit_kwargs = _benchmark_fit_kwargs(setup_payload, args, row=row)
             record = _base_record(row, segment, setup_payload, fit_kwargs, args)
             if args.run_fits:
                 print("  Running PHOENIX benchmark recovery fit...", flush=True)

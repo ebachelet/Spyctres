@@ -1854,6 +1854,14 @@ def _default_coarse_grid(full_grid, targets):
     return np.unique([grid[np.argmin(np.abs(grid - value))] for value in targets])
 
 
+def _nearest_axis_value(axis, value):
+    """Return the available axis value nearest to ``value``."""
+    axis = np.asarray(axis, dtype=float)
+    if axis.ndim != 1 or axis.size == 0:
+        raise ValueError("axis must be a non-empty 1D array.")
+    return float(axis[int(np.argmin(np.abs(axis - float(value))))])
+
+
 def _axis_between_coarse_neighbors(full_grid, coarse_grid, center, max_points):
     """Return installed nodes bracketed by neighboring sparse-grid values."""
     full_grid = np.unique(np.asarray(full_grid, dtype=float))
@@ -3133,6 +3141,10 @@ def fit_phoenix_full_spectrum(
 
     # Materialize one local interpolation grid around either p0 or the best
     # sparse-grid node. Every local multistart below reuses this same grid.
+    local_grid_was_internal = (
+        teff_grid is None and feh_grid is None and logg_grid is None
+    )
+
     if teff_grid is None:
         teff_grid_req = _pick_subgrid(
             phoenix_lib.DEFAULT_TEFF_GRID, teff0, half_width=800.0, n_min=5, n_max=9
@@ -3153,6 +3165,50 @@ def fit_phoenix_full_spectrum(
         )
     else:
         logg_grid_req = np.asarray(logg_grid, dtype=float)
+
+    if local_grid_was_internal and hasattr(phoenix_lib, "complete_subgrid"):
+        original_grid = (
+            np.asarray(teff_grid_req, dtype=float),
+            np.asarray(feh_grid_req, dtype=float),
+            np.asarray(logg_grid_req, dtype=float),
+        )
+        try:
+            teff_grid_req, feh_grid_req, logg_grid_req = phoenix_lib.complete_subgrid(
+                teff_grid_req,
+                feh_grid_req,
+                logg_grid_req,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "No complete PHOENIX interpolation subgrid could be built from "
+                "the internally selected local grid. Pass explicit teff_grid, "
+                "feh_grid, and logg_grid values supported by your installed "
+                "PHOENIX library."
+            ) from exc
+        trimmed_grid = (
+            np.asarray(teff_grid_req, dtype=float),
+            np.asarray(feh_grid_req, dtype=float),
+            np.asarray(logg_grid_req, dtype=float),
+        )
+        if any(
+            len(before) != len(after)
+            or not np.allclose(before, after, rtol=0.0, atol=0.0)
+            for before, after in zip(original_grid, trimmed_grid)
+        ):
+            old_start = (float(teff0), float(feh0), float(logg0))
+            teff0 = _nearest_axis_value(teff_grid_req, teff0)
+            feh0 = _nearest_axis_value(feh_grid_req, feh0)
+            logg0 = _nearest_axis_value(logg_grid_req, logg0)
+            report(
+                "Trimmed local PHOENIX interpolation grid to complete available templates.",
+                phase="phoenix_cache",
+                payload={
+                    "original_grid_sizes": [int(len(axis)) for axis in original_grid],
+                    "trimmed_grid_sizes": [int(len(axis)) for axis in trimmed_grid],
+                    "original_start": list(old_start),
+                    "adjusted_start": [float(teff0), float(feh0), float(logg0)],
+                },
+            )
 
     if not phoenix_lib.interpolator_matches(
         model_wave_grid,

@@ -77,7 +77,8 @@ scientific than smoke tests.
   validation path, `gaia_benchmark_validation.py` writes audit-only JSON/CSV
   and summary plots by default; expensive PHOENIX recovery fits are opt-in with
   `--run-fits`. Literature parameters are recorded only for post-fit deltas,
-  while stress targets remain separate from ordinary recovery statistics.
+  while stress targets remain bounded and separate from ordinary recovery
+  statistics.
 - `diagnostic_window_audit.py` runs the PHOENIX-free diagnostic-window selector
   over a manifest, such as the bundled XSL Figure 1 validation manifest, and
   writes role-aware JSON/CSV summaries plus an optional top-window heatmap. Use

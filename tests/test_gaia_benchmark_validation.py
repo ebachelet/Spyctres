@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from Spyctres.io import SpectrumSegment
 from scripts import gaia_benchmark_validation as gbs
 
 
@@ -111,14 +112,94 @@ def test_gaia_benchmark_fit_kwargs_use_reference_independent_search_box():
         }
     }
 
-    fit_kwargs = gbs._benchmark_fit_kwargs(setup_payload, args)
+    fit_kwargs = gbs._benchmark_fit_kwargs(
+        setup_payload,
+        args,
+        row={"validation_role": "standard"},
+    )
 
-    assert fit_kwargs["p0"] == (5500.0, -0.5, 4.0, 0.0)
-    assert fit_kwargs["bounds"][0][1] == pytest.approx(-2.5)
-    assert -2.5 in fit_kwargs["coarse_feh_grid"]
+    assert fit_kwargs["p0"] == (5500.0, 0.0, 4.0, 0.0)
+    assert fit_kwargs["bounds"] == (
+        (4000.0, -1.0, 1.0, -150.0),
+        (7000.0, 0.5, 5.5, 150.0),
+    )
+    assert fit_kwargs["coarse_feh_grid"] == [-1.0, 0.0, 0.5]
     assert fit_kwargs["multistart"] == 3
     assert fit_kwargs["rv_grid_n"] == 17
     assert fit_kwargs["forward_model"] == "native_interp"
+
+
+def test_gaia_benchmark_stress_fit_kwargs_keep_bounded_metal_poor_search():
+    args = SimpleNamespace(
+        bounds_policy="benchmark_fgk",
+        multistart=2,
+        rv_grid_n=21,
+        max_nfev=200,
+        mdeg=2,
+    )
+
+    fit_kwargs = gbs._benchmark_fit_kwargs(
+        {"fit_kwargs": {}},
+        args,
+        row={"validation_role": "metal_poor_stress"},
+    )
+
+    assert fit_kwargs["p0"] == (5500.0, -1.0, 3.5, 0.0)
+    assert fit_kwargs["bounds"][0][1] == pytest.approx(-2.5)
+    assert fit_kwargs["coarse_feh_grid"] == [-2.0, -1.0, 0.0]
+    assert fit_kwargs["coarse_teff_grid"] == [4500.0, 5500.0, 6500.0]
+
+
+def test_gaia_benchmark_fit_plot_receives_observed_segment(tmp_path, monkeypatch):
+    segment = SpectrumSegment(
+        wave=np.linspace(4800.0, 4810.0, 5),
+        flux=np.ones(5),
+        err=np.full(5, 0.02),
+        wave_medium="vacuum",
+        name="synthetic",
+    )
+    called = {}
+
+    class FakeResult:
+        def to_dict(self, **kwargs):
+            called["to_dict_kwargs"] = kwargs
+            return {
+                "success": True,
+                "teff": 5800.0,
+                "logg": 4.4,
+                "feh": 0.0,
+                "rv_kms": 0.0,
+                "chi2_red": 1.0,
+                "quality_flags": [],
+                "generated_files": kwargs.get("plot_paths"),
+            }
+
+    def fake_fit_stellar_spectrum(*args, **kwargs):
+        return FakeResult()
+
+    def fake_plot_fit_referee(result, *, segment=None, savepath=None, **kwargs):
+        called["segment"] = segment
+        called["savepath"] = savepath
+        fig, ax = gbs.plt.subplots()
+        return fig, ax
+
+    monkeypatch.setattr(gbs, "fit_stellar_spectrum", fake_fit_stellar_spectrum)
+    monkeypatch.setattr(gbs, "plot_fit_referee", fake_plot_fit_referee)
+    args = SimpleNamespace(fit_plot_dir=str(tmp_path), verbose=0)
+
+    record = gbs._fit_record(
+        segment,
+        {"hip": "HIP79672"},
+        {},
+        {},
+        args,
+        phoenix_lib=object(),
+    )
+
+    assert record["fit"]["success"] is True
+    assert called["segment"] is segment
+    assert called["savepath"].endswith("HIP79672_fit.png")
+    assert called["to_dict_kwargs"]["include_local_paths"] is True
 
 
 def test_gaia_benchmark_recovery_summary_excludes_stress_roles():
