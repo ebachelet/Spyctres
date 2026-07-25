@@ -288,7 +288,8 @@ target is:
 - ordinary XSL behavior validation and Gaia benchmark-star accuracy validation
   have been reviewed separately;
 - the bundled Gaia FGK Benchmark Stars subset remains small, cited, checksummed,
-  and used as validation data rather than hidden fit priors;
+  and used by an audit-first validation runner as comparison data rather than
+  hidden fit priors;
 - SDSS/UVES-POP external products can be ingested and audited without bundling
   those data files in the repository;
 - batch quickscan/refine has measured runtime, skip-rate, and false-narrowing
@@ -313,3 +314,5 @@ target is:
 - Which exact pass/fail tolerances should the first Gaia FGK Benchmark Stars
   accuracy gate use, given that the bundled files are normalized R=42,000
   HARPS products and Spyctres still has known PHOENIX/LSF/abundance limits?
+  The current runner uses provisional first-pass review bands, not a release
+  acceptance gate.

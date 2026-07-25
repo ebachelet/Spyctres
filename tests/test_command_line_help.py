@@ -67,6 +67,10 @@ def _run_command(*args):
             ["examples/publication_quality_xshooter_uvb.py", "--help"],
             "Publication-oriented",
         ),
+        (
+            ["scripts/gaia_benchmark_validation.py", "--help"],
+            "Gaia FGK Benchmark Stars validation",
+        ),
     ],
 )
 def test_user_facing_commands_print_help_without_running_fits(command, expected):

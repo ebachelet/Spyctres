@@ -491,7 +491,10 @@ unknown unless supplied by the user or external provenance. Gaia FGK Benchmark
 Stars Library spectra are separate validation products: the bundled examples
 use the public common-resolution, normalized, R=42,000 HARPS files over
 480-680 nm, with the literature parameters recorded for comparison rather than
-used as hidden fit priors.
+used as hidden fit priors. Run
+`python scripts/gaia_benchmark_validation.py --output-json /tmp/gbs.json --output-csv /tmp/gbs.csv --output-summary-plot /tmp/gbs.png`
+for the audit-only benchmark summary; add `--run-fits` only when you want the
+PHOENIX recovery comparison.
 Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
 deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion
 frame and stellar-rest correction status are tracked independently. Instrumental

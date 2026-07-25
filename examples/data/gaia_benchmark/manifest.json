@@ -42,7 +42,9 @@
       "logg_ref": 3.98,
       "feh_ref": -0.03,
       "snr": 728.0,
-      "source_quality_flag": "-"
+      "source_quality_flag": "-",
+      "validation_role": "standard",
+      "notes": "F-type subgiant benchmark; useful for ordinary FGK recovery checks."
     },
     {
       "file": "HIP69673_HARPS_1_R42KNorm.txt.gz",
@@ -57,7 +59,9 @@
       "logg_ref": 1.58,
       "feh_ref": -0.55,
       "snr": 382.0,
-      "source_quality_flag": "-"
+      "source_quality_flag": "-",
+      "validation_role": "standard",
+      "notes": "K giant benchmark; useful for testing gravity and cool-star optical-metal behaviour."
     },
     {
       "file": "HIP76976_HARPS_1_R42KNorm.txt.gz",
@@ -72,7 +76,9 @@
       "logg_ref": 3.75,
       "feh_ref": -2.41,
       "snr": 419.0,
-      "source_quality_flag": "-"
+      "source_quality_flag": "-",
+      "validation_role": "metal_poor_stress",
+      "notes": "Very metal-poor benchmark. Include in diagnostics, but report separately from ordinary recovery statistics until alpha-enhancement/composition handling is validated."
     },
     {
       "file": "HIP79672_HARPS_1_R42KNorm.txt.gz",
@@ -87,7 +93,9 @@
       "logg_ref": 4.42,
       "feh_ref": 0.06,
       "snr": 1040.0,
-      "source_quality_flag": "-"
+      "source_quality_flag": "-",
+      "validation_role": "standard",
+      "notes": "Solar-analog dwarf benchmark; useful as the cleanest ordinary FGK recovery check."
     }
   ]
 }

@@ -158,6 +158,22 @@ HARPS products over 480-680 nm. They are intended for external validation of
 parameter recovery, with literature parameters recorded in the data manifest;
 those parameters should not be used as hidden priors in ordinary fits.
 
+To write the lightweight benchmark audit table and coverage plot without
+running PHOENIX fits:
+
+```bash
+python scripts/gaia_benchmark_validation.py \
+  --output-json /tmp/spyctres_gbs_audit.json \
+  --output-csv /tmp/spyctres_gbs_audit.csv \
+  --output-summary-plot /tmp/spyctres_gbs_audit.png \
+  --force
+```
+
+After the fit assumptions are reviewed, add `--run-fits` and optionally
+`--fit-plot-dir /tmp/spyctres_gbs_fit_plots` to compare recovered parameters
+against the literature values. The validation runner keeps those reference
+values out of the fit priors.
+
 Before fitting your own SDSS/SEGUE or UVES-POP spectra, you can run the
 external-spectrum validation helper. It checks ingestion, masks, metadata, and
 fit-readiness, and can keep clean/dirty test sets separated for later review;
