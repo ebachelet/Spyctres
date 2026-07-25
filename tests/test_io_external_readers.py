@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import gzip
 from astropy.io import fits
 
 from Spyctres.io import (
@@ -33,6 +34,18 @@ def _write_sdss_spec(path, wave_A, flux, ivar, and_mask, wdisp=None, or_mask=Non
 def test_uves_pop_two_column_nm_converts_to_angstrom(tmp_path):
     path = tmp_path / "uves_nm.dat"
     path.write_text("500.0 1.0\n500.2 1.2\n", encoding="utf-8")
+
+    segment = read_uves_pop_ascii(path)
+
+    assert np.allclose(segment.wave, [5000.0, 5002.0])
+    assert np.allclose(segment.flux, [1.0, 1.2])
+    assert segment.meta["wave_unit_input"] == "nm"
+
+
+def test_uves_pop_gzip_two_column_nm_converts_to_angstrom(tmp_path):
+    path = tmp_path / "uves_nm.dat.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write("500.0 1.0\n500.2 1.2\n")
 
     segment = read_uves_pop_ascii(path)
 

@@ -72,6 +72,9 @@ scientific than smoke tests.
   Archive/product regions appear only when a reader supplies that metadata. The
   script deliberately does not repair calibration, run PHOENIX fits, or
   introduce fitting presets for those archives.
+- Bundled Gaia FGK Benchmark Stars spectra can be inspected with
+  `io_smoketest.py --instrument gaia_benchmark`. They are reference-validation
+  data, not developer smoke-test inputs.
 - `diagnostic_window_audit.py` runs the PHOENIX-free diagnostic-window selector
   over a manifest, such as the bundled XSL Figure 1 validation manifest, and
   writes role-aware JSON/CSV summaries plus an optional top-window heatmap. Use

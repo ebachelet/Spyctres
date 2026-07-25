@@ -374,6 +374,7 @@ Current reader coverage includes:
 - FLOYDS ASCII/CSV exports
 - Gemini/GMOS ASCII exports
 - UVES-POP ASCII spectra
+- Gaia FGK Benchmark Stars R=42,000 normalized ASCII spectra
 - SDSS/SEGUE `spec-PLATE-MJD-FIBER` FITS spectra
 
 Readers return a generic `SpectrumSegment` object so that fitting code can remain instrument-agnostic.
@@ -486,7 +487,11 @@ The current PHOENIX fitter still requires constant LSF broadening, so the
 readiness audit warns when SDSS tabulated LSF is present but the likelihood is
 using a constant-R assumption. UVES-POP spectra carry a nominal `R=80000`
 descriptor with cautionary metadata; wavelength medium and frame remain
-unknown unless supplied by the user or external provenance.
+unknown unless supplied by the user or external provenance. Gaia FGK Benchmark
+Stars Library spectra are separate validation products: the bundled examples
+use the public common-resolution, normalized, R=42,000 HARPS files over
+480-680 nm, with the literature parameters recorded for comparison rather than
+used as hidden fit priors.
 Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
 deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion
 frame and stellar-rest correction status are tracked independently. Instrumental

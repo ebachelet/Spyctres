@@ -161,9 +161,10 @@ def test_instrument_registry_lists_canonical_names_and_aliases():
         "floyds",
         "gemini",
         "uves_pop",
+        "gaia_benchmark",
         "sdss",
     } <= set(canonical)
-    assert {"x-shooter", "uves-pop", "segue", "pepsi_nor"} <= set(aliases)
+    assert {"x-shooter", "uves-pop", "gbs", "segue", "pepsi_nor"} <= set(aliases)
 
     info = get_instrument_info("x-shooter")
     assert isinstance(info, InstrumentInfo)

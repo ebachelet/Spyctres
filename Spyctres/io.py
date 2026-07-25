@@ -1,4 +1,5 @@
 # Spyctres/io.py
+import gzip
 import io as _pyio
 import os
 import re
@@ -2018,25 +2019,13 @@ def read_gemini_gmos_ascii(path, name=None):
     ).sorted()
 
 
-def read_uves_pop_ascii(
-    path,
-    name=None,
-    wave_unit="auto",
-    err_column=None,
-):
-    """
-    Read a UVES-POP ASCII spectrum into the common Spyctres container.
+def _open_ascii_spectrum_text(path):
+    if str(path).lower().endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return open(path, "r", encoding="utf-8", errors="replace")
 
-    The reader treats column 0 as wavelength and column 1 as flux. A third
-    column is *not* assumed to be an uncertainty unless ``err_column`` is
-    explicitly supplied as a zero-based numeric column index. With
-    ``wave_unit="auto"``, wavelength values below 2000 are interpreted as nm
-    and converted to Angstrom; otherwise they are interpreted as Angstrom.
 
-    UVES-POP products are high-resolution atlas spectra, but their exact
-    product-specific LSF/provenance should be checked before precision work.
-    The stored R=80000 descriptor is therefore nominal/cautionary metadata.
-    """
+def _read_numeric_ascii_spectrum_columns(path, label, err_column=None):
     path = os.path.abspath(os.path.expanduser(path))
 
     wave_values = []
@@ -2049,7 +2038,7 @@ def read_uves_pop_ascii(
         if err_column < 0:
             raise ValueError("err_column must be a zero-based non-negative column index.")
 
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+    with _open_ascii_spectrum_text(path) as handle:
         for line_number, line in enumerate(handle, start=1):
             stripped = line.strip()
             if not stripped or stripped.startswith(("#", "!", ";")):
@@ -2089,20 +2078,26 @@ def read_uves_pop_ascii(
 
     if len(wave_values) == 0:
         raise ValueError(
-            "No rows with at least two leading numeric columns found in UVES-POP ASCII file: {0}".format(
-                path
-            )
+            "No rows with at least two leading numeric columns found in "
+            "{0} ASCII file: {1}".format(label, path)
         )
 
-    wave = np.asarray(wave_values, dtype=float)
-    flux = np.asarray(flux_values, dtype=float)
-    err = None if err_values is None else np.asarray(err_values, dtype=float)
+    return (
+        np.asarray(wave_values, dtype=float),
+        np.asarray(flux_values, dtype=float),
+        None if err_values is None else np.asarray(err_values, dtype=float),
+        int(n_numeric_rows),
+    )
+
+
+def _ascii_wavelength_to_angstrom(wave, wave_unit, label):
+    wave = np.asarray(wave, dtype=float)
 
     unit = str(wave_unit).strip().lower()
     if unit == "auto":
         finite_wave = wave[np.isfinite(wave)]
         if finite_wave.size == 0:
-            raise ValueError("UVES-POP wavelength column contains no finite values.")
+            raise ValueError("{0} wavelength column contains no finite values.".format(label))
         unit = "nm" if float(np.nanmax(finite_wave)) < 2000.0 else "angstrom"
     if unit in {"a", "aa", "angstrom", "angstroms", "ang"}:
         wave_A = wave
@@ -2112,6 +2107,37 @@ def read_uves_pop_ascii(
         unit_input = "nm"
     else:
         raise ValueError("wave_unit must be 'auto', 'angstrom', or 'nm'.")
+
+    return wave_A, unit_input
+
+
+def read_uves_pop_ascii(
+    path,
+    name=None,
+    wave_unit="auto",
+    err_column=None,
+):
+    """
+    Read a UVES-POP ASCII spectrum into the common Spyctres container.
+
+    The reader treats column 0 as wavelength and column 1 as flux. A third
+    column is *not* assumed to be an uncertainty unless ``err_column`` is
+    explicitly supplied as a zero-based numeric column index. With
+    ``wave_unit="auto"``, wavelength values below 2000 are interpreted as nm
+    and converted to Angstrom; otherwise they are interpreted as Angstrom.
+    Plain text and ``.gz`` compressed text files are supported.
+
+    UVES-POP products are high-resolution atlas spectra, but their exact
+    product-specific LSF/provenance should be checked before precision work.
+    The stored R=80000 descriptor is therefore nominal/cautionary metadata.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    wave, flux, err, n_numeric_rows = _read_numeric_ascii_spectrum_columns(
+        path,
+        "UVES-POP",
+        err_column=err_column,
+    )
+    wave_A, unit_input = _ascii_wavelength_to_angstrom(wave, wave_unit, "UVES-POP")
 
     mask = np.isfinite(wave_A) & np.isfinite(flux)
     if err is not None:
@@ -2175,6 +2201,91 @@ def read_uves_pop_ascii(
             quantity="R",
             value=80000.0,
             source="nominal UVES-POP atlas resolving power; cautionary metadata",
+        ),
+    ).sorted()
+
+
+def read_gaia_benchmark_ascii(
+    path,
+    name=None,
+    wave_unit="auto",
+    err_column=2,
+):
+    """
+    Read a Gaia FGK Benchmark Stars Library ASCII spectrum.
+
+    The current bundled examples use the public GBSv3 R=42,000 normalized
+    spectra described by Casamiquela et al. (2026):
+    https://doi.org/10.1051/0004-6361/202555211
+
+    These tabular text products contain ``waveobs flux err`` with wavelengths
+    in nm over 480--680 nm. Spyctres stores the data as normalized flux, keeps
+    the wavelength medium as unknown unless the user overrides it, and records
+    the source as a stellar-rest/laboratory-wavelength benchmark product.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    wave, flux, err, n_numeric_rows = _read_numeric_ascii_spectrum_columns(
+        path,
+        "Gaia benchmark",
+        err_column=err_column,
+    )
+    wave_A, unit_input = _ascii_wavelength_to_angstrom(wave, wave_unit, "Gaia benchmark")
+
+    mask = np.isfinite(wave_A) & np.isfinite(flux)
+    if err is not None:
+        mask &= np.isfinite(err) & (err > 0)
+
+    basename = os.path.basename(path)
+    match = re.match(r"^(HIP\d+|Sun)_([A-Za-z0-9]+)_([0-9]+)_R42KNorm", basename)
+    star_id = match.group(1) if match else None
+    source_instrument = match.group(2).upper() if match else None
+    spectrum_index = int(match.group(3)) if match else None
+
+    meta = {
+        "path": path,
+        "instrument": "Gaia FGK Benchmark Stars",
+        "archive": "Gaia FGK Benchmark Stars Library",
+        "archive_product_profile": "gbs_v3_r42000_normalized_ascii",
+        "source_url": "https://www.blancocuaresma.com/s/benchmarkstars",
+        "reference_id": "casamiquela2026_gbs_v3_spectral_library",
+        "wave_unit_input": unit_input,
+        "wave_medium": "unknown",
+        "wave_frame": "stellar_rest",
+        "observer_frame": "barycentric",
+        "stellar_rest_status": "corrected",
+        "flux_state": "continuum-normalized",
+        "wavelength_range_nm": [480.0, 680.0],
+        "resolution_R": 42000.0,
+        "resolution_note": (
+            "GBSv3 common-resolution normalized product; suitable for "
+            "benchmark validation, not a substitute for instrument-native LSF modeling."
+        ),
+        "benchmark_library_version": "2025/GBSv3",
+        "benchmark_star_id": star_id,
+        "source_instrument": source_instrument,
+        "source_spectrum_index": spectrum_index,
+        "gaia_benchmark_reader": {
+            "numeric_rows": int(n_numeric_rows),
+            "err_column": None if err_column is None else int(err_column),
+            "gzip_supported": str(path).lower().endswith(".gz"),
+        },
+    }
+
+    return SpectrumSegment(
+        wave=wave_A,
+        flux=flux,
+        err=err,
+        mask=mask,
+        meta=meta,
+        wave_medium="unknown",
+        wave_frame="stellar_rest",
+        name=name or basename,
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        resolution=ResolutionDescriptor(
+            quantity="R",
+            value=42000.0,
+            source="GBSv3 common-resolution normalized spectral library",
         ),
     ).sorted()
 
@@ -2744,6 +2855,33 @@ register_reader(
     segment_structure="single segment",
     resolving_power="nominal R=80000 stored as cautionary metadata",
     known_product_quality_masks=("UVES-POP archive gap/flag catalog",),
+)
+register_reader(
+    [
+        "gaia_benchmark",
+        "gaia-benchmark",
+        "gbs",
+        "gbs_v3",
+        "fgk_benchmark",
+        "gaia_fgk_benchmark",
+    ],
+    read_gaia_benchmark_ascii,
+    canonical_name="gaia_benchmark",
+    expected_file_type="Gaia FGK Benchmark Stars R=42,000 normalized ASCII spectrum",
+    wavelength_location="column 0 / waveobs",
+    flux_column="column 1 / flux",
+    uncertainty_column="column 2 / err by default",
+    wavelength_unit="auto: nm if max(wave)<2000, otherwise Angstrom",
+    default_wave_medium="unknown",
+    default_observer_frame="barycentric",
+    default_stellar_rest_status="corrected",
+    flux_state="continuum-normalized benchmark-library product",
+    segment_structure="single 480-680 nm segment",
+    resolving_power="common-resolution R=42000",
+    notes=(
+        "GBSv3 products are useful for external validation of FGK recovery. "
+        "Use their literature parameters for benchmark comparison, not as hidden fit priors."
+    ),
 )
 register_reader(
     ["sdss", "sdss_spec", "segue"],

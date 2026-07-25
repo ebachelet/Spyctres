@@ -12,7 +12,7 @@ from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
-from Spyctres.io import read_spectrum, concatenate_segments
+from Spyctres.io import concatenate_segments, list_instruments, read_spectrum
 from Spyctres.plotting import plot_spectrum_quicklook
 
 
@@ -83,6 +83,9 @@ def build_parser():
             "  python scripts/io_smoketest.py --instrument floyds "
             "examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv "
             "--no-show --plot-dir io_plots\n\n"
+            "  python scripts/io_smoketest.py --instrument gaia_benchmark "
+            "examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz "
+            "--no-show --plot-dir io_plots\n\n"
             "UVES-POP, SDSS, Gemini, and other readers are supported for "
             "user-supplied files, but no runnable example command is shown "
             "unless that spectrum is bundled under examples/data/."
@@ -108,7 +111,7 @@ def main():
     parser.add_argument(
         "--instrument",
         required=True,
-        choices=["pepsi", "xshooter", "floyds", "gemini", "uves_pop", "sdss"],
+        choices=list_instruments(),
         help="Instrument reader to use",
     )
     parser.add_argument(

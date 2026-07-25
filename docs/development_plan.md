@@ -285,8 +285,10 @@ target is:
 - wavelength medium, observer frame, stellar-rest status, mask policy,
   formal-error policy, PHOENIX model-family/composition assumptions, and
   resolution/LSF source are recorded in serialized output;
-- ordinary XSL behavior validation and benchmark-star accuracy validation have
-  been reviewed separately;
+- ordinary XSL behavior validation and Gaia benchmark-star accuracy validation
+  have been reviewed separately;
+- the bundled Gaia FGK Benchmark Stars subset remains small, cited, checksummed,
+  and used as validation data rather than hidden fit priors;
 - SDSS/UVES-POP external products can be ingested and audited without bundling
   those data files in the repository;
 - batch quickscan/refine has measured runtime, skip-rate, and false-narrowing
@@ -308,6 +310,6 @@ target is:
   structured audit/setup objects once those exist?
 - What PHOENIX composition policy should be adopted for metal-poor or
   alpha-enhanced regimes when the current fit is only three-dimensional?
-- Which real validation set should be treated as the first benchmark-accuracy
-  gate after XSL behavior validation: Gaia FGK Benchmark Stars or a smaller
-  locally available standard-star set?
+- Which exact pass/fail tolerances should the first Gaia FGK Benchmark Stars
+  accuracy gate use, given that the bundled files are normalized R=42,000
+  HARPS products and Spyctres still has known PHOENIX/LSF/abundance limits?

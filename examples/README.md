@@ -7,7 +7,9 @@ All runnable commands in this document use spectra bundled under
 `examples/data/`. If you want to use SDSS, UVES-POP, or another external
 archive product, first download/copy that file yourself and replace the input
 path explicitly; those archive files are not treated as reproducible packaged
-examples unless they are present in `examples/data/`.
+examples unless they are present in `examples/data/`. A small Gaia FGK
+Benchmark Stars subset is bundled separately under `examples/data/gaia_benchmark/`
+for later reference-validation work.
 
 ## Recommended order
 
@@ -134,8 +136,27 @@ modelling and fitted line widths should not be interpreted as calibrated
 instrumental-broadening measurements. The fitting examples use
 `--sdss-mask-policy stellar_strict` when `--sdss-mask-policy auto` is left in
 place, while the generic SDSS reader default remains `and_mask_conservative`.
-No SDSS spectra are currently bundled in `examples/data/`, so the reproducible
-examples below use the packaged X-SHOOTER, FLOYDS, PEPSI, and XSL files.
+No SDSS or UVES-POP spectra are currently bundled in `examples/data/`, so the
+reproducible fitting examples below use the packaged X-SHOOTER, FLOYDS, PEPSI,
+and XSL files. The Gaia benchmark subset is bundled as validation/reference
+data for follow-up checks rather than as a beginner fitting requirement.
+
+For a quick ingestion/plot check of a bundled Gaia FGK Benchmark Stars Library
+spectrum, use the dedicated reader rather than pretending the file is
+UVES-POP:
+
+```bash
+python scripts/io_smoketest.py \
+  --instrument gaia_benchmark \
+  examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz \
+  --no-show \
+  --plot-dir /tmp/spyctres_io_plots
+```
+
+These benchmark spectra are public common-resolution, normalized R=42,000
+HARPS products over 480-680 nm. They are intended for external validation of
+parameter recovery, with literature parameters recorded in the data manifest;
+those parameters should not be used as hidden priors in ordinary fits.
 
 Before fitting your own SDSS/SEGUE or UVES-POP spectra, you can run the
 external-spectrum validation helper. It checks ingestion, masks, metadata, and

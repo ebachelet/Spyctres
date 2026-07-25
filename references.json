@@ -130,6 +130,33 @@
       ]
     },
     {
+      "id": "blanco_cuaresma2014_gbs_spectral_library",
+      "citation": "Blanco-Cuaresma, S., Soubiran, C., Jofre, P., & Heiter, U. (2014), The Gaia FGK benchmark stars. High resolution spectral library, Astronomy & Astrophysics, 566, A98.",
+      "doi": "10.1051/0004-6361/201323153",
+      "url": "https://doi.org/10.1051/0004-6361/201323153",
+      "validated_via": "CDS ReadMe J/A+A/566/A98, DOI metadata, and official benchmark-stars archive page",
+      "validated_on": "2026-07-24",
+      "description": "Introduces the Gaia FGK Benchmark Stars high-resolution spectral library as a homogeneous calibration set for testing stellar-analysis methods and cross-calibrating spectroscopic surveys. Spyctres uses this work as the historical reference for treating benchmark-star spectra as external validation data rather than training or hidden-prior inputs.",
+      "affected_code": [
+        "Spyctres/io.py:read_gaia_benchmark_ascii",
+        "examples/data/gaia_benchmark/manifest.json"
+      ]
+    },
+    {
+      "id": "casamiquela2026_gbs_v3_spectral_library",
+      "citation": "Casamiquela, L. et al. (2026), Gaia FGK benchmark stars: Spectral library and abundances of alpha and Fe-peak elements of the third version, Astronomy & Astrophysics, 705, A167.",
+      "doi": "10.1051/0004-6361/202555211",
+      "url": "https://doi.org/10.1051/0004-6361/202555211",
+      "validated_via": "A&A/DOI metadata, official benchmark-stars page, and downloaded file headers/links",
+      "validated_on": "2026-07-24",
+      "description": "Provides the current GBSv3 high-S/N visual spectral library and reference parameters/abundances for FGK benchmark stars. The bundled Spyctres example subset uses its public 480-680 nm HARPS spectra degraded to common R=42000 and normalized flux, with reference parameters recorded only for validation comparison.",
+      "affected_code": [
+        "Spyctres/io.py:read_gaia_benchmark_ascii",
+        "examples/data/gaia_benchmark/manifest.json",
+        "examples/data/gaia_benchmark/README.md"
+      ]
+    },
+    {
       "id": "verro2022_xsl_dr3",
       "citation": "Verro, K. et al. (2022), The X-shooter Spectral Library (XSL): Data Release 3, Astronomy & Astrophysics, 660, A34.",
       "doi": "10.1051/0004-6361/202142388",
