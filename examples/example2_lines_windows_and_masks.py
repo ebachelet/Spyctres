@@ -18,7 +18,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -27,7 +26,7 @@ if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import Spyctres as sp
-import numpy as np
+from Spyctres._serialization import atomic_write_json
 from Spyctres.plotting import save_figure
 
 
@@ -84,20 +83,6 @@ def build_parser():
     return parser
 
 
-def _jsonable(value):
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return _jsonable(value.item())
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    return value
-
-
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
@@ -140,16 +125,13 @@ def main(argv=None):
         print("Saved plot: {0}".format(args.output_plot), flush=True)
 
     if args.output_json:
-        Path(args.output_json).parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "example": "example2_lines_windows_and_masks",
             "diagnostic_windows": windows,
             "mask": mask.to_metadata(),
             "line_fit": line_result.to_dict(),
         }
-        with open(args.output_json, "w", encoding="utf-8") as handle:
-            json.dump(_jsonable(payload), handle, indent=2, allow_nan=False)
-            handle.write("\n")
+        atomic_write_json(args.output_json, payload)
         print("Wrote JSON: {0}".format(args.output_json), flush=True)
 
     import matplotlib.pyplot as plt

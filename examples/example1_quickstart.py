@@ -21,7 +21,6 @@ Example opt-in fit:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -30,6 +29,7 @@ if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import Spyctres as sp
+from Spyctres._serialization import atomic_write_json
 
 
 EXAMPLE_UVB = (
@@ -167,10 +167,7 @@ def main(argv=None):
                 plt.close(plot_fig)
 
     if args.output_json:
-        Path(args.output_json).parent.mkdir(parents=True, exist_ok=True)
-        with open(args.output_json, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, allow_nan=False)
-            handle.write("\n")
+        atomic_write_json(args.output_json, payload)
         print("Wrote JSON: {0}".format(args.output_json), flush=True)
 
     if args.no_show:
