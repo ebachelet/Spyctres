@@ -20,11 +20,11 @@ from ._serialization import (
     atomic_write_json,
     json_safe as _json_native,
 )
+from ._spectrum_helpers import spectrum_segments
 from .diagnostic_windows import (
     build_diagnostic_window_combinations,
     select_diagnostic_windows,
 )
-from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
 from .results import PhoenixFitResult
 
 
@@ -1278,16 +1278,12 @@ def _regions_for_fit(comparison):
 
 
 def _as_segments(spectrum):
-    if isinstance(spectrum, SpectrumSegment):
-        return [spectrum]
-    if isinstance(spectrum, SpectrumCollection):
-        return list(spectrum.segments)
-    if isinstance(spectrum, (list, tuple)):
-        return list(spectrum)
-    coerced = coerce_spectrum(spectrum, warn_unknown=False)
-    if isinstance(coerced, SpectrumCollection):
-        return list(coerced.segments)
-    return [coerced]
+    return spectrum_segments(
+        spectrum,
+        tuple_is_collection=True,
+        coerce=True,
+        warn_unknown=False,
+    )
 
 
 def _model_mask_arrays_from_result(result, *, n_segments):

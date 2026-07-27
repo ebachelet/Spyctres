@@ -31,11 +31,12 @@ from Spyctres._serialization import (
     atomic_write_json,
     json_safe as _json_native,
 )
+from Spyctres._spectrum_helpers import spectrum_segments
 from Spyctres.diagnostic_windows import (
     diagnostic_window_catalog,
     select_diagnostic_windows,
 )
-from Spyctres.io import SpectrumCollection, SpectrumSegment, read_spectrum
+from Spyctres.io import SpectrumSegment, read_spectrum
 
 
 DEFAULT_MANIFEST = (
@@ -718,12 +719,9 @@ def _resolve_manifest_path(manifest, value):
 
 
 def _as_segments(spectrum):
-    if isinstance(spectrum, SpectrumSegment):
-        return [spectrum]
-    if isinstance(spectrum, SpectrumCollection):
-        return list(spectrum.segments)
-    if isinstance(spectrum, (list, tuple)):
-        return list(spectrum)
+    segments = spectrum_segments(spectrum, tuple_is_collection=True, coerce=False)
+    if all(isinstance(segment, SpectrumSegment) for segment in segments):
+        return segments
     raise TypeError("Expected SpectrumSegment or SpectrumCollection.")
 
 

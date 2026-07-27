@@ -49,6 +49,14 @@ from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
+from Spyctres._spectrum_helpers import spectrum_segments
+from Spyctres._workflow_helpers import (
+    archive_mask_count as _shared_archive_mask_count,
+    archive_masks_by_segment as _shared_archive_masks_by_segment,
+    fit_kwargs_with_archive_policy as _shared_fit_kwargs_with_archive_policy,
+    resolution_assumption_for_audit as _shared_resolution_assumption_for_audit,
+    resolution_override_summary as _shared_resolution_override_summary,
+)
 from Spyctres.diagnostics import (
     KNOWN_RESIDUAL_WINDOWS,
     annotate_nonstellar_features,
@@ -58,7 +66,6 @@ from Spyctres.io import read_spectrum
 from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
 from Spyctres.preprocessing import (
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
-    archive_exclusion_masks_for_segment,
     audit_spectrum_for_fit,
     nonstellar_feature_mask,
     nonstellar_feature_masks,
@@ -342,24 +349,11 @@ def _fit_kwargs_from_args(args, spectrum):
 
 
 def _resolution_override_summary(args):
-    if args.resolution_R is None:
-        return None
-    return {
-        "resolution_source": "user_override",
-        "assumed_resolution_R": float(args.resolution_R),
-        "assumption_warning": "approximate quicklook resolution",
-    }
+    return _shared_resolution_override_summary(args.resolution_R)
 
 
 def _assumed_resolution_for_audit(args):
-    if args.resolution_R is None:
-        return None
-    return {
-        "quantity": "R",
-        "value": float(args.resolution_R),
-        "source": "user_override",
-        "assumption_warning": "approximate quicklook resolution",
-    }
+    return _shared_resolution_assumption_for_audit(args.resolution_R)
 
 
 def _display_risk_flags(args, risk_flags):
@@ -442,11 +436,7 @@ def _reader_kwargs_from_args(args):
 
 
 def _coerce_segments(spectrum):
-    if hasattr(spectrum, "segments"):
-        return list(spectrum.segments)
-    if isinstance(spectrum, (list, tuple)):
-        return list(spectrum)
-    return [spectrum]
+    return spectrum_segments(spectrum, tuple_is_collection=True, coerce=False)
 
 
 def _override_segment_wave_medium(segment, wave_medium):
@@ -480,39 +470,15 @@ def _override_spectrum_wave_medium(spectrum, wave_medium):
 
 
 def _archive_masks_by_segment(spectrum):
-    out = {}
-    for index, segment in enumerate(_coerce_segments(spectrum)):
-        masks = archive_exclusion_masks_for_segment(segment)
-        if masks:
-            out[index] = masks
-    return out
+    return _shared_archive_masks_by_segment(spectrum)
 
 
 def _archive_mask_count(archive_masks):
-    return int(sum(len(value) for value in archive_masks.values()))
+    return _shared_archive_mask_count(archive_masks)
 
 
 def _fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy):
-    fit_kwargs = dict(fit_kwargs)
-    if policy != "apply" or not archive_masks:
-        return fit_kwargs
-    existing = fit_kwargs.get("exclude_masks")
-    if existing is None:
-        fit_kwargs["exclude_masks"] = dict(archive_masks)
-        return fit_kwargs
-    merged = dict(archive_masks)
-    if isinstance(existing, dict):
-        for key, value in existing.items():
-            current = list(merged.get(key, []) or [])
-            current.extend(list(value if isinstance(value, (list, tuple)) else [value]))
-            merged[key] = current
-    else:
-        for key in list(merged):
-            current = list(merged[key])
-            current.extend(list(existing if isinstance(existing, (list, tuple)) else [existing]))
-            merged[key] = current
-    fit_kwargs["exclude_masks"] = merged
-    return fit_kwargs
+    return _shared_fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy)
 
 
 def _parse_line_groups(value, result=None, hot_teff_threshold=10500.0):

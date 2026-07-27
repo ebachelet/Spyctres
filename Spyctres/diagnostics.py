@@ -8,6 +8,7 @@ classification for DIB/telluric/intrinsic stellar origins.
 
 import numpy as np
 
+from ._spectrum_helpers import spectrum_segments
 from .preprocessing import overlapping_nonstellar_features
 
 
@@ -42,11 +43,7 @@ KNOWN_RESIDUAL_WINDOWS = (
 
 
 def _coerce_segments(spectrum):
-    if hasattr(spectrum, "segments"):
-        return list(spectrum.segments)
-    if isinstance(spectrum, (list, tuple)):
-        return list(spectrum)
-    return [spectrum]
+    return spectrum_segments(spectrum, tuple_is_collection=True, coerce=False)
 
 
 def add_quality_flag(result, flag):

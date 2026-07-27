@@ -18,11 +18,12 @@ from dataclasses import dataclass
 import numpy as np
 
 from ._serialization import json_safe
+from ._spectrum_helpers import spectrum_segments
 from .diagnostic_windows import (
     build_diagnostic_window_combinations,
     select_diagnostic_windows,
 )
-from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
+from .io import SpectrumCollection
 from .preprocessing import (
     OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES,
     audit_spectrum_for_fit,
@@ -327,14 +328,12 @@ def _jsonable(value):
 
 
 def _as_segments(spectrum):
-    if isinstance(spectrum, SpectrumSegment):
-        return [spectrum]
-    if isinstance(spectrum, SpectrumCollection):
-        return list(spectrum.segments)
-    coerced = coerce_spectrum(spectrum, warn_unknown=False)
-    if isinstance(coerced, SpectrumCollection):
-        return list(coerced.segments)
-    return [coerced]
+    return spectrum_segments(
+        spectrum,
+        tuple_is_collection=False,
+        coerce=True,
+        warn_unknown=False,
+    )
 
 
 def _segment_valid_wave(segment):

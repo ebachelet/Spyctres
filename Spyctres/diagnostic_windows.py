@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ._serialization import json_safe as _json_native
-from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
+from ._spectrum_helpers import spectrum_segments
 from .waveutils import C_KMS, convert_wavelength_medium
 
 
@@ -1244,16 +1244,12 @@ def format_diagnostic_window_table(selection, max_rows=None):
 
 
 def _as_segments(spectrum):
-    if isinstance(spectrum, SpectrumSegment):
-        return [spectrum]
-    if isinstance(spectrum, SpectrumCollection):
-        return list(spectrum.segments)
-    if isinstance(spectrum, (list, tuple)):
-        return list(spectrum)
-    coerced = coerce_spectrum(spectrum, warn_unknown=False)
-    if isinstance(coerced, SpectrumCollection):
-        return list(coerced.segments)
-    return [coerced]
+    return spectrum_segments(
+        spectrum,
+        tuple_is_collection=True,
+        coerce=True,
+        warn_unknown=False,
+    )
 
 
 def _coverage_metadata(segments):

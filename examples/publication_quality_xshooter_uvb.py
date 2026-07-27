@@ -84,10 +84,14 @@ from Spyctres._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
 )
+from Spyctres._spectrum_helpers import spectrum_segments
+from Spyctres._workflow_helpers import (
+    resolution_assumption_for_audit as _shared_resolution_assumption_for_audit,
+    unique_archive_masks,
+)
 from Spyctres.io import SpectrumCollection, SpectrumSegment, read_spectrum
 from Spyctres.plotting import plot_fit_referee
 from Spyctres.preprocessing import (
-    archive_exclusion_masks_for_segment,
     audit_spectrum_for_fit,
     overlapping_nonstellar_features,
 )
@@ -698,10 +702,9 @@ def _safe_id_token(value):
 
 
 def _single_segment(spectrum):
-    if isinstance(spectrum, SpectrumSegment):
-        return spectrum
-    if isinstance(spectrum, SpectrumCollection) and len(spectrum) == 1:
-        return spectrum[0]
+    segments = spectrum_segments(spectrum, tuple_is_collection=False, coerce=False)
+    if len(segments) == 1 and isinstance(segments[0], SpectrumSegment):
+        return segments[0]
     raise ValueError(
         "This scaffold expects one UVB segment. Use the multi-arm notebook or "
         "build an explicit expert workflow for multi-segment products."
@@ -709,33 +712,22 @@ def _single_segment(spectrum):
 
 
 def _resolution_assumption(args):
-    if args.resolution_R is None:
-        return None
-    return {
-        "quantity": "R",
-        "value": float(args.resolution_R),
-        "source": "user_override",
-        "resolution_source": "user_override",
-        "assumed_resolution_R": float(args.resolution_R),
-        "assumption_warning": (
+    assumption = _shared_resolution_assumption_for_audit(
+        args.resolution_R,
+        assumption_warning=(
             "user-supplied constant resolution for publication scaffold; "
             "validate before using for final parameters"
         ),
-    }
+    )
+    if assumption is None:
+        return None
+    assumption["resolution_source"] = assumption["source"]
+    assumption["assumed_resolution_R"] = assumption["value"]
+    return assumption
 
 
 def _archive_masks_by_segment(segments, policy):
-    if policy != "apply":
-        return ()
-    masks = []
-    seen = set()
-    for segment in segments:
-        for mask in archive_exclusion_masks_for_segment(segment):
-            if mask.name in seen:
-                continue
-            masks.append(mask)
-            seen.add(mask.name)
-    return tuple(masks)
+    return unique_archive_masks(segments, policy=policy)
 
 
 def _prepare_balmer_collection(args, segment, *, core_mask_halfwidth):

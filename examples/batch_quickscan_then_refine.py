@@ -56,13 +56,17 @@ from Spyctres._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
 )
+from Spyctres._spectrum_helpers import spectrum_segments
+from Spyctres._workflow_helpers import (
+    archive_masks_by_segment as _shared_archive_masks_by_segment,
+    fit_kwargs_with_archive_policy as _shared_fit_kwargs_with_archive_policy,
+    resolution_assumption_for_audit as _shared_resolution_assumption_for_audit,
+    resolution_override_summary as _shared_resolution_override_summary,
+)
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
-from Spyctres.preprocessing import (
-    archive_exclusion_masks_for_segment,
-    audit_spectrum_for_fit,
-)
+from Spyctres.preprocessing import audit_spectrum_for_fit
 
 
 EXAMPLE_UVB = (
@@ -249,13 +253,7 @@ def build_parser():
 
 
 def _resolution_override_payload(args):
-    if getattr(args, "resolution_R", None) is None:
-        return None
-    return {
-        "resolution_source": "user_override",
-        "assumed_resolution_R": float(args.resolution_R),
-        "assumption_warning": "approximate quicklook resolution",
-    }
+    return _shared_resolution_override_summary(getattr(args, "resolution_R", None))
 
 
 def _resolution_fit_kwargs(args):
@@ -266,15 +264,7 @@ def _resolution_fit_kwargs(args):
 
 
 def _assumed_resolution_for_audit(args):
-    payload = _resolution_override_payload(args)
-    if payload is None:
-        return None
-    return {
-        "quantity": "R",
-        "value": payload["assumed_resolution_R"],
-        "source": payload["resolution_source"],
-        "assumption_warning": payload["assumption_warning"],
-    }
+    return _shared_resolution_assumption_for_audit(getattr(args, "resolution_R", None))
 
 
 def _atomic_write_json(path, payload):
@@ -503,43 +493,15 @@ def _target_id(path):
 
 
 def _coerce_segments(spectrum):
-    if hasattr(spectrum, "segments"):
-        return list(spectrum.segments)
-    if isinstance(spectrum, (list, tuple)):
-        return list(spectrum)
-    return [spectrum]
+    return spectrum_segments(spectrum, tuple_is_collection=True, coerce=False)
 
 
 def _archive_masks_by_segment(spectrum):
-    out = {}
-    for index, segment in enumerate(_coerce_segments(spectrum)):
-        masks = archive_exclusion_masks_for_segment(segment)
-        if masks:
-            out[index] = masks
-    return out
+    return _shared_archive_masks_by_segment(spectrum)
 
 
 def _fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy):
-    fit_kwargs = dict(fit_kwargs)
-    if policy != "apply" or not archive_masks:
-        return fit_kwargs
-    existing = fit_kwargs.get("exclude_masks")
-    if existing is None:
-        fit_kwargs["exclude_masks"] = dict(archive_masks)
-        return fit_kwargs
-    merged = dict(archive_masks)
-    if isinstance(existing, dict):
-        for key, value in existing.items():
-            current = list(merged.get(key, []) or [])
-            current.extend(list(value if isinstance(value, (list, tuple)) else [value]))
-            merged[key] = current
-    else:
-        for key in list(merged):
-            current = list(merged[key])
-            current.extend(list(existing if isinstance(existing, (list, tuple)) else [existing]))
-            merged[key] = current
-    fit_kwargs["exclude_masks"] = merged
-    return fit_kwargs
+    return _shared_fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy)
 
 
 def _result_payload(result):
