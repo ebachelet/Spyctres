@@ -38,6 +38,7 @@ ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
 from Spyctres import normalize_segment_sidebands, read_spectrum
+from Spyctres.plotting import save_figure
 
 
 def build_parser():
@@ -162,8 +163,7 @@ def main(argv=None):
     )
 
     if args.output_plot:
-        Path(args.output_plot).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output_plot, bbox_inches="tight")
+        save_figure(fig, args.output_plot)
         print("Saved plot: {0}".format(args.output_plot), flush=True)
     if args.no_show:
         plt.close(fig)

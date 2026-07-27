@@ -28,6 +28,7 @@ if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
 
 import Spyctres as sp
 import numpy as np
+from Spyctres.plotting import save_figure
 
 
 EXAMPLE_UVB = (
@@ -135,8 +136,7 @@ def main(argv=None):
         title="Example 2: diagnostic windows and warning regions",
     )
     if args.output_plot:
-        Path(args.output_plot).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output_plot, bbox_inches="tight")
+        save_figure(fig, args.output_plot)
         print("Saved plot: {0}".format(args.output_plot), flush=True)
 
     if args.output_json:

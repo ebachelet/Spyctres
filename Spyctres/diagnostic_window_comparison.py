@@ -10,7 +10,6 @@ blind model-selection engine and does not rank solutions by raw chi-square.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 import time
 
 import numpy as np
@@ -19,6 +18,7 @@ from ._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
     json_safe as _json_native,
+    save_figure,
 )
 from ._spectrum_helpers import spectrum_segments
 from .diagnostic_windows import (
@@ -718,9 +718,7 @@ def plot_diagnostic_window_comparison(payload, savepath=None):
     matrix_ax.set_xlabel("comparison")
 
     if savepath is not None:
-        savepath = Path(savepath)
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, dpi=160)
+        save_figure(fig, savepath, dpi=160, bbox_inches=None)
     return fig, axes
 
 

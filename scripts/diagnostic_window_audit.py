@@ -30,6 +30,7 @@ from Spyctres._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
     json_safe as _json_native,
+    save_figure,
 )
 from Spyctres._spectrum_helpers import spectrum_segments
 from Spyctres.diagnostic_windows import (
@@ -640,9 +641,7 @@ def plot_audit_heatmap(payload, savepath=None, *, max_windows=18):
     cbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
     cbar.set_label("relative rank in target top list")
     if savepath is not None:
-        savepath = Path(savepath)
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, dpi=170)
+        save_figure(fig, savepath, dpi=170, bbox_inches=None)
     return fig, ax
 
 

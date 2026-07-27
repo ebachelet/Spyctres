@@ -16,13 +16,13 @@ Design principles
 """
 
 import textwrap
-from pathlib import Path
 
 import numpy as np
 from .matplotlib_setup import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
+from ._serialization import save_figure
 from .fitting import evaluate_legendre_continuum
 
 
@@ -1855,10 +1855,7 @@ def plot_fit_referee(
 
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     if savepath is not None:
-        savepath = Path(savepath)
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, bbox_inches="tight")
-        fig.spyctres_generated_files = {"referee_plot": str(savepath)}
+        save_figure(fig, savepath, artifact_key="referee_plot")
     return fig, axes
 
 
@@ -2254,10 +2251,7 @@ def plot_model_line_windows(
             color="0.25",
         )
     if savepath is not None:
-        savepath = Path(savepath)
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, dpi=160, bbox_inches="tight")
-        fig.spyctres_generated_files = {"line_window_plot": str(savepath)}
+        save_figure(fig, savepath, artifact_key="line_window_plot", dpi=160)
     return fig, axes
 
 

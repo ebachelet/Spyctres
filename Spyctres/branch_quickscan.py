@@ -12,14 +12,13 @@ The default is intentionally a dry run.  PHOENIX fits happen only when
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 
 from ._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
     json_safe as _json_native,
+    save_figure,
 )
 from .defaults import suggest_phoenix_fit_defaults
 from .diagnostic_window_comparison import (
@@ -451,9 +450,7 @@ def plot_branch_quickscan(payload, savepath=None):
         )
 
     if savepath is not None:
-        savepath = Path(savepath)
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, dpi=160)
+        save_figure(fig, savepath, dpi=160, bbox_inches=None)
     return fig, axes
 
 

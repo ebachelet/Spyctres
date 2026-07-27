@@ -99,6 +99,38 @@ def atomic_write_csv_rows(path, fieldnames, rows):
         raise
 
 
+def save_figure(
+    fig,
+    path,
+    *,
+    artifact_key=None,
+    dpi=None,
+    bbox_inches="tight",
+    **savefig_kwargs,
+):
+    """Save a Matplotlib figure after creating the destination directory.
+
+    The path is not resolved to an absolute path. This preserves user-supplied
+    relative artifact paths for web-ready JSON while still making nested output
+    directories work consistently across scripts and plotting helpers.
+    """
+    if path is None:
+        return None
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    kwargs = dict(savefig_kwargs)
+    if dpi is not None:
+        kwargs["dpi"] = dpi
+    if bbox_inches is not None:
+        kwargs["bbox_inches"] = bbox_inches
+    fig.savefig(path, **kwargs)
+    if artifact_key is not None:
+        generated = dict(getattr(fig, "spyctres_generated_files", {}) or {})
+        generated[str(artifact_key)] = str(path)
+        fig.spyctres_generated_files = generated
+    return path
+
+
 def safe_filename(value, fallback="target"):
     """Return a conservative filename stem for generated artifacts."""
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())

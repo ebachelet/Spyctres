@@ -28,6 +28,7 @@ from Spyctres._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
     safe_filename as _safe_filename,
+    save_figure,
 )
 
 
@@ -908,9 +909,7 @@ def plot_reference_recovery_summary(summary, savepath=None):
         )
     )
     if savepath is not None:
-        savepath = Path(savepath)
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, dpi=160)
+        save_figure(fig, savepath, dpi=160, bbox_inches=None)
     return fig, axes
 
 
@@ -1017,7 +1016,7 @@ def render_validation_plots(
                     if item
                 )
                 image_path = output_path / "{0}.{1}".format(stem, image_format)
-                fig.savefig(image_path, dpi=dpi)
+                save_figure(fig, image_path, dpi=dpi, bbox_inches=None)
                 image_paths.append(str(image_path))
             if pdf is not None:
                 pdf.savefig(fig)

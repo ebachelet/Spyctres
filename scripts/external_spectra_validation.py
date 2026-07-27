@@ -32,6 +32,7 @@ from Spyctres._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
     safe_filename,
+    save_figure,
 )
 from Spyctres.io import get_instrument_info, list_instruments, read_spectrum
 from Spyctres.plotting import plot_spectrum_audit, plot_spectrum_quicklook
@@ -855,7 +856,7 @@ def validate_target(target, args):
                 plot_path = Path(args.plot_dir) / _safe_plot_name(
                     {**target, "target_id": "{0}{1}".format(target["target_id"], suffix)}
                 )
-                fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+                save_figure(fig, plot_path, dpi=150)
                 plt.close(fig)
                 plot_paths["quicklook"] = str(plot_path)
                 print("  Wrote quicklook plot: {0}".format(plot_path), flush=True)
@@ -870,7 +871,7 @@ def validate_target(target, args):
                 plot_path = Path(args.plot_dir) / _safe_plot_name(
                     {**target, "target_id": "{0}{1}".format(target["target_id"], suffix)}
                 )
-                fig.savefig(plot_path, dpi=150)
+                save_figure(fig, plot_path, dpi=150, bbox_inches=None)
                 plt.close(fig)
                 plot_paths["audit"] = str(plot_path)
                 print("  Wrote audit plot: {0}".format(plot_path), flush=True)

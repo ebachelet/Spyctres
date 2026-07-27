@@ -83,6 +83,7 @@ from Spyctres import (
 from Spyctres._serialization import (
     atomic_write_csv_rows,
     atomic_write_json,
+    save_figure,
 )
 from Spyctres._spectrum_helpers import spectrum_segments
 from Spyctres._workflow_helpers import (
@@ -4340,8 +4341,6 @@ def _write_publication_summary_markdown(path, summary):
 def _write_publication_summary_plot(path, summary):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     import matplotlib.pyplot as plt
 
     rows = [
@@ -4408,7 +4407,7 @@ def _write_publication_summary_plot(path, summary):
         axes[-1].set_xticks(x)
         axes[-1].set_xticklabels(labels, rotation=35, ha="right")
     fig.suptitle("Publication workflow parameter-shift summary")
-    fig.savefig(path, dpi=160)
+    save_figure(fig, path, dpi=160, bbox_inches=None)
     plt.close(fig)
 
 
@@ -4602,8 +4601,6 @@ def _write_core_mask_comparison_plot(path, records):
         return
     if not records:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     import matplotlib.pyplot as plt
 
     widths = np.asarray([item["core_mask_halfwidth_A"] for item in records], dtype=float)
@@ -4671,7 +4668,7 @@ def _write_core_mask_comparison_plot(path, records):
         "Balmer-core mask sensitivity "
         "(penalty is diagnostic; it is not added to χ²)"
     )
-    fig.savefig(path, dpi=160)
+    save_figure(fig, path, dpi=160, bbox_inches=None)
     plt.close(fig)
 
 

@@ -12,6 +12,7 @@ from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
+from Spyctres._serialization import save_figure
 from Spyctres.io import concatenate_segments, list_instruments, read_spectrum
 from Spyctres.plotting import plot_spectrum_quicklook
 
@@ -148,7 +149,7 @@ def main():
         fig, ax = plot_spectrum_quicklook(s, use_mask=True, show_error=False)
         if args.plot_dir is not None:
             out_path = os.path.join(args.plot_dir, _safe_plot_name(p, index))
-            fig.savefig(out_path, dpi=150, bbox_inches="tight")
+            save_figure(fig, out_path, dpi=150)
             print("Wrote quick-look plot: {0}".format(out_path))
         if args.no_show:
             plt.close(fig)

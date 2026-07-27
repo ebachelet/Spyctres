@@ -62,6 +62,7 @@ from Spyctres._serialization import (
     atomic_write_json,
     json_safe,
     safe_filename,
+    save_figure,
 )
 from Spyctres.fitting import reconstruct_phoenix_legendre_models_for_segments
 from Spyctres.phoenix import PhoenixLibrary
@@ -703,8 +704,6 @@ def summarize_payload(records):
 def _write_summary_plot(path, payload):
     if path is None:
         return
-    path = Path(path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
     records = payload.get("results", [])
     fitted = [record for record in records if record.get("status") == "ok"]
 
@@ -816,7 +815,7 @@ def _write_summary_plot(path, payload):
         else:
             ax.text(0.5, 0.5, "No fitted or reference records", ha="center", va="center")
             ax.set_axis_off()
-    fig.savefig(path, dpi=160, bbox_inches="tight")
+    save_figure(fig, path, dpi=160)
     plt.close(fig)
 
 

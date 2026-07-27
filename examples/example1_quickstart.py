@@ -159,7 +159,6 @@ def main(argv=None):
             include_local_paths=True,
         )
         if args.output_plot:
-            Path(args.output_plot).parent.mkdir(parents=True, exist_ok=True)
             plot_fig, _axes = sp.plot_fit_referee(result, savepath=args.output_plot)
             print("Saved fit plot: {0}".format(args.output_plot), flush=True)
             if args.no_show:

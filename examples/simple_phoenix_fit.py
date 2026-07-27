@@ -63,7 +63,12 @@ from Spyctres.diagnostics import (
     diagnose_known_residual_windows,
 )
 from Spyctres.io import read_spectrum
-from Spyctres.plotting import COMMON_LINES, plot_fit_referee, plot_fit_windows
+from Spyctres.plotting import (
+    COMMON_LINES,
+    plot_fit_referee,
+    plot_fit_windows,
+    save_figure,
+)
 from Spyctres.preprocessing import (
     OPTICAL_DIB_DIAGNOSTIC_FEATURES,
     audit_spectrum_for_fit,
@@ -865,8 +870,7 @@ def _build_line_diagnostic_plots(args, spectrum, result):
             model_label="model on fitted pixels",
         )
         if savepath is not None:
-            Path(savepath).parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(savepath, bbox_inches="tight")
+            save_figure(fig, savepath)
             key = "line_diagnostics"
             if multiple_segments:
                 key = "line_diagnostics_segment_{0}".format(index + 1)

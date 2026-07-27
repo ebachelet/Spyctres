@@ -137,7 +137,6 @@ def main(argv=None):
         )
         print(standard.quality_report_text(), flush=True)
         if args.output_plot:
-            Path(args.output_plot).parent.mkdir(parents=True, exist_ok=True)
             fig, _axes = sp.plot_fit_referee(standard, savepath=args.output_plot)
             print("Saved standard-fit plot: {0}".format(args.output_plot), flush=True)
             if args.no_show:
