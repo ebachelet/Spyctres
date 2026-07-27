@@ -5,6 +5,8 @@ from Spyctres._workflow_helpers import (
     archive_mask_count,
     archive_masks_by_segment,
     fit_kwargs_with_archive_policy,
+    readiness_intent_detail_lines,
+    readiness_summary_line,
     resolution_assumption_for_audit,
     resolution_override_summary,
     unique_archive_masks,
@@ -65,6 +67,28 @@ def test_resolution_override_helpers_are_consistent_and_validate_width():
     }
     with pytest.raises(ValueError, match="finite and > 0"):
         resolution_override_summary(0.0)
+
+
+def test_readiness_formatters_expose_intent_specific_status():
+    readiness = {
+        "intent": "quicklook_classification",
+        "ready_for_intent": True,
+        "fit_ready": False,
+        "n_fit_candidate": 42,
+        "interpretation_flags": ["wave_medium_unknown"],
+        "warnings_for_intent": ["wave_medium_unknown"],
+        "invalid_interpretations_for_intent": ["precision_line_centres"],
+    }
+
+    assert readiness_summary_line(readiness, label="Spectrum readiness") == (
+        "Spectrum readiness: intent=quicklook_classification, "
+        "ready_for_intent=True, strict_fit_ready=False, fitted_pixels=42, "
+        "flags=wave_medium_unknown"
+    )
+    assert readiness_intent_detail_lines(readiness) == [
+        "  warnings_for_intent: wave_medium_unknown",
+        "  invalid_interpretations_for_intent: precision_line_centres",
+    ]
 
 
 def test_archive_masks_by_segment_and_count_use_segment_indices():

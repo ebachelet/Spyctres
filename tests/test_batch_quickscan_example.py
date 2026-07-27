@@ -1,4 +1,5 @@
 import importlib.util
+import csv
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -117,6 +118,27 @@ def test_skip_risky_refinement_gate_uses_readiness_flags():
     assert "readiness_fit_ready_false" in reasons
 
 
+def test_skip_risky_refinement_gate_records_intent_specific_readiness():
+    module = _load_example_module()
+    readiness = {
+        "intent": "radial_velocity",
+        "ready_for_intent": False,
+        "fit_ready": False,
+        "interpretation_flags": ["wave_medium_unknown"],
+    }
+    quick = {"success": True}
+
+    should_refine, reasons = module.should_refine_after_quicklook(
+        readiness,
+        quick,
+        policy="skip-risky",
+    )
+
+    assert should_refine is False
+    assert "readiness_not_ready_for_radial_velocity" in reasons
+    assert "readiness_fit_ready_false" in reasons
+
+
 def test_skip_risky_refinement_gate_can_ignore_archive_only_flags():
     module = _load_example_module()
     readiness = {
@@ -170,6 +192,39 @@ def test_always_refinement_gate_preserves_legacy_behavior():
 
     assert should_refine is True
     assert reasons == []
+
+
+def test_summary_csv_records_intent_readiness_columns(tmp_path):
+    module = _load_example_module()
+    output = tmp_path / "summary.csv"
+    payload = {
+        "results": [
+            {
+                "target_id": "star",
+                "path": "spectrum.fits",
+                "status": "quick_complete",
+                "spectrum_readiness": {
+                    "fit_ready": False,
+                    "quicklook_only": True,
+                    "intent": "quicklook_classification",
+                    "ready_for_intent": True,
+                    "blockers_for_intent": [],
+                    "warnings_for_intent": ["wave_medium_unknown"],
+                    "interpretation_flags": ["wave_medium_unknown"],
+                    "n_fit_candidate": 20,
+                },
+                "quick_result": {"success": True, "teff": 6000.0},
+            }
+        ]
+    }
+
+    module._atomic_write_summary_csv(output, payload)
+
+    with output.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["readiness_intent"] == "quicklook_classification"
+    assert row["ready_for_intent"] == "True"
+    assert row["warnings_for_intent"] == "wave_medium_unknown"
 
 
 def test_focused_bounds_from_quick_result_clip_to_base_bounds():

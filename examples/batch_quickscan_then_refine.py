@@ -60,6 +60,8 @@ from Spyctres._spectrum_helpers import spectrum_segments
 from Spyctres._workflow_helpers import (
     archive_masks_by_segment as _shared_archive_masks_by_segment,
     fit_kwargs_with_archive_policy as _shared_fit_kwargs_with_archive_policy,
+    readiness_intent_detail_lines as _shared_readiness_intent_detail_lines,
+    readiness_summary_line as _shared_readiness_summary_line,
     resolution_assumption_for_audit as _shared_resolution_assumption_for_audit,
     resolution_override_summary as _shared_resolution_override_summary,
 )
@@ -282,6 +284,10 @@ def _atomic_write_summary_csv(path, payload):
         "refinement_skipped_reason",
         "fit_ready",
         "quicklook_only",
+        "readiness_intent",
+        "ready_for_intent",
+        "blockers_for_intent",
+        "warnings_for_intent",
         "readiness_flags",
         "readiness_fit_pixels",
         "outside_fit_window_fraction",
@@ -324,6 +330,16 @@ def _atomic_write_summary_csv(path, payload):
                 ),
                 "fit_ready": readiness.get("fit_ready"),
                 "quicklook_only": readiness.get("quicklook_only"),
+                "readiness_intent": (
+                    readiness.get("intent") or readiness.get("readiness_intent")
+                ),
+                "ready_for_intent": readiness.get("ready_for_intent"),
+                "blockers_for_intent": ",".join(
+                    str(flag) for flag in (readiness.get("blockers_for_intent") or [])
+                ),
+                "warnings_for_intent": ",".join(
+                    str(flag) for flag in (readiness.get("warnings_for_intent") or [])
+                ),
                 "readiness_flags": ",".join(
                     str(flag)
                     for flag in (readiness.get("interpretation_flags") or [])
@@ -709,6 +725,14 @@ def should_refine_after_quicklook(
             "archive_mask_overlap_inside_fit_window",
         }
     reasons = sorted(flags & REFINE_READINESS_BLOCK_FLAGS)
+    if readiness.get("ready_for_intent") is False:
+        reasons.append(
+            "readiness_not_ready_for_{0}".format(
+                readiness.get("intent")
+                or readiness.get("readiness_intent")
+                or "intent"
+            )
+        )
     if not readiness.get("fit_ready", False):
         reasons.append("readiness_fit_ready_false")
     if not quick_result.get("success", False):
@@ -777,13 +801,11 @@ def _fit_one(record, args, phoenix_lib):
         assumed_resolution=_assumed_resolution_for_audit(local_args),
     )
     print(
-        "  Readiness: fit_ready={0}, fitted_pixels={1}, flags={2}".format(
-            readiness["fit_ready"],
-            readiness["n_fit_candidate"],
-            ", ".join(readiness["interpretation_flags"]) or "none",
-        ),
+        "  {0}".format(_shared_readiness_summary_line(readiness)),
         flush=True,
     )
+    for line in _shared_readiness_intent_detail_lines(readiness, prefix="    "):
+        print(line, flush=True)
     for warning in readiness.get("warnings", []):
         print("  Readiness WARNING: {0}".format(warning), flush=True)
     quick_mode_policy = (

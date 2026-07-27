@@ -77,9 +77,12 @@ numbered examples and, later, the versioned report schema.
 3. **Intent-aware readiness and preprocessing discipline.**
    Continue hardening the common spectrum boundary, mask polarity, native
    archive/product masks, formal-error handling, wavelength-medium/frame
-   metadata, and explicit resolution/LSF provenance. The next readiness change
-   is to make the audit task-dependent rather than assigning one global
-   severity to every flag. Planned intents include:
+   metadata, and explicit resolution/LSF provenance. The first task-dependent
+   readiness layer is now implemented: `audit_spectrum_for_fit()` reports a
+   backward-compatible strict `fit_ready` value plus `ready_for_intent`,
+   `blockers_for_intent`, `warnings_for_intent`,
+   `invalid_interpretations_for_intent`, and a compact
+   `readiness_by_intent` matrix. The current intents are:
 
    - `inspect`
    - `quicklook_classification`
@@ -87,12 +90,14 @@ numbered examples and, later, the versioned report schema.
    - `radial_velocity`
    - `publication`
 
-   The audit should report `ready_for_intent`, `blockers_for_intent`,
-   `warnings_for_intent`, and `actions_for_intent`. The same missing metadata
-   may be allowed for visual inspection, allowed with caveats for quicklook
-   classification, and blocked for physical RV or publication-quality
-   inference. Existing `blocker`/`review` labels remain useful display labels,
-   but should not be the only policy layer.
+   The same missing metadata may be allowed for visual inspection, allowed with
+   caveats for quicklook classification, and blocked for physical RV or
+   publication-quality inference. Existing `blocker`/`review` labels remain
+   useful display labels, but are no longer the only policy layer. Remaining
+   work: calibrate the exact intent matrix with referee feedback, continue
+   moving scripts from generic `fit_ready` displays to intent-aware summaries,
+   and decide whether `publication_readiness_audit()` should remain a stricter
+   wrapper or become purely a named publication-intent preset.
 
 4. **Curated public facade and documentation source of truth.**
    Keep the top-level namespace useful but not sprawling. The intended one
@@ -264,10 +269,14 @@ or too few usable pixels.
 This distinction is deliberate: ingestion and quick classification should be
 forgiving, while publication-quality parameter claims should be conservative.
 
-The next iteration should fold this into the intent-aware readiness model:
-publication remains the strictest intent, while inspect and quicklook
+This has now been partly folded into the intent-aware readiness model:
+publication remains the strictest ordinary intent, while inspect and quicklook
 classification may allow some missing metadata only when the output explicitly
-labels which interpretations are invalid.
+labels which interpretations are invalid. `publication_readiness_audit()`
+remains as a conservative wrapper because it adds publication-specific settings
+that are not just flag severity, such as minimum fitted pixels, maximum rejected
+inside-window fraction, and whether assumed resolution or unapplied SDSS `wdisp`
+provenance may be accepted after review.
 
 ## Acceptance criteria before wider collaborator use
 

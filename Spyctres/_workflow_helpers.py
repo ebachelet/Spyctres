@@ -74,6 +74,64 @@ def archive_mask_count(archive_masks):
     return int(sum(len(value) for value in (archive_masks or {}).values()))
 
 
+def comma_join_or_none(values):
+    """Return a compact comma-separated string for user-facing summaries."""
+    items = [str(item) for item in (values or ()) if str(item)]
+    return ", ".join(items) if items else "none"
+
+
+def readiness_summary_line(readiness, *, label="Readiness"):
+    """Return a one-line, intent-aware readiness summary.
+
+    ``fit_ready`` is kept as the older strict/backward-compatible gate. The
+    newer ``ready_for_intent`` field answers the user-facing question: "is this
+    spectrum ready for the specific task I asked to do?"
+    """
+    readiness = readiness or {}
+    return (
+        "{label}: intent={intent}, ready_for_intent={ready}, "
+        "strict_fit_ready={fit_ready}, fitted_pixels={n_fit}, flags={flags}"
+    ).format(
+        label=str(label),
+        intent=readiness.get("intent") or readiness.get("readiness_intent"),
+        ready=readiness.get("ready_for_intent"),
+        fit_ready=readiness.get("fit_ready"),
+        n_fit=readiness.get("n_fit_candidate"),
+        flags=comma_join_or_none(readiness.get("interpretation_flags") or ()),
+    )
+
+
+def readiness_intent_detail_lines(readiness, *, prefix="  "):
+    """Return short blocker/warning lines for the active readiness intent."""
+    readiness = readiness or {}
+    lines = []
+    blockers = readiness.get("blockers_for_intent") or ()
+    warnings = readiness.get("warnings_for_intent") or ()
+    invalid = readiness.get("invalid_interpretations_for_intent") or ()
+    if blockers:
+        lines.append(
+            "{0}blockers_for_intent: {1}".format(
+                prefix,
+                comma_join_or_none(blockers),
+            )
+        )
+    if warnings:
+        lines.append(
+            "{0}warnings_for_intent: {1}".format(
+                prefix,
+                comma_join_or_none(warnings),
+            )
+        )
+    if invalid:
+        lines.append(
+            "{0}invalid_interpretations_for_intent: {1}".format(
+                prefix,
+                comma_join_or_none(invalid),
+            )
+        )
+    return lines
+
+
 def unique_archive_masks(spectrum, *, policy="apply", only_ids=None):
     """Return unique archive masks for workflows that build derived segments.
 

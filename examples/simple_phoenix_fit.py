@@ -54,6 +54,8 @@ from Spyctres._workflow_helpers import (
     archive_mask_count as _shared_archive_mask_count,
     archive_masks_by_segment as _shared_archive_masks_by_segment,
     fit_kwargs_with_archive_policy as _shared_fit_kwargs_with_archive_policy,
+    readiness_intent_detail_lines as _shared_readiness_intent_detail_lines,
+    readiness_summary_line as _shared_readiness_summary_line,
     resolution_assumption_for_audit as _shared_resolution_assumption_for_audit,
     resolution_override_summary as _shared_resolution_override_summary,
 )
@@ -934,14 +936,11 @@ def main(argv=None):
         assumed_resolution=_assumed_resolution_for_audit(args),
     )
     print(
-        "Spectrum readiness: fit_ready={0}, quicklook_only={1}, fitted_pixels={2}, flags={3}".format(
-            readiness["fit_ready"],
-            readiness["quicklook_only"],
-            readiness["n_fit_candidate"],
-            ", ".join(readiness["interpretation_flags"]) or "none",
-        ),
+        _shared_readiness_summary_line(readiness, label="Spectrum readiness"),
         flush=True,
     )
+    for line in _shared_readiness_intent_detail_lines(readiness):
+        print(line, flush=True)
     for warning in readiness.get("warnings", []):
         print("Spectrum readiness WARNING: {0}".format(warning), flush=True)
     if suggestion is not None:
