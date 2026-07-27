@@ -38,8 +38,10 @@ result = fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 ```
 
 The fit result embeds the exact reviewed setup, including a setup hash and
-readiness interpretation. The remaining work is to promote this into the
-numbered examples and, later, the versioned report schema.
+readiness interpretation. The numbered examples now use the reviewed setup
+path, and `PhoenixFitResult.to_report_dict()` /
+`PhoenixFitResult.save_report_json()` provide the first versioned report
+envelope for archival and reviewer-facing products.
 
 ## Priority order
 
@@ -70,9 +72,11 @@ numbered examples and, later, the versioned report schema.
    `FitSetup` mapping-compatible object with `summary()`, `summary_text()`,
    `to_dict()`, `to_json()`, and a stable setup hash, and
    `fit_stellar_spectrum(..., setup=setup)` embeds the exact reviewed setup in
-   the result. Remaining work: use this object throughout the numbered
-   examples, migrate any ad-hoc setup summaries to `setup.summary()`, and fold
-   the setup hash into the later versioned report schema.
+   the result. The numbered examples now use this object directly, and the
+   versioned report envelope records the setup hash in its provenance summary.
+   Remaining work: migrate any older advanced/validation scripts that still
+   carry ad-hoc setup summaries to `setup.summary()` where it improves
+   readability.
 
 3. **Intent-aware readiness and preprocessing discipline.**
    Continue hardening the common spectrum boundary, mask polarity, native
@@ -131,16 +135,21 @@ numbered examples and, later, the versioned report schema.
    a parallel metadata layer.
 
 5. **Versioned serialized reports and provenance.**
-   Add a versioned, web/Django-friendly serialized report schema before
-   external clients depend on ad-hoc JSON fields. The schema should record at
-   least: schema version, Spyctres version, git commit if available, model
-   backend, model-grid manifest/hash, input checksum when allowed, fit setup
-   hash, wavelength assumptions, mask policy, resolution source, quality flags,
-   readiness intent, and path-sanitization policy. PHOENIX composition
-   provenance should be explicit: model family/version, selected abundance
-   pattern, alpha policy, microturbulence policy if known, solar abundance
-   scale, and whether `[Fe/H]` is an iron abundance, global metallicity, or a
-   grid label.
+   Initial implementation is in place as an additive API:
+   `PhoenixFitResult.to_report_dict()`, `to_report_json()`, and
+   `save_report_json()`. Existing `to_dict()` / `save_json()` output remains the
+   compact direct-result payload for backward compatibility. The report envelope
+   records schema version, Spyctres version, git commit if available, path
+   sanitization policy, generated plot paths, a direct `result` payload, and a
+   compact provenance summary with the reviewed setup hash when present.
+
+   Remaining work: enrich the envelope without breaking its top-level shape.
+   Priority fields are model-grid manifest/hash, input checksum when allowed,
+   wavelength assumptions, mask policy, resolution source, quality flags,
+   readiness intent, and PHOENIX composition provenance: model family/version,
+   selected abundance pattern, alpha policy, microturbulence policy if known,
+   solar abundance scale, and whether `[Fe/H]` is an iron abundance, global
+   metallicity, or a grid label.
 
 6. **Real-spectrum validation before further feature growth.**
    Expand and maintain validation on real spectra before adding heavier

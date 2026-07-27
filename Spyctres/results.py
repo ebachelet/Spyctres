@@ -2,12 +2,44 @@
 
 from dataclasses import dataclass, field
 from collections.abc import Mapping
+from importlib import metadata as importlib_metadata
 import json
 import os
+import subprocess
 
 import numpy as np
 
 from ._serialization import atomic_write_json, json_safe as _jsonable
+
+
+FIT_REPORT_SCHEMA_VERSION = 1
+FIT_RESULT_PAYLOAD_SCHEMA_VERSION = 1
+FIT_REPORT_TYPE = "spyctres.fit_result_report"
+
+
+def _spyctres_version():
+    try:
+        return importlib_metadata.version("Spyctres")
+    except importlib_metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _spyctres_git_commit():
+    """Return the current git commit if this is a source checkout."""
+    env_value = os.environ.get("SPYCTRES_GIT_COMMIT")
+    if env_value:
+        return str(env_value)
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=repo,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+        ).strip()
+    except Exception:
+        return None
 
 
 def _looks_like_local_path(value):
@@ -112,6 +144,55 @@ def _as_result_payload(result):
     if isinstance(result, Mapping):
         return dict(result)
     raise TypeError("fit result must be a mapping or PhoenixFitResult-like object.")
+
+
+def _extract_fit_setup_hash(payload, provenance):
+    for mapping, key in (
+        (payload, "fit_setup_hash"),
+        (provenance, "fit_setup_hash"),
+        (
+            payload.get("fit_setup") if isinstance(payload, Mapping) else None,
+            "setup_hash",
+        ),
+    ):
+        if isinstance(mapping, Mapping):
+            value = mapping.get(key)
+            if value:
+                return str(value)
+    fit_setup = payload.get("fit_setup") if isinstance(payload, Mapping) else None
+    if isinstance(fit_setup, Mapping):
+        value = fit_setup.get("configuration_hash")
+        if value:
+            return str(value)
+    return None
+
+
+def _fit_report_provenance_summary(payload):
+    provenance = payload.get("provenance") if isinstance(payload, Mapping) else {}
+    if not isinstance(provenance, Mapping):
+        provenance = {}
+    setup_hash = _extract_fit_setup_hash(payload, provenance)
+    model_backend = (
+        provenance.get("workflow_model")
+        or provenance.get("model_backend")
+        or payload.get("model")
+        or "phoenix"
+    )
+    return _jsonable(
+        {
+            "workflow_api": provenance.get("workflow_api") or provenance.get("api"),
+            "model_backend": model_backend,
+            "fit_setup_source": provenance.get("fit_setup_source"),
+            "fit_setup_hash": setup_hash,
+            "instrument": provenance.get("instrument"),
+            "input_was_path": provenance.get("input_was_path"),
+            "rv_convention": provenance.get("rv_convention"),
+            "rv_bary_explicit": provenance.get("rv_bary_explicit"),
+            "phoenix_source_root": provenance.get("phoenix_source_root"),
+            "cache_schema_version": provenance.get("cache_schema_version"),
+            "cache_path": provenance.get("cache_path"),
+        }
+    )
 
 
 def _extract_result_value(payload, key):
@@ -965,6 +1046,50 @@ class PhoenixFitResult(Mapping):
             payload = _without_local_paths(payload)
         return payload
 
+    def to_report_dict(
+        self,
+        include_arrays=False,
+        include_local_paths=False,
+        plot_paths=None,
+        relative_to=None,
+        report_context=None,
+    ):
+        """Return a versioned, provenance-rich fit report envelope.
+
+        ``to_dict`` remains the compact direct result payload used by older
+        scripts.  The report envelope is meant for reviewer-facing products,
+        web/Django hand-off, and longer-lived archives where schema version,
+        Spyctres version, path policy, and a small provenance summary should be
+        explicit.
+        """
+        result_payload = self.to_dict(
+            include_arrays=include_arrays,
+            include_local_paths=include_local_paths,
+            plot_paths=plot_paths,
+            relative_to=relative_to,
+        )
+        report = {
+            "schema_version": FIT_REPORT_SCHEMA_VERSION,
+            "report_type": FIT_REPORT_TYPE,
+            "result_payload_schema_version": FIT_RESULT_PAYLOAD_SCHEMA_VERSION,
+            "spyctres": {
+                "version": _spyctres_version(),
+                "git_commit": _spyctres_git_commit(),
+            },
+            "path_policy": {
+                "include_local_paths": bool(include_local_paths),
+                "local_paths_sanitized": not bool(include_local_paths),
+                "plot_paths_relative_to": (
+                    None if relative_to is None else "provided_relative_base"
+                ),
+            },
+            "provenance_summary": _fit_report_provenance_summary(result_payload),
+            "result": result_payload,
+        }
+        if report_context is not None:
+            report["report_context"] = _jsonable(report_context)
+        return _jsonable(report)
+
     def quality_report(self):
         """Return a compact, JSON-safe summary of fit quality diagnostics."""
         return build_fit_quality_report(
@@ -990,6 +1115,21 @@ class PhoenixFitResult(Mapping):
         }
         return json.dumps(self.to_dict(**to_dict_kwargs), **kwargs)
 
+    def to_report_json(self, **kwargs):
+        """Serialize the versioned fit-report envelope as JSON."""
+        kwargs.setdefault("allow_nan", False)
+        to_report_keys = {
+            "include_arrays",
+            "include_local_paths",
+            "plot_paths",
+            "relative_to",
+            "report_context",
+        }
+        to_report_kwargs = {
+            key: kwargs.pop(key) for key in list(kwargs) if key in to_report_keys
+        }
+        return json.dumps(self.to_report_dict(**to_report_kwargs), **kwargs)
+
     def save_json(
         self,
         path,
@@ -1012,6 +1152,34 @@ class PhoenixFitResult(Mapping):
                 include_local_paths=include_local_paths,
                 plot_paths=plot_paths,
                 relative_to=relative_to,
+            ),
+            **kwargs,
+        )
+
+    def save_report_json(
+        self,
+        path,
+        include_arrays=False,
+        include_local_paths=False,
+        plot_paths=None,
+        relative_to=None,
+        report_context=None,
+        **kwargs,
+    ):
+        """Write the versioned fit-report envelope for archival/review use."""
+        kwargs.setdefault("indent", 2)
+        kwargs.setdefault("allow_nan", False)
+        if relative_to is None:
+            relative_to = os.path.dirname(os.path.abspath(os.fspath(path))) or "."
+        path = os.path.abspath(os.path.expanduser(os.fspath(path)))
+        atomic_write_json(
+            path,
+            self.to_report_dict(
+                include_arrays=include_arrays,
+                include_local_paths=include_local_paths,
+                plot_paths=plot_paths,
+                relative_to=relative_to,
+                report_context=report_context,
             ),
             **kwargs,
         )

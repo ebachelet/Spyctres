@@ -573,6 +573,7 @@ result = fit_phoenix_spectrum(
 print(result["teff"], result["rv_kms"])
 print(result.quality_report_text())
 result.to_json()
+result.save_report_json("fit_report.json")
 ```
 
 `PhoenixFitResult` retains dictionary-style access while also carrying model
@@ -582,8 +583,14 @@ auditable velocity/cache provenance. The compact `quality_report` and
 dropped segments, and per-segment fit-pixel counts without requiring users to
 inspect the full nested diagnostics block. `describe_quality_flags()` provides
 short explanations for individual warning strings, and `quality_report`
-includes descriptions for the flags present in that result. Existing low-level
-fitting functions keep returning dictionaries for backward compatibility.
+includes descriptions for the flags present in that result.
+`save_json()`/`to_json()` keep the compact direct-result payload for existing
+scripts. `save_report_json()`/`to_report_dict()` wrap that payload in a
+versioned report envelope that records the Spyctres version/git commit when
+available, path-sanitization policy, generated plot paths, and a small
+provenance summary for reviewer-facing, web, or Django hand-off products.
+Existing low-level fitting functions keep returning dictionaries for backward
+compatibility.
 The scientific default forward model is `native_interp`, which keeps the model
 on a dense PHOENIX wavelength grid until after RV shifting and LSF convolution.
 The older `interp_observed` path remains available only as an explicit

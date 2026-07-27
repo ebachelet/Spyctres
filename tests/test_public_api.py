@@ -419,6 +419,101 @@ def test_compact_json_sanitizes_local_paths_and_records_relative_plot(tmp_path):
     assert payload["generated_files"]["plots"]["referee_plot"] == "fit.png"
 
 
+def test_fit_report_envelope_records_schema_and_provenance():
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": np.float64(5772.0),
+            "fit_setup_hash": "abc123",
+        },
+        models=(np.array([1.0, 0.9]),),
+        provenance={
+            "workflow_api": "fit_stellar_spectrum",
+            "workflow_model": "phoenix",
+            "instrument": "xshooter",
+            "input_was_path": True,
+            "phoenix_source_root": "/home/someone/PHOENIX",
+            "cache_path": "/tmp/spyctres_cache.npz",
+            "rv_convention": "positive rv_kms redshifts a receding stellar spectrum",
+            "rv_bary_explicit": True,
+        },
+        quality_flags=("ok",),
+    )
+
+    payload = result.to_report_dict(include_arrays=False)
+
+    assert payload["schema_version"] == 1
+    assert payload["report_type"] == "spyctres.fit_result_report"
+    assert payload["result_payload_schema_version"] == 1
+    assert payload["path_policy"]["include_local_paths"] is False
+    assert payload["path_policy"]["local_paths_sanitized"] is True
+    assert isinstance(payload["spyctres"]["version"], str)
+    assert "git_commit" in payload["spyctres"]
+    assert "result" in payload
+    assert "models" not in payload["result"]
+    assert payload["result"]["provenance"]["phoenix_source_root"] is None
+    assert payload["result"]["provenance"]["cache_path"] is None
+    assert payload["provenance_summary"] == {
+        "workflow_api": "fit_stellar_spectrum",
+        "model_backend": "phoenix",
+        "fit_setup_source": None,
+        "fit_setup_hash": "abc123",
+        "instrument": "xshooter",
+        "input_was_path": True,
+        "rv_convention": "positive rv_kms redshifts a receding stellar spectrum",
+        "rv_bary_explicit": True,
+        "phoenix_source_root": None,
+        "cache_schema_version": None,
+        "cache_path": None,
+    }
+    json.dumps(payload)
+
+
+def test_report_json_records_relative_artifacts_and_context(tmp_path):
+    result = PhoenixFitResult(
+        summary={
+            "teff": np.float64(5772.0),
+            "fit_setup": {"setup_hash": "setup123"},
+        },
+        provenance={"workflow_api": "fit_stellar_spectrum"},
+    )
+    json_path = tmp_path / "products" / "report.json"
+    plot_path = json_path.parent / "fit.png"
+
+    result.save_report_json(
+        json_path,
+        plot_paths={"referee_plot": plot_path},
+        report_context={"purpose": "regression"},
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["result"]["generated_files"]["plots"]["referee_plot"] == "fit.png"
+    assert payload["provenance_summary"]["fit_setup_hash"] == "setup123"
+    assert payload["report_context"] == {"purpose": "regression"}
+    assert payload["path_policy"]["include_local_paths"] is False
+    assert payload["path_policy"]["local_paths_sanitized"] is True
+    assert payload["path_policy"]["plot_paths_relative_to"] == "provided_relative_base"
+
+
+def test_report_json_can_include_local_paths_explicitly():
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0},
+        provenance={
+            "phoenix_source_root": "/home/someone/PHOENIX",
+            "cache_path": "/tmp/spyctres_cache.npz",
+        },
+    )
+
+    payload = result.to_report_dict(include_local_paths=True)
+
+    assert payload["path_policy"]["include_local_paths"] is True
+    assert payload["path_policy"]["local_paths_sanitized"] is False
+    assert payload["result"]["provenance"]["phoenix_source_root"] == "/home/someone/PHOENIX"
+    assert payload["result"]["provenance"]["cache_path"] == "/tmp/spyctres_cache.npz"
+    assert payload["provenance_summary"]["phoenix_source_root"] == "/home/someone/PHOENIX"
+    assert payload["provenance_summary"]["cache_path"] == "/tmp/spyctres_cache.npz"
+
+
 def test_to_dict_rejects_absolute_plot_paths_without_relative_base():
     result = PhoenixFitResult(summary={"teff": 5772.0})
     with pytest.raises(ValueError, match="Absolute/local paths"):
