@@ -154,9 +154,13 @@ python scripts/io_smoketest.py \
 ```
 
 These benchmark spectra are public common-resolution, normalized R=42,000
-HARPS products over 480-680 nm. They are intended for external validation of
-parameter recovery, with literature parameters recorded in the data manifest;
-those parameters should not be used as hidden priors in ordinary fits.
+HARPS products over 480-680 nm. The Spyctres GBSv3 R42KNorm reader profile
+treats the wavelength scale as air: the web table gives `waveobs` in nm but
+does not state air/vacuum explicitly, and bundled-line checks show that the
+air convention avoids an otherwise spurious ~80 km/s RV offset. The spectra are
+intended for external validation of parameter recovery, with literature
+parameters recorded in the data manifest; those parameters should not be used
+as hidden priors in ordinary fits.
 
 To write the lightweight benchmark audit table and coverage plot without
 running PHOENIX fits:

@@ -2210,6 +2210,7 @@ def read_gaia_benchmark_ascii(
     name=None,
     wave_unit="auto",
     err_column=2,
+    wave_medium="air",
 ):
     """
     Read a Gaia FGK Benchmark Stars Library ASCII spectrum.
@@ -2219,10 +2220,17 @@ def read_gaia_benchmark_ascii(
     https://doi.org/10.1051/0004-6361/202555211
 
     These tabular text products contain ``waveobs flux err`` with wavelengths
-    in nm over 480--680 nm. Spyctres stores the data as normalized flux, keeps
-    the wavelength medium as unknown unless the user overrides it, and records
-    the source as a stellar-rest/laboratory-wavelength benchmark product.
+    in nm over 480--680 nm. Spyctres stores the data as normalized flux and
+    treats the R42KNorm wavelength scale as air by default: this is the
+    convention verified for the bundled GBSv3 subset by comparing strong
+    optical line centers against air rest wavelengths before PHOENIX fitting.
+    Pass ``wave_medium="unknown"`` or ``"vacuum"`` to override that reader
+    profile explicitly. The source is recorded as a stellar-rest/laboratory-
+    wavelength benchmark product.
     """
+    wave_medium = str(wave_medium).strip().lower()
+    if wave_medium not in _VALID_WAVE_MEDIA:
+        raise ValueError("wave_medium must be 'air', 'vacuum', or 'unknown'.")
     path = os.path.abspath(os.path.expanduser(path))
     wave, flux, err, n_numeric_rows = _read_numeric_ascii_spectrum_columns(
         path,
@@ -2249,7 +2257,16 @@ def read_gaia_benchmark_ascii(
         "source_url": "https://www.blancocuaresma.com/s/benchmarkstars",
         "reference_id": "casamiquela2026_gbs_v3_spectral_library",
         "wave_unit_input": unit_input,
-        "wave_medium": "unknown",
+        "wave_medium": wave_medium,
+        "wave_medium_source": (
+            "GBSv3 R42KNorm reader profile; verified for bundled examples by "
+            "line-center comparison against optical air rest wavelengths"
+        ),
+        "wave_medium_note": (
+            "The public web table gives waveobs in nm but does not state the "
+            "air/vacuum convention explicitly; pass wave_medium='unknown' or "
+            "'vacuum' to override this empirical reader profile."
+        ),
         "wave_frame": "stellar_rest",
         "observer_frame": "barycentric",
         "stellar_rest_status": "corrected",
@@ -2277,7 +2294,7 @@ def read_gaia_benchmark_ascii(
         err=err,
         mask=mask,
         meta=meta,
-        wave_medium="unknown",
+        wave_medium=wave_medium,
         wave_frame="stellar_rest",
         name=name or basename,
         observer_frame="barycentric",
@@ -2872,7 +2889,7 @@ register_reader(
     flux_column="column 1 / flux",
     uncertainty_column="column 2 / err by default",
     wavelength_unit="auto: nm if max(wave)<2000, otherwise Angstrom",
-    default_wave_medium="unknown",
+    default_wave_medium="air",
     default_observer_frame="barycentric",
     default_stellar_rest_status="corrected",
     flux_state="continuum-normalized benchmark-library product",
@@ -2880,7 +2897,9 @@ register_reader(
     resolving_power="common-resolution R=42000",
     notes=(
         "GBSv3 products are useful for external validation of FGK recovery. "
-        "Use their literature parameters for benchmark comparison, not as hidden fit priors."
+        "The R42KNorm reader profile treats wavelengths as air based on bundled "
+        "line-center checks; use their literature parameters for benchmark "
+        "comparison, not as hidden fit priors."
     ),
 )
 register_reader(

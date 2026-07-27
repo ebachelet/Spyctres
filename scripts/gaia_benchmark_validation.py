@@ -183,12 +183,13 @@ def build_parser():
     )
     parser.add_argument(
         "--wave-medium",
-        choices=("unknown", "air", "vacuum"),
-        default="unknown",
+        choices=("reader", "unknown", "air", "vacuum"),
+        default="reader",
         help=(
-            "Optional user override for the benchmark wavelength medium. The "
-            "bundled manifest leaves this unknown because the source page does "
-            "not state air/vacuum explicitly."
+            "Wavelength-medium policy for the benchmark spectrum. 'reader' uses "
+            "the Gaia benchmark reader profile, which treats bundled R42KNorm "
+            "wavelengths as air based on optical line-center validation. Use "
+            "'unknown' or 'vacuum' only for explicit sensitivity checks."
         ),
     )
     parser.add_argument(
@@ -350,14 +351,14 @@ def select_manifest_rows(rows, selected=None, max_targets=None):
 
 def _maybe_override_wave_medium(segment, wave_medium):
     wave_medium = str(wave_medium).strip().lower()
-    if wave_medium == "unknown":
+    if wave_medium == "reader":
         return segment
     meta = dict(segment.meta)
     meta["wave_medium"] = wave_medium
     meta["wave_medium_source"] = "user_override"
     meta["wave_medium_warning"] = (
-        "Gaia benchmark source page did not state air/vacuum explicitly; "
-        "this value was supplied by the validation runner user."
+        "This value was supplied by the validation runner user and overrides "
+        "the Gaia benchmark reader wavelength-medium profile."
     )
     return segment.copy(wave_medium=wave_medium, meta=meta)
 
@@ -594,6 +595,7 @@ def _write_summary_plot(path, payload):
             labels = []
             values = []
             assessments = []
+            ordinary_markers = []
             for record in fitted:
                 deltas, record_assessments = _fit_deltas(record)
                 if deltas[param] is None:
@@ -601,6 +603,9 @@ def _write_summary_plot(path, payload):
                 labels.append(record.get("target_id"))
                 values.append(float(deltas[param]))
                 assessments.append(record_assessments[param])
+                ordinary_markers.append(
+                    str(record.get("validation_role", "")).lower() in ORDINARY_ROLES
+                )
             x = np.arange(len(values))
             ax.axhline(0.0, color="0.2", lw=0.8)
             ax.axhspan(
@@ -623,18 +628,42 @@ def _write_summary_plot(path, payload):
                 alpha=0.08,
                 label="review zone",
             )
-            ax.scatter(
+            for xi, yi, assessment, is_ordinary in zip(
                 x,
                 values,
-                c=[colors.get(item, "tab:gray") for item in assessments],
-                s=55,
-                zorder=3,
-            )
+                assessments,
+                ordinary_markers,
+            ):
+                color = colors.get(assessment, "tab:gray")
+                if is_ordinary:
+                    ax.scatter(xi, yi, c=color, s=55, zorder=3)
+                else:
+                    ax.scatter(
+                        xi,
+                        yi,
+                        marker="D",
+                        facecolors="none",
+                        edgecolors=color,
+                        linewidths=1.5,
+                        s=65,
+                        zorder=3,
+                    )
             ax.set_xticks(x)
             ax.set_xticklabels(labels, rotation=30, ha="right")
             ax.set_title("{0} fit - reference".format(limits["label"]))
             ax.set_ylabel("{0} ({1})".format(limits["label"], limits["unit"]))
             ax.grid(alpha=0.25)
+        axes[0].scatter([], [], c="tab:green", s=55, label="ordinary target")
+        axes[0].scatter(
+            [],
+            [],
+            marker="D",
+            facecolors="none",
+            edgecolors="tab:gray",
+            linewidths=1.5,
+            s=65,
+            label="stress/diagnostic target",
+        )
         axes[0].legend(loc="best", fontsize=8)
         fig.suptitle("Gaia FGK Benchmark Stars recovery summary", y=1.03)
     else:

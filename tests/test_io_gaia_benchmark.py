@@ -31,6 +31,7 @@ def test_gaia_benchmark_gzip_nm_flux_error_parsing(tmp_path):
     assert segment.meta["benchmark_star_id"] == "HIP79672"
     assert segment.meta["source_instrument"] == "HARPS"
     assert segment.meta["source_spectrum_index"] == 1
+    assert segment.wave_medium == "air"
 
 
 def test_gaia_benchmark_masks_bad_flux_and_error(tmp_path):
@@ -65,16 +66,28 @@ def test_gaia_benchmark_metadata_records_resolution_and_frames(tmp_path):
 
     segment = read_gaia_benchmark_ascii(path)
 
-    assert segment.wave_medium == "unknown"
+    assert segment.wave_medium == "air"
     assert segment.observer_frame == "barycentric"
     assert segment.stellar_rest_status == "corrected"
-    assert segment.meta["wave_medium"] == "unknown"
+    assert segment.meta["wave_medium"] == "air"
+    assert "line-center comparison" in segment.meta["wave_medium_source"]
     assert segment.meta["observer_frame"] == "barycentric"
     assert segment.meta["stellar_rest_status"] == "corrected"
     assert segment.meta["flux_state"] == "continuum-normalized"
     assert segment.meta["resolution_R"] == pytest.approx(42000.0)
     assert segment.resolution.quantity == "R"
     assert segment.resolution.value == pytest.approx(42000.0)
+
+
+@pytest.mark.parametrize("medium", ["unknown", "vacuum"])
+def test_gaia_benchmark_wave_medium_can_be_overridden(medium, tmp_path):
+    path = tmp_path / "HIP37279_HARPS_1_R42KNorm.txt.gz"
+    _write_gzip_text(path, "480.0 1.0 0.01\n480.1 1.1 0.02\n")
+
+    segment = read_gaia_benchmark_ascii(path, wave_medium=medium)
+
+    assert segment.wave_medium == medium
+    assert segment.meta["wave_medium"] == medium
 
 
 @pytest.mark.parametrize(
@@ -96,6 +109,7 @@ def test_gaia_benchmark_reader_aliases(alias, tmp_path):
 
     assert segment.meta["instrument"] == "Gaia FGK Benchmark Stars"
     assert segment.meta["resolution_R"] == pytest.approx(42000.0)
+    assert segment.wave_medium == "air"
 
 
 def test_gaia_benchmark_instrument_info_is_discoverable():
@@ -105,4 +119,5 @@ def test_gaia_benchmark_instrument_info_is_discoverable():
     assert "gbs" in info.aliases
     assert info.default_observer_frame == "barycentric"
     assert info.default_stellar_rest_status == "corrected"
+    assert info.default_wave_medium == "air"
     assert info.resolving_power == "common-resolution R=42000"

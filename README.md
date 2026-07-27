@@ -490,8 +490,11 @@ descriptor with cautionary metadata; wavelength medium and frame remain
 unknown unless supplied by the user or external provenance. Gaia FGK Benchmark
 Stars Library spectra are separate validation products: the bundled examples
 use the public common-resolution, normalized, R=42,000 HARPS files over
-480-680 nm, with the literature parameters recorded for comparison rather than
-used as hidden fit priors. Run
+480-680 nm. Spyctres treats the bundled GBSv3 R42KNorm wavelength scale as air
+based on line-center validation of the example files, while recording that this
+is a reader-profile convention rather than a hidden archive correction. The
+literature parameters are recorded for comparison rather than used as hidden
+fit priors. Run
 `python scripts/gaia_benchmark_validation.py --output-json /tmp/gbs.json --output-csv /tmp/gbs.csv --output-summary-plot /tmp/gbs.png`
 for the audit-only benchmark summary; add `--run-fits` only when you want the
 PHOENIX recovery comparison.

@@ -80,13 +80,16 @@ def test_gaia_benchmark_validation_audit_cli_writes_outputs(tmp_path):
 
     assert payload["runner"] == "scripts/gaia_benchmark_validation.py"
     assert payload["run_policy"]["run_fits"] is False
+    assert payload["run_policy"]["wave_medium"] == "reader"
     assert payload["run_policy"]["reference_parameters_used_as_priors"] is False
     assert record["status"] == "audit_only"
     assert record["target_id"] == "HIP79672"
     assert record["validation_role"] == "standard"
     assert record["reference"] == {"teff": 5824.0, "logg": 4.42, "feh": 0.06}
     assert record["fit_policy"]["bounds_policy"] == "benchmark_fgk"
+    assert record["fit_policy"]["wave_medium_override"] == "reader"
     assert record["fit_policy"]["reference_parameters_used_as_priors"] is False
+    assert record["segment"]["wave_medium"] == "air"
     assert record["segment"]["wave_min_A"] == pytest.approx(4800.0)
     assert record["segment"]["wave_max_A"] == pytest.approx(6800.0)
     assert record["segment"]["resolution"]["quantity"] == "R"

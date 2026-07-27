@@ -21,7 +21,8 @@
     ],
     "observer_frame": "barycentric",
     "stellar_rest_status": "corrected",
-    "wave_medium": "unknown",
+    "wave_medium": "air",
+    "wave_medium_source": "Spyctres GBSv3 R42KNorm reader profile; verified for bundled examples by optical line-center checks because the web table does not state air/vacuum explicitly",
     "mask_policy": "No separate mask files are bundled. Spyctres uses finite wavelength/flux and positive finite error values, then records any later diagnostic masks explicitly."
   },
   "citations": [

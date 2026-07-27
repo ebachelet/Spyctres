@@ -24,8 +24,11 @@ Calibration/provenance summary:
 - resolution: common degraded product, R=42,000;
 - frame: source library describes spectra as RV-corrected to laboratory
   wavelengths; Spyctres records `stellar_rest_status="corrected"`;
-- wavelength medium: left as `unknown` because the bundled web table does not
-  state air/vacuum explicitly;
+- wavelength medium: `air` in the Spyctres GBSv3 R42KNorm reader profile. The
+  bundled web table gives `waveobs` in nm but does not state the air/vacuum
+  convention explicitly; Spyctres adopts air for this profile because strong
+  optical lines in the bundled examples align with air rest wavelengths and the
+  air/vacuum offset otherwise appears as a spurious ~80 km/s RV;
 - masks: no separate mask files are bundled here; Spyctres uses finite
   wavelength/flux and positive finite error values, then relies on normal
   diagnostic/audit masks for fitting.
