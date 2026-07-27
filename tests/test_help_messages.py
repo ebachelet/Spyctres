@@ -2,11 +2,14 @@ import pytest
 
 from Spyctres import (
     classify_spectrum,
+    describe_public_function_group,
     describe_public_function,
+    format_public_api_guide,
     fit_phoenix_spectrum,
     fit_stellar_spectrum,
     format_public_function_help,
     list_public_functions,
+    list_public_function_groups,
     read_spectrum,
 )
 
@@ -18,6 +21,10 @@ def test_public_function_help_is_structured_and_formatted():
     assert "fit_line" in topics
     assert "build_mask" in topics
     assert "plot_spectrum" in topics
+    assert "plot_fit_referee" in topics
+    assert "select_diagnostic_windows" in topics
+    assert "audit_spectrum_for_fit" in topics
+    assert "compare_fits" in topics
     assert "suggest_fit_setup" in topics
     assert "readiness_flag_actions" in topics
     assert "read_spectrum" in topics
@@ -41,6 +48,46 @@ def test_public_function_help_is_structured_and_formatted():
 
     readiness_text = format_public_function_help("readiness_flag_actions")
     assert "Translate readiness-audit flags" in readiness_text
+
+
+def test_public_function_groups_expose_beginner_path_first():
+    groups = list_public_function_groups()
+
+    assert groups[0] == "beginner"
+    assert "readiness_and_masks" in groups
+    beginner = describe_public_function_group("quickstart")
+    assert beginner["name"] == "beginner"
+    assert beginner["functions"] == [
+        "read_spectrum",
+        "plot_spectrum",
+        "suggest_fit_setup",
+        "fit_stellar_spectrum",
+        "plot_fit_referee",
+    ]
+    assert list_public_functions("readiness") == [
+        "audit_spectrum_for_fit",
+        "readiness_flag_actions",
+        "select_diagnostic_windows",
+        "plot_diagnostic_windows",
+        "build_mask",
+    ]
+    for group in groups:
+        for name in describe_public_function_group(group)["functions"]:
+            assert describe_public_function(name)["name"] == name
+
+
+def test_public_api_guide_is_one_import_oriented():
+    text = format_public_api_guide()
+
+    assert "Recommended one-import path:" in text
+    assert "import Spyctres as sp" in text
+    assert "sp.fit_stellar_spectrum" in text
+    assert "beginner: Beginner one-import path" in text
+    assert "advanced: Advanced and compatibility entry points" in text
+
+    readiness_text = format_public_api_guide("readiness")
+    assert "readiness_and_masks: Readiness, masks, and diagnostic windows" in readiness_text
+    assert "line_diagnostics" not in readiness_text
 
 
 def test_unknown_public_function_help_lists_known_topics():

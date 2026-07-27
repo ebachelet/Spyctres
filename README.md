@@ -299,6 +299,22 @@ wavelength medium, observer frame, stellar-rest status, uncertainty source,
 resolution assumptions, or mask policy; those remain in audit output, fit
 provenance, quality flags, and plots.
 
+If you are unsure which public call to use, ask Spyctres for the curated API
+guide rather than browsing internal modules:
+
+```python
+sp.format_public_api_guide()
+sp.list_public_function_groups()
+sp.list_public_functions("beginner")
+sp.format_public_function_help("fit_stellar_spectrum")
+```
+
+The top-level namespace still exposes advanced and compatibility helpers during
+alpha, but the recommended beginner route is the grouped one-import path above.
+`classify_spectrum()` is retained as a friendly alias for exploratory PHOENIX
+classification; it should not be read as a formal MK-classification engine or
+as a substitute for reviewed atmospheric-parameter fitting.
+
 `quick_example.py` is retained only as a compatibility pointer to these
 maintained workflows; smoke tests live under `scripts/`. See
 `examples/README.md` for data paths, PHOENIX configuration, caveats, and the

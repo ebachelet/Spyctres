@@ -4,8 +4,11 @@ ensure_matplotlib_config_dir()
 from .api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
 from .help import (
     describe_public_function,
+    describe_public_function_group,
+    format_public_api_guide,
     format_public_function_help,
     list_public_functions,
+    list_public_function_groups,
 )
 from .defaults import (
     FitSetup,
@@ -124,8 +127,9 @@ from .io import (
 
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
-    "describe_public_function", "format_public_function_help",
-    "list_public_functions",
+    "describe_public_function", "describe_public_function_group",
+    "format_public_api_guide", "format_public_function_help",
+    "list_public_functions", "list_public_function_groups",
     "read_spectrum", "list_instruments", "get_instrument_info",
     "InstrumentInfo", "read_uves_pop_ascii", "read_gaia_benchmark_ascii",
     "read_sdss_spec",

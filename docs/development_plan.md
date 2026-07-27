@@ -111,12 +111,20 @@ numbered examples and, later, the versioned report schema.
    - run a first-pass PHOENIX fit;
    - plot and compare fit results.
 
-   Review whether helper functions such as `readiness_flag_actions()` should
-   remain top-level or become properties of structured audit/setup objects once
-   those exist. Also clarify whether `classify_spectrum()` should remain a
-   direct alias, return a distinct first-pass classification object, or be
-   deprecated to avoid confusing atmospheric-parameter fits with formal MK
-   classification.
+   Initial implementation is now in place through the public-help registry:
+   `format_public_api_guide()`, `list_public_function_groups()`,
+   `describe_public_function_group()`, and grouped `list_public_functions(...)`
+   expose a beginner path, readiness/mask tools, local line diagnostics, fit
+   review helpers, and advanced/compatibility calls without removing existing
+   alpha exports. The README now presents `classify_spectrum()` as a friendly
+   exploratory PHOENIX-classification alias, not as a formal MK classifier.
+
+   Remaining work: decide whether helper functions such as
+   `readiness_flag_actions()` should remain top-level or become properties of
+   structured audit/setup objects once those exist; decide whether
+   `classify_spectrum()` should eventually return a distinct first-pass
+   classification object; and, later, generate the help registry from real
+   signatures/docstrings so it cannot drift from implementation.
 
    Public call help should ultimately be generated from real signatures,
    numpydoc-style docstrings, and registered examples rather than maintained as

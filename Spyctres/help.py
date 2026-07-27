@@ -1,4 +1,11 @@
-"""Small user-facing help registry for public Spyctres entry points."""
+"""Small user-facing help registry for public Spyctres entry points.
+
+The package intentionally keeps a broad top-level namespace during alpha so
+older workflows and expert notebooks remain usable.  This module provides a
+curated map over that namespace: ordinary users see the one-import path first,
+while advanced diagnostics remain discoverable without being presented as the
+minimal workflow.
+"""
 
 from __future__ import annotations
 
@@ -42,8 +49,7 @@ PUBLIC_FUNCTION_HELP = {
         "name": "fit_stellar_spectrum",
         "purpose": "Run the recommended public PHOENIX stellar-spectrum fitting workflow.",
         "minimal_call": (
-            'fit_stellar_spectrum("spectrum.fits", instrument="xshooter", '
-            'phoenix_dir="/path/to/PHOENIX")'
+            'fit_stellar_spectrum(spec, model="phoenix", setup=setup)'
         ),
         "required": [
             {
@@ -197,9 +203,52 @@ PUBLIC_FUNCTION_HELP = {
             "notebooks or GUIs."
         ),
     },
+    "audit_spectrum_for_fit": {
+        "name": "audit_spectrum_for_fit",
+        "purpose": "Audit whether a loaded spectrum is ready for a specific fitting or inspection intent.",
+        "minimal_call": 'audit_spectrum_for_fit(spec, intent="quicklook_classification")',
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "A loaded SpectrumSegment or SpectrumCollection.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "intent",
+                "default": "quicklook_classification",
+                "description": (
+                    "Task-specific policy: inspect, quicklook_classification, "
+                    "atmospheric_parameters, radial_velocity, or publication."
+                ),
+            },
+            {
+                "name": "fit_windows / regions",
+                "default": "full coverage",
+                "description": "Wavelength windows over which readiness should be judged.",
+            },
+            {
+                "name": "assumed_resolution",
+                "default": "None",
+                "description": "Explicit resolution assumption for the audit, without mutating the spectrum.",
+            },
+            {
+                "name": "exclude_masks",
+                "default": "None",
+                "description": "Explicit masks to apply when counting fitted pixels.",
+            },
+        ],
+        "advice": (
+            "Use ready_for_intent and blockers_for_intent for the task at hand; "
+            "strict fit_ready remains a conservative/backward-compatible gate."
+        ),
+    },
     "classify_spectrum": {
         "name": "classify_spectrum",
-        "purpose": "Alias for fit_stellar_spectrum() for first-pass classification workflows.",
+        "purpose": (
+            "Friendly alias for fit_stellar_spectrum() in exploratory PHOENIX "
+            "classification workflows; it is not a formal MK classifier."
+        ),
         "minimal_call": (
             'classify_spectrum("spectrum.fits", instrument="xshooter", '
             'phoenix_dir="/path/to/PHOENIX")'
@@ -217,7 +266,11 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "classify_spectrum forwards arguments to fit_stellar_spectrum.",
             },
         ],
-        "advice": "Use describe_public_function('fit_stellar_spectrum') for the full option list.",
+        "advice": (
+            "Use this when the mental model is first-pass classification. Use "
+            "fit_stellar_spectrum() plus a reviewed setup when writing auditable "
+            "or publication-oriented code."
+        ),
     },
     "plot_spectrum": {
         "name": "plot_spectrum",
@@ -271,6 +324,28 @@ PUBLIC_FUNCTION_HELP = {
             },
         ],
         "advice": "Diagnostic windows are suggestions for inspection and controlled fits; they are not spectral-type labels.",
+    },
+    "select_diagnostic_windows": {
+        "name": "select_diagnostic_windows",
+        "purpose": "Select advisory diagnostic windows from wavelength coverage and metadata.",
+        "minimal_call": "select_diagnostic_windows(spec)",
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "Loaded spectrum to inspect.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "roles / branches",
+                "default": "auto",
+                "description": "Advanced filters for diagnostic-window families and branch candidates.",
+            },
+        ],
+        "advice": (
+            "Use the returned windows for inspection and controlled fit plans; "
+            "they are suggestions, not hidden preprocessing corrections."
+        ),
     },
     "build_mask": {
         "name": "build_mask",
@@ -329,6 +404,71 @@ PUBLIC_FUNCTION_HELP = {
         ],
         "advice": "Use fit_line for local diagnostics and seeding; use fit_stellar_spectrum for atmospheric parameters.",
     },
+    "plot_line_fit": {
+        "name": "plot_line_fit",
+        "purpose": "Plot the result of one local line fit.",
+        "minimal_call": "plot_line_fit(line_result)",
+        "required": [
+            {
+                "name": "line_result",
+                "description": "LineFitResult returned by fit_line() or fit_lines().",
+            },
+        ],
+        "optional": [
+            {
+                "name": "matplotlib options",
+                "default": "varies",
+                "description": "Optional title, axis, and display/save controls.",
+            },
+        ],
+        "advice": "Use line plots to diagnose individual features; do not promote them to global stellar parameters by themselves.",
+    },
+    "plot_fit_referee": {
+        "name": "plot_fit_referee",
+        "purpose": "Create the standard observed/model/residual plot for a PHOENIX fit result.",
+        "minimal_call": "plot_fit_referee(result)",
+        "required": [
+            {
+                "name": "result",
+                "description": "PhoenixFitResult returned by fit_stellar_spectrum() or fit_phoenix_spectrum().",
+            },
+        ],
+        "optional": [
+            {
+                "name": "savepath",
+                "default": "None",
+                "description": "Optional output path; parent directories are created defensively.",
+            },
+            {
+                "name": "plot_layout / plot_xlim",
+                "default": "stacked / fit",
+                "description": "User-facing controls for wide stacked plots and fit-window/full-range display.",
+            },
+        ],
+        "advice": "Use this as the first residual check after every fit; quality flags still need to be read.",
+    },
+    "compare_fits": {
+        "name": "compare_fits",
+        "purpose": "Compare two or more Spyctres fit results for stability and quality review.",
+        "minimal_call": 'compare_fits(result_a, result_b, labels=("baseline", "variant"))',
+        "required": [
+            {
+                "name": "fit results",
+                "description": "Two or more PhoenixFitResult objects or result-like mappings.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "labels",
+                "default": "auto",
+                "description": "Short labels used in returned comparison tables.",
+            },
+        ],
+        "advice": (
+            "Use comparisons to check sensitivity to masks, windows, resolution, "
+            "or setup mode; the lowest raw chi-square alone is not a scientific winner."
+        ),
+    },
     "fit_phoenix_spectrum": {
         "name": "fit_phoenix_spectrum",
         "purpose": "Lower-level PHOENIX fit wrapper for an already canonicalized spectrum.",
@@ -372,8 +512,127 @@ PUBLIC_FUNCTION_HELP = {
 }
 
 
-def list_public_functions():
-    """Return public functions with Spyctres call-help metadata."""
+PUBLIC_FUNCTION_GROUPS = {
+    "beginner": {
+        "title": "Beginner one-import path",
+        "description": (
+            "The smallest practical path for reading a spectrum, reviewing the "
+            "setup, running a first-pass PHOENIX fit, and plotting diagnostics."
+        ),
+        "functions": (
+            "read_spectrum",
+            "plot_spectrum",
+            "suggest_fit_setup",
+            "fit_stellar_spectrum",
+            "plot_fit_referee",
+        ),
+    },
+    "readiness_and_masks": {
+        "title": "Readiness, masks, and diagnostic windows",
+        "description": (
+            "Tools for making wavelength/frame, uncertainty, LSF, mask, and "
+            "window assumptions visible before or beside a fit."
+        ),
+        "functions": (
+            "audit_spectrum_for_fit",
+            "readiness_flag_actions",
+            "select_diagnostic_windows",
+            "plot_diagnostic_windows",
+            "build_mask",
+        ),
+    },
+    "line_diagnostics": {
+        "title": "Local line diagnostics",
+        "description": (
+            "Fast local line checks used for feature inspection, RV clues, and "
+            "quality diagnostics; not replacements for atmospheric fitting."
+        ),
+        "functions": (
+            "fit_line",
+            "plot_line_fit",
+        ),
+    },
+    "fit_review": {
+        "title": "Fit review and comparison",
+        "description": (
+            "Result plotting and stability checks after one or more fits have "
+            "been run."
+        ),
+        "functions": (
+            "plot_fit_referee",
+            "compare_fits",
+        ),
+    },
+    "advanced": {
+        "title": "Advanced and compatibility entry points",
+        "description": (
+            "Lower-level or compatibility calls for expert scripts and legacy "
+            "migration; beginners should usually start elsewhere."
+        ),
+        "functions": (
+            "fit_phoenix_spectrum",
+            "classify_spectrum",
+        ),
+    },
+}
+
+
+PUBLIC_FUNCTION_GROUP_ALIASES = {
+    "first_steps": "beginner",
+    "quickstart": "beginner",
+    "one_import": "beginner",
+    "masks": "readiness_and_masks",
+    "readiness": "readiness_and_masks",
+    "diagnostic_windows": "readiness_and_masks",
+    "lines": "line_diagnostics",
+    "line_fitting": "line_diagnostics",
+    "review": "fit_review",
+    "comparison": "fit_review",
+    "expert": "advanced",
+    "compatibility": "advanced",
+}
+
+
+def _normalize_group_name(group):
+    key = str(group).strip().lower().replace("-", "_").replace(" ", "_")
+    key = PUBLIC_FUNCTION_GROUP_ALIASES.get(key, key)
+    if key not in PUBLIC_FUNCTION_GROUPS:
+        known = ", ".join(list_public_function_groups())
+        raise ValueError(
+            "Unknown public function group '{0}'. Known groups: {1}.".format(
+                group,
+                known,
+            )
+        )
+    return key
+
+
+def list_public_function_groups():
+    """Return names of curated public-function groups."""
+    return list(PUBLIC_FUNCTION_GROUPS)
+
+
+def describe_public_function_group(group):
+    """Return a JSON-safe help record for a curated public-function group."""
+    key = _normalize_group_name(group)
+    record = PUBLIC_FUNCTION_GROUPS[key]
+    return {
+        "name": key,
+        "title": record["title"],
+        "description": record["description"],
+        "functions": list(record["functions"]),
+    }
+
+
+def list_public_functions(group=None):
+    """Return public functions with Spyctres call-help metadata.
+
+    With no group, this returns the full sorted help-topic list.  With a group
+    such as ``"beginner"`` or ``"readiness"``, it returns the curated order for
+    that user-facing workflow.
+    """
+    if group is not None:
+        return describe_public_function_group(group)["functions"]
     return sorted(PUBLIC_FUNCTION_HELP)
 
 
@@ -423,6 +682,38 @@ def format_public_function_help(name):
         )
     lines.append("Advice:")
     lines.append("  {0}".format(record["advice"]))
+    return "\n".join(lines)
+
+
+def format_public_api_guide(group=None):
+    """Return a compact guide to the curated Spyctres public API."""
+    lines = [
+        "Spyctres public API guide",
+        "",
+        "Recommended one-import path:",
+        "  import Spyctres as sp",
+        '  spec = sp.read_spectrum("my_spectrum.fits", instrument="xshooter")',
+        "  setup = sp.suggest_fit_setup(spec)",
+        '  result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)',
+        "  sp.plot_fit_referee(result)",
+        "",
+    ]
+    groups = [describe_public_function_group(group)] if group else [
+        describe_public_function_group(name)
+        for name in list_public_function_groups()
+    ]
+    lines.append("Function groups:")
+    for item in groups:
+        lines.append("  {0}: {1}".format(item["name"], item["title"]))
+        lines.append("    {0}".format(item["description"]))
+        lines.append("    functions: {0}".format(", ".join(item["functions"])))
+    lines.extend(
+        [
+            "",
+            "For details on one function:",
+            "  sp.format_public_function_help('fit_stellar_spectrum')",
+        ]
+    )
     return "\n".join(lines)
 
 
