@@ -453,19 +453,20 @@ def test_fit_report_envelope_records_schema_and_provenance():
     assert "models" not in payload["result"]
     assert payload["result"]["provenance"]["phoenix_source_root"] is None
     assert payload["result"]["provenance"]["cache_path"] is None
-    assert payload["provenance_summary"] == {
-        "workflow_api": "fit_stellar_spectrum",
-        "model_backend": "phoenix",
-        "fit_setup_source": None,
-        "fit_setup_hash": "abc123",
-        "instrument": "xshooter",
-        "input_was_path": True,
-        "rv_convention": "positive rv_kms redshifts a receding stellar spectrum",
-        "rv_bary_explicit": True,
-        "phoenix_source_root": None,
-        "cache_schema_version": None,
-        "cache_path": None,
-    }
+    summary = payload["provenance_summary"]
+    assert summary["workflow_api"] == "fit_stellar_spectrum"
+    assert summary["model_backend"] == "phoenix"
+    assert summary["fit_setup_hash"] == "abc123"
+    assert summary["instrument"] == "xshooter"
+    assert summary["input_was_path"] is True
+    assert (
+        summary["rv_convention"]
+        == "positive rv_kms redshifts a receding stellar spectrum"
+    )
+    assert summary["rv_bary_explicit"] is True
+    assert summary["quality_flags"] == ["ok"]
+    assert summary["phoenix_source_root"] is None
+    assert summary["cache_path"] is None
     json.dumps(payload)
 
 
@@ -512,6 +513,63 @@ def test_report_json_can_include_local_paths_explicitly():
     assert payload["result"]["provenance"]["cache_path"] == "/tmp/spyctres_cache.npz"
     assert payload["provenance_summary"]["phoenix_source_root"] == "/home/someone/PHOENIX"
     assert payload["provenance_summary"]["cache_path"] == "/tmp/spyctres_cache.npz"
+
+
+def test_report_provenance_summary_surfaces_setup_mask_resolution_and_phoenix():
+    result = PhoenixFitResult(
+        summary={
+            "teff": 6000.0,
+            "resolution_R": 6200.0,
+            "lsf_fwhm_kms": 48.35,
+            "wavelength_frame_assumption": "topocentric data; stellar RV fitted",
+            "fit_setup": {
+                "setup_hash": "setup456",
+                "readiness": {
+                    "intent": "quicklook_classification",
+                    "ready_for_intent": True,
+                    "fit_ready": False,
+                },
+                "provenance": {
+                    "assumed_resolution": {
+                        "quantity": "R",
+                        "value": 6200.0,
+                        "source": "user_override",
+                    }
+                },
+            },
+            "archive_mask_policy": {"policy": "warn", "applied": False},
+            "quality_flags": ["metadata_incomplete"],
+        },
+        provenance={
+            "workflow_api": "fit_stellar_spectrum",
+            "workflow_model": "phoenix",
+            "phoenix_model_tag": "PHOENIX-ACES-AGSS-COND-2011-HiRes",
+            "phoenix_wave_filename": "WAVE_PHOENIX-ACES-AGSS-COND-2011.fits",
+            "phoenix_wave_medium": "vacuum",
+            "phoenix_template_axis_counts": {"teff": 73, "feh": 7, "logg": 13},
+            "phoenix_composition_note": "not yet extracted from headers",
+        },
+    )
+
+    summary = result.to_report_dict(include_arrays=False)["provenance_summary"]
+
+    assert summary["fit_setup_hash"] == "setup456"
+    assert summary["readiness_intent"] == "quicklook_classification"
+    assert summary["ready_for_intent"] is True
+    assert summary["fit_ready"] is False
+    assert summary["mask_policy"] == "warn"
+    assert summary["archive_mask_policy"] == {"policy": "warn", "applied": False}
+    assert summary["resolution_source"] == "user_override"
+    assert summary["assumed_resolution_R"] == 6200.0
+    assert summary["resolution_R"] == 6200.0
+    assert summary["lsf_fwhm_kms"] == 48.35
+    assert summary["wavelength_frame_assumption"] == (
+        "topocentric data; stellar RV fitted"
+    )
+    assert summary["quality_flags"] == ["metadata_incomplete"]
+    assert summary["phoenix_model_tag"] == "PHOENIX-ACES-AGSS-COND-2011-HiRes"
+    assert summary["phoenix_wave_medium"] == "vacuum"
+    assert summary["phoenix_template_axis_counts"]["teff"] == 73
 
 
 def test_to_dict_rejects_absolute_plot_paths_without_relative_base():

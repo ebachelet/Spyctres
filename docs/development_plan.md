@@ -141,15 +141,20 @@ envelope for archival and reviewer-facing products.
    compact direct-result payload for backward compatibility. The report envelope
    records schema version, Spyctres version, git commit if available, path
    sanitization policy, generated plot paths, a direct `result` payload, and a
-   compact provenance summary with the reviewed setup hash when present.
+   compact provenance summary with the reviewed setup hash when present. The
+   simple PHOENIX example and the publication-quality X-SHOOTER scaffold now
+   expose this as optional `--output-report-json`; their existing
+   `--output-json` products are unchanged.
 
    Remaining work: enrich the envelope without breaking its top-level shape.
-   Priority fields are model-grid manifest/hash, input checksum when allowed,
-   wavelength assumptions, mask policy, resolution source, quality flags,
-   readiness intent, and PHOENIX composition provenance: model family/version,
-   selected abundance pattern, alpha policy, microturbulence policy if known,
-   solar abundance scale, and whether `[Fe/H]` is an iron abundance, global
-   metallicity, or a grid label.
+   The first enrichment pass surfaces existing wavelength assumptions, mask
+   policy, resolution source, quality flags, readiness intent, PHOENIX model tag
+   and wave file, cache schema, and template-axis counts/ranges when available.
+   Remaining priority fields are model-grid manifest/hash, input checksum when
+   allowed, and detailed PHOENIX composition provenance: selected abundance
+   pattern, alpha policy, microturbulence policy if known, solar abundance
+   scale, and whether `[Fe/H]` is an iron abundance, global metallicity, or a
+   grid label.
 
 6. **Real-spectrum validation before further feature growth.**
    Expand and maintain validation on real spectra before adding heavier

@@ -26,6 +26,41 @@ _RECONSTRUCTION_KEYS = (
 )
 
 
+def _phoenix_library_provenance(phoenix_lib):
+    """Return compact PHOENIX library provenance without forcing heavy work."""
+    model_tag = getattr(phoenix_lib, "model_tag", None)
+    payload = {
+        "phoenix_model_tag": None if model_tag is None else str(model_tag),
+        "phoenix_wave_filename": getattr(phoenix_lib, "wave_filename", None),
+        "phoenix_wave_medium": getattr(phoenix_lib, "phoenix_wave_medium", None),
+        "phoenix_composition_note": (
+            "Detailed abundance, alpha, microturbulence, and solar-scale "
+            "metadata are not yet extracted from template headers; current "
+            "provenance records the local PHOENIX model tag and source root."
+        ),
+    }
+    available_axes = getattr(phoenix_lib, "available_axes", None)
+    if callable(available_axes):
+        try:
+            teff_axis, feh_axis, logg_axis = available_axes()
+        except Exception:
+            return payload
+        axes = {
+            "teff": teff_axis,
+            "feh": feh_axis,
+            "logg": logg_axis,
+        }
+        payload["phoenix_template_axis_counts"] = {
+            key: int(len(values)) for key, values in axes.items()
+        }
+        payload["phoenix_template_axis_ranges"] = {
+            key: [float(min(values)), float(max(values))]
+            for key, values in axes.items()
+            if len(values)
+        }
+    return payload
+
+
 def _setup_payload(setup):
     if setup is None:
         return None
@@ -101,6 +136,7 @@ def fit_phoenix_spectrum(
         "reconstruction_requested": bool(reconstruct),
         "reconstruction_performed": bool(reconstruct and summary.get("success", False)),
     }
+    provenance.update(_phoenix_library_provenance(phoenix_lib))
     return PhoenixFitResult(
         summary=dict(summary),
         models=tuple(models),

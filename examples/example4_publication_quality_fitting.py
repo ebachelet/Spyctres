@@ -27,6 +27,7 @@ Example opt-in baseline fit:
   python examples/example4_publication_quality_fitting.py \
     --run-baseline-fit \
     --output-json /tmp/spyctres_example4_publication_fit.json \
+    --output-report-json /tmp/spyctres_example4_publication_report.json \
     --output-plot /tmp/spyctres_example4_publication_fit.png
 """
 
@@ -60,6 +61,7 @@ def build_parser():
             "  python examples/example4_publication_quality_fitting.py "
             "--run-baseline-fit "
             "--output-json /tmp/spyctres_example4_publication_fit.json "
+            "--output-report-json /tmp/spyctres_example4_publication_report.json "
             "--output-plot /tmp/spyctres_example4_publication_fit.png\n\n"
             "Next:\n"
             "  python examples/example5_batch_fitting.py --help"
@@ -84,6 +86,7 @@ def build_parser():
         "--output-json",
         default="/tmp/spyctres_example4_publication.json",
     )
+    parser.add_argument("--output-report-json", default=None)
     parser.add_argument("--output-plot", default=None)
     return parser
 
@@ -99,6 +102,8 @@ def main(argv=None):
         delegated.extend(["--phoenix-dir", str(args.phoenix_dir)])
     if args.run_baseline_fit:
         delegated.append("--run-baseline-fit")
+    if args.output_report_json:
+        delegated.extend(["--output-report-json", str(args.output_report_json)])
     if args.output_plot:
         delegated.extend(["--output-plot", str(args.output_plot)])
     exit_code = publication_quality_xshooter_uvb.main(delegated)

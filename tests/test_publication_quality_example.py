@@ -320,6 +320,47 @@ def test_publication_summary_recommends_baseline_command(tmp_path):
     assert actions[0]["writes_new_checkpoint"] is True
 
 
+def test_publication_baseline_report_writer_saves_versioned_envelope(tmp_path):
+    module = _load_publication_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "--run-baseline-fit",
+            "--output-json",
+            str(tmp_path / "publication_fit.json"),
+            "--output-report-json",
+            str(tmp_path / "publication_report.json"),
+            "--output-plot",
+            str(tmp_path / "publication_fit.png"),
+        ]
+    )
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": 9000.0,
+            "fit_setup_hash": "baseline-setup",
+        },
+        provenance={
+            "workflow_api": "fit_stellar_spectrum",
+            "workflow_model": "phoenix",
+        },
+        quality_flags=("ok",),
+    )
+
+    module._write_baseline_report_json(args, result)
+
+    report = json.loads((tmp_path / "publication_report.json").read_text())
+    assert report["report_type"] == "spyctres.fit_result_report"
+    assert report["result"]["generated_files"]["plots"]["referee_plot"] == (
+        "publication_fit.png"
+    )
+    assert report["provenance_summary"]["fit_setup_hash"] == "baseline-setup"
+    assert report["provenance_summary"]["quality_flags"] == ["ok"]
+    assert report["report_context"]["report_scope"] == "baseline_fit_only"
+    assert report["report_context"]["scaffold_checkpoint_json"].endswith(
+        "publication_fit.json"
+    )
+
+
 def test_publication_summary_recommends_window_set_command(tmp_path):
     module = _load_publication_example_module()
     args = module.build_parser().parse_args(

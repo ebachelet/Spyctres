@@ -133,6 +133,13 @@ def _mapping_get(mapping, key, default=None):
             return default
 
 
+def _first_present(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _as_result_payload(result):
     if isinstance(result, PhoenixFitResult):
         return result.to_dict(include_arrays=False)
@@ -171,6 +178,40 @@ def _fit_report_provenance_summary(payload):
     provenance = payload.get("provenance") if isinstance(payload, Mapping) else {}
     if not isinstance(provenance, Mapping):
         provenance = {}
+    fit_setup = payload.get("fit_setup") if isinstance(payload, Mapping) else {}
+    if not isinstance(fit_setup, Mapping):
+        fit_setup = {}
+    setup_provenance = fit_setup.get("provenance")
+    if not isinstance(setup_provenance, Mapping):
+        setup_provenance = {}
+    readiness = _first_present(
+        provenance.get("spectrum_readiness"),
+        payload.get("spectrum_readiness"),
+        fit_setup.get("readiness"),
+    )
+    if not isinstance(readiness, Mapping):
+        readiness = {}
+    resolution_override = _first_present(
+        provenance.get("resolution_override"),
+        payload.get("resolution_override"),
+    )
+    if not isinstance(resolution_override, Mapping):
+        resolution_override = {}
+    assumed_resolution = _first_present(
+        setup_provenance.get("assumed_resolution"),
+        readiness.get("assumed_resolution"),
+        resolution_override,
+    )
+    if not isinstance(assumed_resolution, Mapping):
+        assumed_resolution = {}
+    archive_mask_policy = _first_present(
+        provenance.get("archive_mask_policy"),
+        payload.get("archive_mask_policy"),
+    )
+    if isinstance(archive_mask_policy, Mapping):
+        mask_policy = archive_mask_policy.get("policy")
+    else:
+        mask_policy = archive_mask_policy
     setup_hash = _extract_fit_setup_hash(payload, provenance)
     model_backend = (
         provenance.get("workflow_model")
@@ -186,11 +227,56 @@ def _fit_report_provenance_summary(payload):
             "fit_setup_hash": setup_hash,
             "instrument": provenance.get("instrument"),
             "input_was_path": provenance.get("input_was_path"),
+            "readiness_intent": _first_present(
+                readiness.get("intent"),
+                setup_provenance.get("readiness_intent"),
+            ),
+            "ready_for_intent": readiness.get("ready_for_intent"),
+            "fit_ready": readiness.get("fit_ready"),
+            "quality_flags": list(payload.get("quality_flags") or []),
+            "mask_policy": mask_policy,
+            "archive_mask_policy": archive_mask_policy,
+            "resolution_source": _first_present(
+                provenance.get("resolution_source"),
+                payload.get("resolution_source"),
+                resolution_override.get("resolution_source"),
+                resolution_override.get("source"),
+                assumed_resolution.get("source"),
+            ),
+            "assumed_resolution_R": _first_present(
+                provenance.get("assumed_resolution_R"),
+                payload.get("assumed_resolution_R"),
+                resolution_override.get("assumed_resolution_R"),
+                resolution_override.get("value")
+                if assumed_resolution.get("quantity", "R") == "R"
+                else None,
+                assumed_resolution.get("value")
+                if assumed_resolution.get("quantity", "R") == "R"
+                else None,
+                assumed_resolution.get("R"),
+            ),
+            "resolution_R": payload.get("resolution_R"),
+            "lsf_fwhm_kms": payload.get("lsf_fwhm_kms"),
+            "wavelength_medium_override": _first_present(
+                provenance.get("wave_medium_override"),
+                payload.get("wave_medium_override"),
+            ),
+            "wavelength_frame_assumption": payload.get("wavelength_frame_assumption"),
             "rv_convention": provenance.get("rv_convention"),
             "rv_bary_explicit": provenance.get("rv_bary_explicit"),
             "phoenix_source_root": provenance.get("phoenix_source_root"),
             "cache_schema_version": provenance.get("cache_schema_version"),
             "cache_path": provenance.get("cache_path"),
+            "phoenix_model_tag": provenance.get("phoenix_model_tag"),
+            "phoenix_wave_filename": provenance.get("phoenix_wave_filename"),
+            "phoenix_wave_medium": provenance.get("phoenix_wave_medium"),
+            "phoenix_template_axis_counts": provenance.get(
+                "phoenix_template_axis_counts"
+            ),
+            "phoenix_template_axis_ranges": provenance.get(
+                "phoenix_template_axis_ranges"
+            ),
+            "phoenix_composition_note": provenance.get("phoenix_composition_note"),
         }
     )
 

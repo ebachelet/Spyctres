@@ -96,6 +96,7 @@ python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
   --output-json /tmp/spyctres_result.json \
+  --output-report-json /tmp/spyctres_fit_report.json \
   --output-plot /tmp/spyctres_fit.png
 ```
 
@@ -648,6 +649,7 @@ After PHOENIX is configured, opt in to the baseline fit:
 python examples/publication_quality_xshooter_uvb.py \
   --run-baseline-fit \
   --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-report-json /tmp/spyctres_publication_xshooter_uvb_report.json \
   --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png \
   --output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv
 ```
@@ -731,6 +733,9 @@ so users can zoom, pan, and inspect residuals. Add `--no-show` for automated or
 headless runs; `--output-plot` can be used independently to save the figure. If
 `--output-json` and `--output-plot` are both provided, the JSON records the plot
 path relative to the JSON file and strips local cache/template paths by default.
+Add `--output-report-json` when you want a versioned result envelope for
+reviewer, web, or Django hand-off; this wraps the compact fit result with schema
+version, path policy, generated plots, and a provenance summary.
 The default plot focuses on the wavelength span actually used in the fit and
 draws PHOENIX/model residuals only on fitted pixels; this avoids making masked
 or out-of-window data look as if they influenced the solution. The

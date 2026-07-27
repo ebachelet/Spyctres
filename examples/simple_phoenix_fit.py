@@ -32,6 +32,7 @@ python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --instrument xshooter \
   --output-json /tmp/spyctres_result.json \
+  --output-report-json /tmp/spyctres_fit_report.json \
   --output-plot /tmp/spyctres_fit.png
 """
 
@@ -96,6 +97,7 @@ def build_parser():
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
             "--instrument xshooter "
             "--output-json /tmp/spyctres_result.json "
+            "--output-report-json /tmp/spyctres_fit_report.json "
             "--output-plot /tmp/spyctres_fit.png\n\n"
             "Notes for user-supplied external spectra:\n"
             "  SDSS reader metadata intentionally keeps resolution=None. If "
@@ -245,6 +247,15 @@ def build_parser():
         ),
     )
     output_group.add_argument("--output-json", default=None)
+    output_group.add_argument(
+        "--output-report-json",
+        default=None,
+        help=(
+            "Optional versioned fit-report JSON envelope for reviewer/web "
+            "hand-off. The existing --output-json remains the compact direct "
+            "result payload."
+        ),
+    )
     output_group.add_argument("--output-plot", default=None)
     output_group.add_argument(
         "--plot-layout",
@@ -1062,6 +1073,15 @@ def main(argv=None):
     if not result.models:
         if args.output_json:
             result.save_json(args.output_json)
+        if args.output_report_json:
+            result.save_report_json(
+                args.output_report_json,
+                report_context={
+                    "workflow": "examples/simple_phoenix_fit.py",
+                    "compact_json": args.output_json,
+                    "note": "Fit did not converge; no model plot was generated.",
+                },
+            )
         raise RuntimeError("Fit did not converge, so no model is available to plot.")
     generated_plot_paths = {}
     print("Building diagnostic plot...", flush=True)
@@ -1094,6 +1114,22 @@ def main(argv=None):
         result.save_json(
             args.output_json,
             plot_paths=generated_plot_paths or None,
+        )
+    if args.output_report_json:
+        result.save_report_json(
+            args.output_report_json,
+            plot_paths=generated_plot_paths or None,
+            report_context={
+                "workflow": "examples/simple_phoenix_fit.py",
+                "compact_json": args.output_json,
+                "plot_xlim": args.plot_xlim,
+                "line_diagnostics": bool(args.line_diagnostics),
+            },
+            relative_to=(
+                Path(args.output_json).expanduser().resolve().parent
+                if args.output_json
+                else None
+            ),
         )
     if not args.no_show:
         plt.show()

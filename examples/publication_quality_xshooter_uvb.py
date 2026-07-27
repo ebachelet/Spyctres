@@ -26,6 +26,7 @@ Example baseline fit after PHOENIX is configured
 python examples/publication_quality_xshooter_uvb.py \
   --run-baseline-fit \
   --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-report-json /tmp/spyctres_publication_xshooter_uvb_report.json \
   --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png
 
 Optional bounded systematic-variant run
@@ -210,6 +211,7 @@ def build_parser():
             "  python examples/publication_quality_xshooter_uvb.py "
             "--run-baseline-fit "
             "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
+            "--output-report-json /tmp/spyctres_publication_xshooter_uvb_report.json "
             "--output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png "
             "--output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv\n\n"
             "  python examples/publication_quality_xshooter_uvb.py "
@@ -250,6 +252,15 @@ def build_parser():
         "--output-json",
         default="/tmp/spyctres_publication_xshooter_uvb.json",
         help="Atomic JSON checkpoint/output path.",
+    )
+    parser.add_argument(
+        "--output-report-json",
+        default=None,
+        help=(
+            "Optional versioned PhoenixFitResult report for the baseline fit. "
+            "Requires --run-baseline-fit. The existing --output-json remains "
+            "the full scaffold checkpoint."
+        ),
     )
     parser.add_argument(
         "--output-plot",
@@ -4732,6 +4743,8 @@ def _run_baseline_fit(
     output_plot=None,
     return_result=False,
     fit_label="baseline",
+    ordinary_readiness=None,
+    publication_readiness=None,
 ):
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, collection, exclude_masks)
     print("Running {0} native-grid PHOENIX fit...".format(fit_label), flush=True)
@@ -4746,6 +4759,23 @@ def _run_baseline_fit(
     )
     if suggestion is not None:
         result.summary["fit_default_suggestion"] = suggestion.to_dict()
+    if ordinary_readiness is not None:
+        result.summary["spectrum_readiness"] = ordinary_readiness
+        result.provenance["spectrum_readiness"] = ordinary_readiness
+    if publication_readiness is not None:
+        result.summary["publication_readiness"] = publication_readiness
+        result.provenance["publication_readiness"] = publication_readiness
+    result.summary["archive_mask_policy"] = {
+        "policy": str(args.archive_mask_policy),
+        "applied": bool(str(args.archive_mask_policy).lower() == "apply"),
+    }
+    result.provenance["archive_mask_policy"] = dict(
+        result.summary["archive_mask_policy"]
+    )
+    resolution = _resolution_assumption(args)
+    if resolution is not None:
+        result.summary["resolution_override"] = resolution
+        result.provenance["resolution_override"] = dict(resolution)
     plot_paths = {}
     if output_plot:
         print("Writing baseline referee plot...", flush=True)
@@ -4769,6 +4799,28 @@ def _run_baseline_fit(
     if return_result:
         return payload, result
     return payload
+
+
+def _write_baseline_report_json(args, result):
+    if not args.output_report_json:
+        return
+    plot_paths = {"referee_plot": args.output_plot} if args.output_plot else None
+    result.save_report_json(
+        args.output_report_json,
+        plot_paths=plot_paths,
+        relative_to=Path(args.output_json).expanduser().resolve().parent,
+        report_context={
+            "workflow": "examples/publication_quality_xshooter_uvb.py",
+            "report_scope": "baseline_fit_only",
+            "scaffold_checkpoint_json": args.output_json,
+            "note": (
+                "The full publication scaffold checkpoint remains in "
+                "--output-json; this report envelope contains the baseline "
+                "PhoenixFitResult payload and key provenance for hand-off."
+            ),
+        },
+    )
+    print("Wrote baseline fit report: {0}".format(args.output_report_json), flush=True)
 
 
 def _summarize_core_mask_variant(width, ordinary, publication, fit_payload=None):
@@ -4954,7 +5006,10 @@ def _run_core_mask_sensitivity(args, segment):
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.output_report_json and not args.run_baseline_fit:
+        parser.error("--output-report-json requires --run-baseline-fit.")
     output_path = Path(args.output_json)
     if args.resume and output_path.exists() and not args.force:
         existing = _read_existing(output_path)
@@ -5052,6 +5107,8 @@ def main(argv=None):
             exclude_masks,
             output_plot=args.output_plot,
             return_result=True,
+            ordinary_readiness=ordinary,
+            publication_readiness=publication,
         )
         payload["baseline_fit"] = baseline_payload
         payload["baseline_line_residual_diagnostics"] = (
@@ -5065,6 +5122,7 @@ def main(argv=None):
             args.output_balmer_residual_csv,
             payload["baseline_line_residual_diagnostics"],
         )
+        _write_baseline_report_json(args, baseline_result)
         payload["status"] = (
             "baseline_fit_completed_needs_publication_systematics"
             if payload["baseline_fit"].get("success")

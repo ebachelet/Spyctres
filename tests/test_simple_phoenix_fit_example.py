@@ -207,6 +207,25 @@ def test_resolution_override_filters_missing_resolution_display():
     ) == ["wavelength medium is unknown"]
 
 
+def test_parser_accepts_optional_versioned_report_output(tmp_path):
+    module = _load_example_module()
+
+    args = module.build_parser().parse_args(
+        [
+            "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
+            "--instrument",
+            "xshooter",
+            "--output-json",
+            str(tmp_path / "compact.json"),
+            "--output-report-json",
+            str(tmp_path / "report.json"),
+        ]
+    )
+
+    assert args.output_json.endswith("compact.json")
+    assert args.output_report_json.endswith("report.json")
+
+
 def test_line_diagnostics_skip_zero_flux_blocks():
     module = _load_example_module()
     wave = np.linspace(8460.0, 8690.0, 1200)
