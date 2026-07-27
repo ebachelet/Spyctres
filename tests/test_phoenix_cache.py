@@ -89,6 +89,35 @@ def test_interpolator_match_uses_exact_wave_and_parameter_axes(tmp_path):
     )
 
 
+def test_interpolator_manifest_is_path_free_and_stable(tmp_path):
+    library = make_library(tmp_path)
+    library.wave = np.array([5000.0, 5001.0, 5002.0])
+    library._observed_wave_medium = "air"
+    library._grid = (
+        np.array([5000.0, 6000.0]),
+        np.array([-0.5, 0.0]),
+        np.array([4.0, 4.5]),
+    )
+    library._flux_grid = np.ones((2, 2, 2, 3))
+
+    first = library.interpolator_manifest()
+    second = library.interpolator_manifest()
+
+    assert first == second
+    assert first["status"] == "built"
+    assert first["manifest_hash"]
+    assert "source_root" not in first
+    assert str(tmp_path) not in str(first)
+    assert first["hash_policy"] == {
+        "parameter_axes_hashed": True,
+        "interpolator_wave_grid_hashed": True,
+        "flux_grid_hashed": False,
+    }
+    assert first["parameter_axes"]["teff"]["n"] == 2
+    assert first["interpolator_wave_grid"]["n"] == 3
+    assert first["observed_wave_medium"] == "air"
+
+
 def test_interpolator_uses_scaled_axes_but_preserves_physical_grid(tmp_path):
     library = make_library(tmp_path)
     library.wave = np.array([5000.0, 5001.0])

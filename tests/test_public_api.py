@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import numpy as np
@@ -543,10 +544,28 @@ def test_report_provenance_summary_surfaces_setup_mask_resolution_and_phoenix():
         provenance={
             "workflow_api": "fit_stellar_spectrum",
             "workflow_model": "phoenix",
+            "input_checksum_policy": {
+                "requested": True,
+                "algorithm": "sha256",
+                "scope": "input_file_bytes",
+                "computed": True,
+                "reason": "requested",
+            },
+            "input_checksum": {
+                "algorithm": "sha256",
+                "sha256": "deadbeef",
+                "size_bytes": 123,
+            },
             "phoenix_model_tag": "PHOENIX-ACES-AGSS-COND-2011-HiRes",
             "phoenix_wave_filename": "WAVE_PHOENIX-ACES-AGSS-COND-2011.fits",
             "phoenix_wave_medium": "vacuum",
             "phoenix_template_axis_counts": {"teff": 73, "feh": 7, "logg": 13},
+            "phoenix_interpolator_manifest_hash": "grid-hash",
+            "phoenix_interpolator_manifest": {
+                "schema_version": 1,
+                "status": "built",
+                "manifest_hash": "grid-hash",
+            },
             "phoenix_composition_note": "not yet extracted from headers",
         },
     )
@@ -559,6 +578,8 @@ def test_report_provenance_summary_surfaces_setup_mask_resolution_and_phoenix():
     assert summary["fit_ready"] is False
     assert summary["mask_policy"] == "warn"
     assert summary["archive_mask_policy"] == {"policy": "warn", "applied": False}
+    assert summary["input_checksum_policy"]["computed"] is True
+    assert summary["input_checksum"]["sha256"] == "deadbeef"
     assert summary["resolution_source"] == "user_override"
     assert summary["assumed_resolution_R"] == 6200.0
     assert summary["resolution_R"] == 6200.0
@@ -570,6 +591,28 @@ def test_report_provenance_summary_surfaces_setup_mask_resolution_and_phoenix():
     assert summary["phoenix_model_tag"] == "PHOENIX-ACES-AGSS-COND-2011-HiRes"
     assert summary["phoenix_wave_medium"] == "vacuum"
     assert summary["phoenix_template_axis_counts"]["teff"] == 73
+    assert summary["phoenix_interpolator_manifest_hash"] == "grid-hash"
+    assert summary["phoenix_interpolator_manifest"]["status"] == "built"
+
+
+def test_report_provenance_summary_surfaces_uncertainty_scope():
+    uncertainty = {
+        "available": True,
+        "scope": "local_statistical_optimizer_diagnostic",
+        "method": "jacobian_pseudoinverse_scaled_by_reduced_chi2",
+        "includes_external_systematics": False,
+        "external_systematics_status": "not_estimated",
+    }
+    result = PhoenixFitResult(
+        summary={
+            "teff": 6000.0,
+            "parameter_uncertainty": uncertainty,
+        },
+    )
+
+    summary = result.to_report_dict(include_arrays=False)["provenance_summary"]
+
+    assert summary["parameter_uncertainty"] == uncertainty
 
 
 def test_to_dict_rejects_absolute_plot_paths_without_relative_base():
@@ -651,6 +694,62 @@ def test_public_api_canonicalizes_and_reconstructs(monkeypatch):
     assert captured["reconstruction_kwargs"]["exclude_regions"] == [
         (5000.2, 5000.3)
     ]
+
+
+def test_public_api_records_phoenix_interpolator_manifest(monkeypatch):
+    class FakePhoenixLibrary:
+        base_dir = "/home/someone/PHOENIX"
+        CACHE_SCHEMA_VERSION = 2
+        model_tag = "fake-phoenix"
+        wave_filename = "fake-wave.fits"
+        phoenix_wave_medium = "vacuum"
+
+        def available_axes(self):
+            return (
+                np.array([5000.0, 6000.0]),
+                np.array([-0.5, 0.0]),
+                np.array([4.0, 4.5]),
+            )
+
+        def interpolator_manifest(self):
+            return {
+                "schema_version": 1,
+                "status": "built",
+                "manifest_hash": "manifest-123",
+            }
+
+    monkeypatch.setattr(
+        "Spyctres.api.fit_phoenix_full_spectrum",
+        lambda *args, **kwargs: {
+            "success": False,
+            "teff": 5000.0,
+            "feh": 0.0,
+            "logg": 4.0,
+            "rv_kms": 0.0,
+        },
+    )
+    segment = SpectrumSegment([5000.0], [1.0])
+
+    result = fit_phoenix_spectrum(
+        segment,
+        phoenix_lib=FakePhoenixLibrary(),
+        reconstruct=False,
+        warn_unknown=False,
+    )
+
+    assert result.provenance["phoenix_model_tag"] == "fake-phoenix"
+    assert result.provenance["phoenix_template_axis_counts"] == {
+        "teff": 2,
+        "feh": 2,
+        "logg": 2,
+    }
+    assert result.provenance["phoenix_interpolator_manifest_hash"] == "manifest-123"
+    assert (
+        result.to_report_dict(include_arrays=False)["provenance_summary"][
+            "phoenix_interpolator_manifest_hash"
+        ]
+        == "manifest-123"
+    )
 
 
 def test_public_api_rejects_two_library_sources():
@@ -747,6 +846,54 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
     assert result.provenance["input_was_path"] is True
     assert result.provenance["instrument"] == "xshooter"
     assert result.provenance["defaults_mode"] == "standard"
+    assert result.provenance["input_checksum_policy"] == {
+        "requested": False,
+        "algorithm": "sha256",
+        "scope": "input_file_bytes",
+        "computed": False,
+        "reason": "not_requested",
+    }
+    assert result.provenance["input_checksum"] is None
+
+
+def test_fit_stellar_spectrum_can_record_input_checksum(monkeypatch, tmp_path):
+    path = tmp_path / "input.fits"
+    path.write_bytes(b"synthetic spectrum bytes\n")
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 20),
+        np.ones(20),
+        err=np.full(20, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+
+    monkeypatch.setattr(
+        "Spyctres.api.read_spectrum",
+        lambda *args, **kwargs: segment,
+    )
+    monkeypatch.setattr(
+        "Spyctres.api.fit_phoenix_spectrum",
+        lambda *args, **kwargs: PhoenixFitResult(
+            summary={"success": True, "teff": 6000.0},
+            provenance={"api": "fit_phoenix_spectrum"},
+        ),
+    )
+
+    result = fit_stellar_spectrum(
+        path,
+        instrument="xshooter",
+        phoenix_lib=object(),
+        record_input_checksum=True,
+    )
+
+    assert result.provenance["input_checksum_policy"]["computed"] is True
+    assert result.provenance["input_checksum"] == {
+        "algorithm": "sha256",
+        "sha256": hashlib.sha256(b"synthetic spectrum bytes\n").hexdigest(),
+        "size_bytes": len(b"synthetic spectrum bytes\n"),
+    }
 
 
 def test_fit_stellar_spectrum_uses_reviewed_setup(monkeypatch):

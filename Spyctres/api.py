@@ -1,5 +1,6 @@
 """High-level, instrument-independent Spyctres fitting API."""
 
+import hashlib
 import inspect
 import os
 from collections.abc import Mapping
@@ -58,7 +59,59 @@ def _phoenix_library_provenance(phoenix_lib):
             for key, values in axes.items()
             if len(values)
         }
+    interpolator_manifest = getattr(phoenix_lib, "interpolator_manifest", None)
+    if callable(interpolator_manifest):
+        try:
+            manifest = interpolator_manifest()
+        except Exception:
+            manifest = None
+        if manifest is not None:
+            payload["phoenix_interpolator_manifest"] = manifest
+            payload["phoenix_interpolator_manifest_hash"] = manifest.get(
+                "manifest_hash"
+            )
     return payload
+
+
+def _input_checksum_provenance(spectrum, *, requested, algorithm="sha256"):
+    policy = {
+        "requested": bool(requested),
+        "algorithm": str(algorithm),
+        "scope": "input_file_bytes",
+        "computed": False,
+    }
+    if not requested:
+        policy["reason"] = "not_requested"
+        return policy, None
+    if not isinstance(spectrum, (str, os.PathLike)):
+        policy["reason"] = "input_not_path"
+        return policy, None
+    if str(algorithm).lower() != "sha256":
+        policy["reason"] = "unsupported_algorithm"
+        policy["error"] = "Only sha256 is currently supported."
+        return policy, None
+    path = os.path.abspath(os.path.expanduser(os.fspath(spectrum)))
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        policy["reason"] = "read_failed"
+        policy["error"] = "{0}: {1}".format(type(exc).__name__, exc)
+        return policy, None
+    policy["computed"] = True
+    policy["reason"] = "requested"
+    return policy, {
+        "algorithm": "sha256",
+        "sha256": digest.hexdigest(),
+        "size_bytes": int(size),
+    }
 
 
 def _setup_payload(setup):
@@ -165,6 +218,7 @@ def fit_stellar_spectrum(
     reconstruct=True,
     warn_unknown=True,
     progress_callback=None,
+    record_input_checksum=False,
     **fit_kwargs,
 ):
     """Fit a reduced stellar spectrum with the recommended public workflow.
@@ -292,6 +346,11 @@ def fit_stellar_spectrum(
             source="fit_stellar_spectrum",
         )
 
+    input_checksum_policy, input_checksum = _input_checksum_provenance(
+        spectrum,
+        requested=bool(record_input_checksum),
+    )
+
     if setup_payload is not None:
         setup_model = str(setup_payload.get("model", "phoenix")).strip().lower()
         if setup_model != "phoenix":
@@ -343,6 +402,8 @@ def fit_stellar_spectrum(
             "fit_setup_hash": None
             if setup_payload is None
             else setup_payload.get("setup_hash"),
+            "input_checksum_policy": input_checksum_policy,
+            "input_checksum": input_checksum,
         }
     )
     return result

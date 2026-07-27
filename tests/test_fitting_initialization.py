@@ -387,6 +387,16 @@ def test_multisegment_weighted_chi2_and_dof_accounting():
     assert result["error_floor_applied"] is False
     assert "robust_loss_active" in result["quality_flags"]
     assert result["parameter_uncertainty"]["available"] is True
+    assert (
+        result["parameter_uncertainty"]["scope"]
+        == "local_statistical_optimizer_diagnostic"
+    )
+    assert result["parameter_uncertainty"]["includes_external_systematics"] is False
+    assert (
+        result["parameter_uncertainty"]["external_systematics_status"]
+        == "not_estimated"
+    )
+    assert "line-spread-function uncertainty" in result["parameter_uncertainty"]["not_included"]
     assert "parameter_errors_local_linearized" in result["quality_flags"]
     assert "parameter_errors_ignore_model_systematics" in result["quality_flags"]
     assert "parameter_errors_unreliable_if_robust_loss" in result["quality_flags"]
@@ -713,6 +723,15 @@ def test_phoenix_diagnostics_and_quality_flags_are_json_safe():
         is True
     )
     assert diagnostics["parameter_uncertainty"]["includes_model_systematics"] is False
+    assert (
+        diagnostics["parameter_uncertainty"]["scope"]
+        == "local_statistical_optimizer_diagnostic"
+    )
+    assert diagnostics["parameter_uncertainty"]["includes_external_systematics"] is False
+    assert (
+        diagnostics["parameter_uncertainty"]["external_systematics_status"]
+        == "not_estimated"
+    )
     assert diagnostics["optimizer_loss"] == "linear"
     assert diagnostics["grid_edge_flags"]["teff"] is True
     assert diagnostics["grid_edge_flags"]["teff_low"] is True

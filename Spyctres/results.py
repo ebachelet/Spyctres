@@ -227,6 +227,8 @@ def _fit_report_provenance_summary(payload):
             "fit_setup_hash": setup_hash,
             "instrument": provenance.get("instrument"),
             "input_was_path": provenance.get("input_was_path"),
+            "input_checksum_policy": provenance.get("input_checksum_policy"),
+            "input_checksum": provenance.get("input_checksum"),
             "readiness_intent": _first_present(
                 readiness.get("intent"),
                 setup_provenance.get("readiness_intent"),
@@ -276,7 +278,14 @@ def _fit_report_provenance_summary(payload):
             "phoenix_template_axis_ranges": provenance.get(
                 "phoenix_template_axis_ranges"
             ),
+            "phoenix_interpolator_manifest_hash": provenance.get(
+                "phoenix_interpolator_manifest_hash"
+            ),
+            "phoenix_interpolator_manifest": provenance.get(
+                "phoenix_interpolator_manifest"
+            ),
             "phoenix_composition_note": provenance.get("phoenix_composition_note"),
+            "parameter_uncertainty": payload.get("parameter_uncertainty"),
         }
     )
 

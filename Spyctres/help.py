@@ -115,6 +115,15 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "Callable receiving progress events during long PHOENIX operations.",
             },
             {
+                "name": "record_input_checksum",
+                "default": "False",
+                "description": (
+                    "When spectrum is a path, compute and record an opt-in "
+                    "SHA256 checksum of the input file bytes for reproducible "
+                    "reports. Disabled by default for speed/privacy."
+                ),
+            },
+            {
                 "name": "regions",
                 "default": "auto",
                 "description": "List of wavelength windows to fit, e.g. [(3800, 5200)].",

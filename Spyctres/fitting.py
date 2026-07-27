@@ -1307,6 +1307,9 @@ def _parameter_uncertainty_summary(
             caveat_flags.append("parameter_errors_unreliable_if_segment_weights")
     return {
         "available": bool(available),
+        "scope": (
+            "local_statistical_optimizer_diagnostic" if available else "not_available"
+        ),
         "method": (
             "jacobian_pseudoinverse_scaled_by_reduced_chi2"
             if available
@@ -1314,7 +1317,23 @@ def _parameter_uncertainty_summary(
         ),
         "assumes_independent_gaussian_pixel_errors": bool(available),
         "includes_model_systematics": False,
+        "includes_external_systematics": False,
+        "external_systematics_status": "not_estimated",
+        "not_included": [
+            "PHOENIX/model-domain limitations",
+            "template abundance-pattern mismatch",
+            "continuum-placement systematics",
+            "line-spread-function uncertainty",
+            "wavelength-medium/frame assumptions",
+            "mask/preprocessing choices",
+            "reduction/calibration artifacts",
+        ],
         "caveat_flags": sorted(set(caveat_flags)),
+        "recommended_validation": (
+            "Use systematic-variant fits, injection/recovery checks, and "
+            "external benchmark spectra before interpreting uncertainties as "
+            "publication-quality error bars."
+        ),
         "note": (
             "Parameter errors are local linearized diagnostics only; they do "
             "not include PHOENIX/model-domain, continuum, LSF, wavelength-frame, "

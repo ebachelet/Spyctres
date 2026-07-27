@@ -6,6 +6,7 @@ https://doi.org/10.1051/0004-6361/201219058
 
 import os
 import hashlib
+import json
 import time
 import numpy as np
 from astropy.io import fits
@@ -79,6 +80,34 @@ def _same_float_array(a, b):
         return False
 
     return np.allclose(a, b, rtol=0.0, atol=0.0)
+
+
+def _stable_array_digest(values):
+    """Return a stable SHA256 digest for a numeric 1D array."""
+    arr = np.ascontiguousarray(np.asarray(values, dtype="<f8").reshape(-1))
+    h = hashlib.sha256()
+    h.update(str(arr.shape).encode("ascii"))
+    h.update(arr.tobytes(order="C"))
+    return h.hexdigest()
+
+
+def _stable_json_digest(payload):
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _axis_manifest(values):
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    return {
+        "n": int(arr.size),
+        "min": None if arr.size == 0 else float(np.nanmin(arr)),
+        "max": None if arr.size == 0 else float(np.nanmax(arr)),
+        "sha256": _stable_array_digest(arr),
+    }
  
 def _normalize_cache_string(x):
     """
@@ -760,6 +789,62 @@ class PhoenixLibrary(object):
                 progress_callback=progress_callback,
             )
         return self._interp
+
+    def interpolator_manifest(self, *, hash_flux_grid=False):
+        """Return a stable manifest for the currently built interpolator.
+
+        The manifest intentionally avoids local absolute paths so it can be
+        copied into web-ready fit reports.  By default it hashes only the model
+        tag, wavelength/interpolation grid, and parameter axes.  Hashing the
+        full flux cube is available for expert audits but is off by default
+        because production grids can be large.
+        """
+        payload = {
+            "schema_version": 1,
+            "status": "not_built",
+            "model_tag": str(self.model_tag),
+            "wave_filename": str(self.wave_filename),
+            "phoenix_wave_medium": str(self.phoenix_wave_medium),
+            "observed_wave_medium": self._observed_wave_medium,
+            "cache_schema_version": int(self.CACHE_SCHEMA_VERSION),
+            "hash_policy": {
+                "parameter_axes_hashed": False,
+                "interpolator_wave_grid_hashed": False,
+                "flux_grid_hashed": False,
+            },
+        }
+        if self._grid is None or self.wave is None:
+            payload["manifest_hash"] = _stable_json_digest(payload)
+            return payload
+
+        teff_grid, feh_grid, logg_grid = self._grid
+        wave = np.asarray(self.wave, dtype=float)
+        payload.update(
+            {
+                "status": "built",
+                "parameter_axes": {
+                    "teff": _axis_manifest(teff_grid),
+                    "feh": _axis_manifest(feh_grid),
+                    "logg": _axis_manifest(logg_grid),
+                },
+                "interpolator_wave_grid": {
+                    "n": int(wave.size),
+                    "min_A": None if wave.size == 0 else float(np.nanmin(wave)),
+                    "max_A": None if wave.size == 0 else float(np.nanmax(wave)),
+                    "sha256": _stable_array_digest(wave),
+                },
+            }
+        )
+        payload["hash_policy"]["parameter_axes_hashed"] = True
+        payload["hash_policy"]["interpolator_wave_grid_hashed"] = True
+        if hash_flux_grid and self._flux_grid is not None:
+            payload["flux_grid"] = {
+                "shape": [int(x) for x in np.shape(self._flux_grid)],
+                "sha256": _stable_array_digest(np.ravel(self._flux_grid)),
+            }
+            payload["hash_policy"]["flux_grid_hashed"] = True
+        payload["manifest_hash"] = _stable_json_digest(payload)
+        return payload
 
     def save_cache(self, cache_path, observed_wave_medium):
         """Save an interpolator cache keyed to this installation path.

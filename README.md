@@ -587,8 +587,11 @@ includes descriptions for the flags present in that result.
 `save_json()`/`to_json()` keep the compact direct-result payload for existing
 scripts. `save_report_json()`/`to_report_dict()` wrap that payload in a
 versioned report envelope that records the Spyctres version/git commit when
-available, path-sanitization policy, generated plot paths, and a small
-provenance summary for reviewer-facing, web, or Django hand-off products.
+available, path-sanitization policy, generated plot paths, PHOENIX
+interpolator-grid hashes, checksum policy, and a small provenance summary for
+reviewer-facing, web, or Django hand-off products. File-content checksums are
+opt-in: call `fit_stellar_spectrum(path, instrument=..., record_input_checksum=True)`
+when you want the input-file SHA256 recorded for reproducibility.
 Existing low-level fitting functions keep returning dictionaries for backward
 compatibility.
 The scientific default forward model is `native_interp`, which keeps the model

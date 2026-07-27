@@ -147,14 +147,15 @@ envelope for archival and reviewer-facing products.
    `--output-json` products are unchanged.
 
    Remaining work: enrich the envelope without breaking its top-level shape.
-   The first enrichment pass surfaces existing wavelength assumptions, mask
+   The first enrichment passes surface existing wavelength assumptions, mask
    policy, resolution source, quality flags, readiness intent, PHOENIX model tag
-   and wave file, cache schema, and template-axis counts/ranges when available.
-   Remaining priority fields are model-grid manifest/hash, input checksum when
-   allowed, and detailed PHOENIX composition provenance: selected abundance
-   pattern, alpha policy, microturbulence policy if known, solar abundance
-   scale, and whether `[Fe/H]` is an iron abundance, global metallicity, or a
-   grid label.
+   and wave file, cache schema, template-axis counts/ranges, a path-free
+   interpolator-grid manifest/hash, opt-in input SHA256 checksums, and explicit
+   local-vs-systematic uncertainty caveats. Remaining priority fields are input
+   checksum controls in selected command-line workflows and detailed PHOENIX
+   composition provenance: selected abundance pattern, alpha policy,
+   microturbulence policy if known, solar abundance scale, and whether `[Fe/H]`
+   is an iron abundance, global metallicity, or a grid label.
 
 6. **Real-spectrum validation before further feature growth.**
    Expand and maintain validation on real spectra before adding heavier
