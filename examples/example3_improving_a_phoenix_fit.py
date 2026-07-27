@@ -5,6 +5,17 @@ This example shows how to improve a first pass without blindly expanding the
 whole PHOENIX grid: compare the reviewed setup summaries first, then optionally
 run the two fits and compare their structured results.
 
+What this demonstrates
+----------------------
+How to make a first-pass fit more deliberate by changing the reviewed setup
+and comparing parameter stability, quality flags, and referee plots.
+
+What this does not prove
+------------------------
+The stronger setup is not automatically "the truth"; it is a better-audited
+classification pass that still depends on resolution, masks, continuum choices,
+and the PHOENIX model-support regime.
+
 Example dry run:
 
   python examples/example3_improving_a_phoenix_fit.py --no-show
@@ -51,7 +62,9 @@ def build_parser():
             "Run fits:\n"
             "  python examples/example3_improving_a_phoenix_fit.py --run-fits "
             "--R 6200 --output-json /tmp/spyctres_example3.json "
-            "--output-plot /tmp/spyctres_example3_standard.png --no-show"
+            "--output-plot /tmp/spyctres_example3_standard.png --no-show\n\n"
+            "Next:\n"
+            "  python examples/example4_publication_quality_fitting.py"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -147,6 +160,24 @@ def main(argv=None):
     if args.output_json:
         atomic_write_json(args.output_json, payload)
         print("Wrote JSON: {0}".format(args.output_json), flush=True)
+    if args.run_fits:
+        print(
+            "\nScope note: Example 3 compares fit setups and fit stability. "
+            "Use the quality flags and comparison payload before interpreting "
+            "a parameter change as physical.",
+            flush=True,
+        )
+    else:
+        print(
+            "\nScope note: no PHOENIX fits were run; this reviewed quicklook "
+            "and standard setup choices only.",
+            flush=True,
+        )
+    print(
+        "Next: run examples/example4_publication_quality_fitting.py for the "
+        "audit-first publication-oriented scaffold.",
+        flush=True,
+    )
     return 0
 
 

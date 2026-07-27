@@ -7,6 +7,17 @@ readiness and quality gates permit it.  This wrapper keeps the numbered example
 path concise and delegates the operational details to
 ``batch_quickscan_then_refine.py``.
 
+What this demonstrates
+----------------------
+How to avoid a full blind PHOENIX search for every spectrum by checkpointing a
+cheap scan first and running focused refinement only when quality gates permit.
+
+What this does not prove
+------------------------
+A batch result is not automatically publication-ready.  The saved JSON/CSV
+should be treated as a triage product until flagged spectra, assumptions,
+residual plots, and representative real-spectrum validation have been reviewed.
+
 Example quicklook batch:
 
   python examples/example5_batch_fitting.py \
@@ -58,7 +69,9 @@ def build_parser():
             "Gated refinement:\n"
             "  python examples/example5_batch_fitting.py "
             "--output-json /tmp/spyctres_example5_batch_refined.json "
-            "--summary-csv /tmp/spyctres_example5_batch_refined.csv --resume"
+            "--summary-csv /tmp/spyctres_example5_batch_refined.csv --resume\n\n"
+            "Next:\n"
+            "  python scripts/throughput_summary.py /tmp/spyctres_example5_batch_refined.json"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -101,7 +114,20 @@ def main(argv=None):
     delegated.extend(["--output-json", str(args.output_json)])
     if args.summary_csv:
         delegated.extend(["--summary-csv", str(args.summary_csv)])
-    return batch_quickscan_then_refine.main(delegated)
+    exit_code = batch_quickscan_then_refine.main(delegated)
+    if exit_code == 0:
+        print(
+            "\nScope note: Example 5 is a throughput/triage workflow. Inspect "
+            "the checkpointed quality flags and representative referee plots "
+            "before treating a batch as science-ready.",
+            flush=True,
+        )
+        print(
+            "Next: run scripts/throughput_summary.py on the saved JSON to "
+            "estimate runtime for larger batches.",
+            flush=True,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":

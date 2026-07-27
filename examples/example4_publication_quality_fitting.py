@@ -6,6 +6,17 @@ quickstart.  This wrapper keeps the numbered learning path tidy while delegating
 the detailed X-SHOOTER UVB audit, Balmer-core mask sensitivity, systematic-plan,
 and optional baseline fit to ``publication_quality_xshooter_uvb.py``.
 
+What this demonstrates
+----------------------
+How Spyctres separates a reviewed, audit-first publication scaffold from the
+shorter quicklook examples.
+
+What this does not prove
+------------------------
+An audit-only pass is not a completed publication analysis.  Even an opt-in
+baseline fit remains exploratory until metadata, masks, LSF assumptions,
+systematic variants, and external validation are reviewed.
+
 Example audit-only run:
 
   python examples/example4_publication_quality_fitting.py \
@@ -49,7 +60,9 @@ def build_parser():
             "  python examples/example4_publication_quality_fitting.py "
             "--run-baseline-fit "
             "--output-json /tmp/spyctres_example4_publication_fit.json "
-            "--output-plot /tmp/spyctres_example4_publication_fit.png"
+            "--output-plot /tmp/spyctres_example4_publication_fit.png\n\n"
+            "Next:\n"
+            "  python examples/example5_batch_fitting.py --help"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -88,7 +101,20 @@ def main(argv=None):
         delegated.append("--run-baseline-fit")
     if args.output_plot:
         delegated.extend(["--output-plot", str(args.output_plot)])
-    return publication_quality_xshooter_uvb.main(delegated)
+    exit_code = publication_quality_xshooter_uvb.main(delegated)
+    if exit_code == 0:
+        print(
+            "\nScope note: Example 4 is a conservative scaffold. Its job is to "
+            "make assumptions, blockers, and follow-up checks explicit before "
+            "a result is promoted beyond exploratory use.",
+            flush=True,
+        )
+        print(
+            "Next: run examples/example5_batch_fitting.py --help to see the "
+            "quickscan/refine pattern for many spectra.",
+            flush=True,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":

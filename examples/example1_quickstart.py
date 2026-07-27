@@ -1,9 +1,21 @@
 #!/usr/bin/env python
 """Example 1: read, inspect, review setup, and optionally run one PHOENIX fit.
 
+Learning goal
+-------------
 This is the shortest beginner path through the public Spyctres API.  It uses
 the bundled X-SHOOTER UVB spectrum by default and deliberately separates
 "review the setup" from "launch the PHOENIX fit".
+
+What this demonstrates
+----------------------
+Spectrum ingestion, a first-look plot, a reviewed ``FitSetup``, and an optional
+first-pass PHOENIX classification fit.
+
+What this does not prove
+------------------------
+It is not a publication-quality atmospheric-parameter solution, precision
+line-width measurement, abundance analysis, or final wavelength/LSF validation.
 
 Example dry run, no PHOENIX library needed:
 
@@ -51,7 +63,9 @@ def build_parser():
             "Run the fit after PHOENIX is configured:\n"
             "  python examples/example1_quickstart.py --run-fit "
             "--output-json /tmp/spyctres_example1_fit.json "
-            "--output-plot /tmp/spyctres_example1_fit.png --no-show"
+            "--output-plot /tmp/spyctres_example1_fit.png --no-show\n\n"
+            "Next:\n"
+            "  python examples/example2_lines_windows_and_masks.py --no-show"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -169,6 +183,25 @@ def main(argv=None):
     if args.output_json:
         atomic_write_json(args.output_json, payload)
         print("Wrote JSON: {0}".format(args.output_json), flush=True)
+
+    if args.run_fit:
+        print(
+            "\nScope note: Example 1 is an exploratory classification path. "
+            "Treat the quality flags and setup assumptions as part of the "
+            "result, not as decoration.",
+            flush=True,
+        )
+    else:
+        print(
+            "\nScope note: no PHOENIX fit was run; this checked ingestion, "
+            "plotting, and the reviewed setup only.",
+            flush=True,
+        )
+    print(
+        "Next: run examples/example2_lines_windows_and_masks.py to inspect "
+        "diagnostic windows and explicit masks.",
+        flush=True,
+    )
 
     if args.no_show:
         import matplotlib.pyplot as plt

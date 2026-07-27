@@ -7,6 +7,16 @@ This example introduces one extra concept at a time after Example 1:
 2. build an explicit mask/warning bundle without mutating the spectrum;
 3. fit one local line as a diagnostic, not as a replacement for PHOENIX.
 
+What this demonstrates
+----------------------
+How Spyctres records why pixels are warned about or excluded, and how local
+line fits can diagnose wavelength/line-shape issues before a full PHOENIX fit.
+
+What this does not prove
+------------------------
+The local line fit is not a stellar-parameter classifier and the advisory
+windows are not hidden automatic arm/continuum corrections.
+
 Example:
 
   python examples/example2_lines_windows_and_masks.py \
@@ -47,7 +57,9 @@ def build_parser():
             "Example:\n"
             "  python examples/example2_lines_windows_and_masks.py "
             "--output-json /tmp/spyctres_example2.json "
-            "--output-plot /tmp/spyctres_example2_windows.png --no-show"
+            "--output-plot /tmp/spyctres_example2_windows.png --no-show\n\n"
+            "Next:\n"
+            "  python examples/example3_improving_a_phoenix_fit.py --no-show"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -133,6 +145,17 @@ def main(argv=None):
         }
         atomic_write_json(args.output_json, payload)
         print("Wrote JSON: {0}".format(args.output_json), flush=True)
+
+    print(
+        "\nScope note: Example 2 is a diagnostic-mask and local-line workflow; "
+        "it does not replace the PHOENIX full-spectrum fit.",
+        flush=True,
+    )
+    print(
+        "Next: run examples/example3_improving_a_phoenix_fit.py to compare "
+        "quicklook and stronger reviewed fit setups.",
+        flush=True,
+    )
 
     import matplotlib.pyplot as plt
 

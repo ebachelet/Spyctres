@@ -16,20 +16,17 @@ for later reference-validation work.
 Start with the five numbered example pairs. Each script has a matching
 no-output notebook with the same name, and each step adds one new idea:
 
-1. `example1_quickstart.py` / `example1_quickstart.ipynb` — read a bundled
-   spectrum, inspect it, review a `FitSetup`, and optionally run one PHOENIX
-   fit.
-2. `example2_lines_windows_and_masks.py` /
-   `example2_lines_windows_and_masks.ipynb` — inspect diagnostic windows,
-   explicit warning/mask regions, and one local line fit.
-3. `example3_improving_a_phoenix_fit.py` /
-   `example3_improving_a_phoenix_fit.ipynb` — compare quicklook and stronger
-   reviewed setups before running more expensive fits.
-4. `example4_publication_quality_fitting.py` /
-   `example4_publication_quality_fitting.ipynb` — wrapper for the conservative
-   publication-oriented scaffold; audit-only by default.
-5. `example5_batch_fitting.py` / `example5_batch_fitting.ipynb` — the
-   quickscan-then-focused-refine pattern for many spectra.
+| Step | File | Demonstrates | Does not prove | Natural next step |
+| --- | --- | --- | --- | --- |
+| 1 | `example1_quickstart.py` / `example1_quickstart.ipynb` | Read a bundled spectrum, inspect it, review a `FitSetup`, and optionally run one first-pass PHOENIX fit. | Publication-quality parameters, calibrated line widths, or abundance measurements. | Inspect windows and masks in Example 2. |
+| 2 | `example2_lines_windows_and_masks.py` / `example2_lines_windows_and_masks.ipynb` | Diagnostic windows, explicit warning/mask provenance, and one local line fit. | A replacement for the PHOENIX atmospheric-parameter fit or an automatic continuum/arm correction. | Compare setup choices in Example 3. |
+| 3 | `example3_improving_a_phoenix_fit.py` / `example3_improving_a_phoenix_fit.ipynb` | Quicklook versus stronger reviewed setups and optional fit comparison. | That the stronger fit is automatically the final scientific answer. | Use Example 4 when publication-readiness matters. |
+| 4 | `example4_publication_quality_fitting.py` / `example4_publication_quality_fitting.ipynb` | The conservative audit-first publication scaffold. | A completed publication analysis unless follow-up checks pass. | Use Example 5 for many spectra. |
+| 5 | `example5_batch_fitting.py` / `example5_batch_fitting.ipynb` | Quickscan-then-focused-refine triage for batches. | That all batch results are science-ready without residual/flag review. | Summarize runtime and inspect flagged cases. |
+
+Each numbered script prints a short scope note and a suggested next command at
+the end. That message is part of the teaching path: quicklook products are
+useful, but the caveats travel with them.
 
 The older unnumbered scripts and notebooks are still maintained, but they are
 advanced, validation, or compatibility material rather than the beginner path.
