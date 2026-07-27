@@ -58,12 +58,10 @@ python examples/publication_quality_xshooter_uvb.py \
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import shlex
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -81,6 +79,10 @@ from Spyctres import (
     prepare_phoenix_fit_kwargs,
     publication_readiness_audit,
     select_diagnostic_windows,
+)
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
 )
 from Spyctres.io import SpectrumCollection, SpectrumSegment, read_spectrum
 from Spyctres.plotting import plot_fit_referee
@@ -590,38 +592,9 @@ def build_parser():
     return parser
 
 
-def _json_native(value):
-    if isinstance(value, np.ndarray):
-        return [_json_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_native(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
-
-
 def _atomic_write_json(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _json_native(payload)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=path.name + ".",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
-        handle.write("\n")
-        tmp_name = handle.name
-    os.replace(tmp_name, path)
+    """Backward-compatible wrapper around Spyctres' shared atomic JSON writer."""
+    atomic_write_json(path, payload, sort_keys=True)
 
 
 def _read_existing(path):
@@ -1142,8 +1115,6 @@ def _balmer_line_diagnostics(collection, exclude_masks, *, core_mask_halfwidth):
 def _write_balmer_line_diagnostic_csv(path, diagnostics):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "line_label",
         "segment_name",
@@ -1163,36 +1134,35 @@ def _write_balmer_line_diagnostic_csv(path, diagnostics):
         "known_nonstellar_overlaps",
         "quality_flags",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in diagnostics.get("lines", ()):
-            writer.writerow(
-                {
-                    "line_label": row.get("line_label"),
-                    "segment_name": row.get("segment_name"),
-                    "line_center_data_A": row.get("line_center_data_A"),
-                    "n_base_valid": row.get("n_base_valid"),
-                    "n_fit_candidate": row.get("n_fit_candidate"),
-                    "fit_candidate_fraction": row.get("fit_candidate_fraction"),
-                    "n_core_pixels": row.get("n_core_pixels"),
-                    "n_core_excluded_pixels": row.get("n_core_excluded_pixels"),
-                    "core_excluded_fraction": row.get("core_excluded_fraction"),
-                    "n_sideband_pixels": row.get("n_sideband_pixels"),
-                    "continuum_proxy_source": row.get("continuum_proxy_source"),
-                    "absorption_depth_proxy": row.get("absorption_depth_proxy"),
-                    "equivalent_width_proxy_A": row.get("equivalent_width_proxy_A"),
-                    "fit_candidate_equivalent_width_proxy_A": row.get(
-                        "fit_candidate_equivalent_width_proxy_A"
-                    ),
-                    "wing_asymmetry_fraction": row.get("wing_asymmetry_fraction"),
-                    "known_nonstellar_overlaps": ";".join(
-                        item.get("id", item.get("name", "feature"))
-                        for item in row.get("known_nonstellar_overlaps", ())
-                    ),
-                    "quality_flags": ";".join(row.get("quality_flags", ())),
-                }
-            )
+    rows = []
+    for row in diagnostics.get("lines", ()):
+        rows.append(
+            {
+                "line_label": row.get("line_label"),
+                "segment_name": row.get("segment_name"),
+                "line_center_data_A": row.get("line_center_data_A"),
+                "n_base_valid": row.get("n_base_valid"),
+                "n_fit_candidate": row.get("n_fit_candidate"),
+                "fit_candidate_fraction": row.get("fit_candidate_fraction"),
+                "n_core_pixels": row.get("n_core_pixels"),
+                "n_core_excluded_pixels": row.get("n_core_excluded_pixels"),
+                "core_excluded_fraction": row.get("core_excluded_fraction"),
+                "n_sideband_pixels": row.get("n_sideband_pixels"),
+                "continuum_proxy_source": row.get("continuum_proxy_source"),
+                "absorption_depth_proxy": row.get("absorption_depth_proxy"),
+                "equivalent_width_proxy_A": row.get("equivalent_width_proxy_A"),
+                "fit_candidate_equivalent_width_proxy_A": row.get(
+                    "fit_candidate_equivalent_width_proxy_A"
+                ),
+                "wing_asymmetry_fraction": row.get("wing_asymmetry_fraction"),
+                "known_nonstellar_overlaps": ";".join(
+                    item.get("id", item.get("name", "feature"))
+                    for item in row.get("known_nonstellar_overlaps", ())
+                ),
+                "quality_flags": ";".join(row.get("quality_flags", ())),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _optional_bool_array_tuple(value, n_segments):
@@ -1499,8 +1469,6 @@ def _balmer_model_residual_diagnostics(
 def _write_balmer_model_residual_csv(path, diagnostics):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "line_label",
         "segment_name",
@@ -1518,40 +1486,39 @@ def _write_balmer_model_residual_csv(path, diagnostics):
         "wing_residual_asymmetry_fraction",
         "quality_flags",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in diagnostics.get("lines", ()):
-            used = row.get("used_residuals") or {}
-            core = row.get("core_residuals_model_only") or {}
-            masked = row.get("masked_or_excluded_residuals") or {}
-            writer.writerow(
-                {
-                    "line_label": row.get("line_label"),
-                    "segment_name": row.get("segment_name"),
-                    "status": row.get("status"),
-                    "n_valid_pixels": row.get("n_valid_pixels"),
-                    "n_used_pixels": row.get("n_used_pixels"),
-                    "n_excluded_pixels": row.get("n_excluded_pixels"),
-                    "n_core_pixels": row.get("n_core_pixels"),
-                    "n_core_excluded_pixels": row.get("n_core_excluded_pixels"),
-                    "used_chi2_red_proxy": used.get("chi2_red_proxy"),
-                    "used_median_abs_sigma": used.get("median_abs_sigma"),
-                    "used_rms_fractional_residual": used.get(
-                        "rms_fractional_residual"
-                    ),
-                    "core_rms_fractional_residual": core.get(
-                        "rms_fractional_residual"
-                    ),
-                    "masked_rms_fractional_residual": masked.get(
-                        "rms_fractional_residual"
-                    ),
-                    "wing_residual_asymmetry_fraction": row.get(
-                        "wing_residual_asymmetry_fraction"
-                    ),
-                    "quality_flags": ";".join(row.get("quality_flags", ())),
-                }
-            )
+    rows = []
+    for row in diagnostics.get("lines", ()):
+        used = row.get("used_residuals") or {}
+        core = row.get("core_residuals_model_only") or {}
+        masked = row.get("masked_or_excluded_residuals") or {}
+        rows.append(
+            {
+                "line_label": row.get("line_label"),
+                "segment_name": row.get("segment_name"),
+                "status": row.get("status"),
+                "n_valid_pixels": row.get("n_valid_pixels"),
+                "n_used_pixels": row.get("n_used_pixels"),
+                "n_excluded_pixels": row.get("n_excluded_pixels"),
+                "n_core_pixels": row.get("n_core_pixels"),
+                "n_core_excluded_pixels": row.get("n_core_excluded_pixels"),
+                "used_chi2_red_proxy": used.get("chi2_red_proxy"),
+                "used_median_abs_sigma": used.get("median_abs_sigma"),
+                "used_rms_fractional_residual": used.get(
+                    "rms_fractional_residual"
+                ),
+                "core_rms_fractional_residual": core.get(
+                    "rms_fractional_residual"
+                ),
+                "masked_rms_fractional_residual": masked.get(
+                    "rms_fractional_residual"
+                ),
+                "wing_residual_asymmetry_fraction": row.get(
+                    "wing_residual_asymmetry_fraction"
+                ),
+                "quality_flags": ";".join(row.get("quality_flags", ())),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _diagnostic_window_payload(segment):
@@ -1892,8 +1859,6 @@ def _build_systematic_variant_plan(args, case, *, core_mask_recommendation=None)
 def _write_systematic_variant_plan_csv(path, plan):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "id",
         "category",
@@ -1907,31 +1872,30 @@ def _write_systematic_variant_plan_csv(path, plan):
         "skip_reasons",
         "rationale",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in plan.get("variants", ()):
-            writer.writerow(
-                {
-                    "id": row.get("id"),
-                    "category": row.get("category"),
-                    "label": row.get("label"),
-                    "status": row.get("status"),
-                    "executable_now": row.get("executable_now"),
-                    "run_by_default": row.get("run_by_default"),
-                    "window_labels": ";".join(row.get("window_labels", ())),
-                    "preparation_overrides": json.dumps(
-                        row.get("preparation_overrides") or {},
-                        sort_keys=True,
-                    ),
-                    "fit_overrides": json.dumps(
-                        row.get("fit_overrides") or {},
-                        sort_keys=True,
-                    ),
-                    "skip_reasons": ";".join(row.get("skip_reasons", ())),
-                    "rationale": row.get("rationale"),
-                }
-            )
+    rows = []
+    for row in plan.get("variants", ()):
+        rows.append(
+            {
+                "id": row.get("id"),
+                "category": row.get("category"),
+                "label": row.get("label"),
+                "status": row.get("status"),
+                "executable_now": row.get("executable_now"),
+                "run_by_default": row.get("run_by_default"),
+                "window_labels": ";".join(row.get("window_labels", ())),
+                "preparation_overrides": json.dumps(
+                    row.get("preparation_overrides") or {},
+                    sort_keys=True,
+                ),
+                "fit_overrides": json.dumps(
+                    row.get("fit_overrides") or {},
+                    sort_keys=True,
+                ),
+                "skip_reasons": ";".join(row.get("skip_reasons", ())),
+                "rationale": row.get("rationale"),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _parse_id_list(value):
@@ -2251,8 +2215,6 @@ def _run_one_systematic_variant(
 def _write_systematic_variant_results_csv(path, results):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "variant_id",
         "category",
@@ -2269,33 +2231,32 @@ def _write_systematic_variant_results_csv(path, results):
         "elapsed_s",
         "error",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for record in results.get("records", ()):
-            fit_summary = record.get("fit_summary") or {}
-            residuals = record.get("line_residual_diagnostics") or {}
-            residual_summary = residuals.get("summary") or {}
-            writer.writerow(
-                {
-                    "variant_id": record.get("variant_id"),
-                    "category": record.get("category"),
-                    "status": record.get("status"),
-                    "success": fit_summary.get("success"),
-                    "teff": fit_summary.get("teff"),
-                    "feh": fit_summary.get("feh"),
-                    "logg": fit_summary.get("logg"),
-                    "rv_kms": fit_summary.get("rv_kms"),
-                    "chi2_red": fit_summary.get("chi2_red"),
-                    "n_residual_lines": residual_summary.get("n_evaluated_lines"),
-                    "residual_quality_flags": ";".join(
-                        residual_summary.get("quality_flags") or ()
-                    ),
-                    "quality_flags": ";".join(fit_summary.get("quality_flags") or ()),
-                    "elapsed_s": record.get("elapsed_s"),
-                    "error": record.get("error"),
-                }
-            )
+    rows = []
+    for record in results.get("records", ()):
+        fit_summary = record.get("fit_summary") or {}
+        residuals = record.get("line_residual_diagnostics") or {}
+        residual_summary = residuals.get("summary") or {}
+        rows.append(
+            {
+                "variant_id": record.get("variant_id"),
+                "category": record.get("category"),
+                "status": record.get("status"),
+                "success": fit_summary.get("success"),
+                "teff": fit_summary.get("teff"),
+                "feh": fit_summary.get("feh"),
+                "logg": fit_summary.get("logg"),
+                "rv_kms": fit_summary.get("rv_kms"),
+                "chi2_red": fit_summary.get("chi2_red"),
+                "n_residual_lines": residual_summary.get("n_evaluated_lines"),
+                "residual_quality_flags": ";".join(
+                    residual_summary.get("quality_flags") or ()
+                ),
+                "quality_flags": ";".join(fit_summary.get("quality_flags") or ()),
+                "elapsed_s": record.get("elapsed_s"),
+                "error": record.get("error"),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _skipped_systematic_results(status, reason):
@@ -2697,8 +2658,6 @@ def _run_one_injection_recovery_trial(
 def _write_injection_recovery_csv(path, results):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "trial_index",
         "status",
@@ -2721,38 +2680,37 @@ def _write_injection_recovery_csv(path, results):
         "elapsed_s",
         "error",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for record in results.get("records", ()):
-            summary = record.get("fit_summary") or {}
-            truth = summary.get("truth") or {}
-            recovered = summary.get("recovered") or {}
-            delta = summary.get("delta") or {}
-            writer.writerow(
-                {
-                    "trial_index": record.get("trial_index"),
-                    "status": record.get("status"),
-                    "success": summary.get("success"),
-                    "truth_teff": truth.get("teff"),
-                    "truth_feh": truth.get("feh"),
-                    "truth_logg": truth.get("logg"),
-                    "truth_rv_kms": truth.get("rv_kms"),
-                    "recovered_teff": recovered.get("teff"),
-                    "recovered_feh": recovered.get("feh"),
-                    "recovered_logg": recovered.get("logg"),
-                    "recovered_rv_kms": recovered.get("rv_kms"),
-                    "delta_teff": delta.get("teff"),
-                    "delta_feh": delta.get("feh"),
-                    "delta_logg": delta.get("logg"),
-                    "delta_rv_kms": delta.get("rv_kms"),
-                    "all_passed": summary.get("all_passed"),
-                    "chi2_red": summary.get("chi2_red"),
-                    "quality_flags": ";".join(summary.get("quality_flags") or ()),
-                    "elapsed_s": record.get("elapsed_s"),
-                    "error": record.get("error"),
-                }
-            )
+    rows = []
+    for record in results.get("records", ()):
+        summary = record.get("fit_summary") or {}
+        truth = summary.get("truth") or {}
+        recovered = summary.get("recovered") or {}
+        delta = summary.get("delta") or {}
+        rows.append(
+            {
+                "trial_index": record.get("trial_index"),
+                "status": record.get("status"),
+                "success": summary.get("success"),
+                "truth_teff": truth.get("teff"),
+                "truth_feh": truth.get("feh"),
+                "truth_logg": truth.get("logg"),
+                "truth_rv_kms": truth.get("rv_kms"),
+                "recovered_teff": recovered.get("teff"),
+                "recovered_feh": recovered.get("feh"),
+                "recovered_logg": recovered.get("logg"),
+                "recovered_rv_kms": recovered.get("rv_kms"),
+                "delta_teff": delta.get("teff"),
+                "delta_feh": delta.get("feh"),
+                "delta_logg": delta.get("logg"),
+                "delta_rv_kms": delta.get("rv_kms"),
+                "all_passed": summary.get("all_passed"),
+                "chi2_red": summary.get("chi2_red"),
+                "quality_flags": ";".join(summary.get("quality_flags") or ()),
+                "elapsed_s": record.get("elapsed_s"),
+                "error": record.get("error"),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _skipped_injection_recovery(status, reason, truth=None):
@@ -4110,8 +4068,6 @@ def _build_publication_comparison_summary(payload, args=None):
 def _write_publication_summary_csv(path, summary):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "source_kind",
         "source_id",
@@ -4144,37 +4100,34 @@ def _write_publication_summary_csv(path, summary):
         "line_info_flags",
         "error",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in summary.get("comparison_rows", ()):
-            writer.writerow(
-                {
-                    **{
-                        key: row.get(key)
-                        for key in columns
-                        if key
-                        not in {
-                            "quality_flags",
-                            "window_labels",
-                            "sensitivity_reasons",
-                            "problem_lines",
-                            "line_quality_flags",
-                            "line_info_flags",
-                        }
-                    },
-                    "window_labels": ";".join(row.get("window_labels") or ()),
-                    "sensitivity_reasons": " | ".join(
-                        row.get("sensitivity_reasons") or ()
-                    ),
-                    "quality_flags": ";".join(row.get("quality_flags") or ()),
-                    "problem_lines": ";".join(row.get("problem_lines") or ()),
-                    "line_quality_flags": ";".join(
-                        row.get("line_quality_flags") or ()
-                    ),
-                    "line_info_flags": ";".join(row.get("line_info_flags") or ()),
-                }
-            )
+    rows = []
+    for row in summary.get("comparison_rows", ()):
+        rows.append(
+            {
+                **{
+                    key: row.get(key)
+                    for key in columns
+                    if key
+                    not in {
+                        "quality_flags",
+                        "window_labels",
+                        "sensitivity_reasons",
+                        "problem_lines",
+                        "line_quality_flags",
+                        "line_info_flags",
+                    }
+                },
+                "window_labels": ";".join(row.get("window_labels") or ()),
+                "sensitivity_reasons": " | ".join(
+                    row.get("sensitivity_reasons") or ()
+                ),
+                "quality_flags": ";".join(row.get("quality_flags") or ()),
+                "problem_lines": ";".join(row.get("problem_lines") or ()),
+                "line_quality_flags": ";".join(row.get("line_quality_flags") or ()),
+                "line_info_flags": ";".join(row.get("line_info_flags") or ()),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _format_md_value(value):
@@ -4547,8 +4500,6 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
 def _write_diagnostic_window_csv(path, diagnostic_payload):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     rows = diagnostic_payload["selection"]["selected"]
     columns = [
         "id",
@@ -4562,28 +4513,27 @@ def _write_diagnostic_window_csv(path, diagnostic_payload):
         "risk_tags",
         "spectral_type_hint",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "id": row["id"],
-                    "label": row["label"],
-                    "region_A": "{0:.2f}-{1:.2f}".format(*row["region_A"]),
-                    "roles": ";".join(row.get("roles", ())),
-                    "score": "{0:.5g}".format(float(row.get("score", 0.0))),
-                    "n_usable_pixels": int(row.get("n_usable_pixels", 0)),
-                    "usable_fraction": "{0:.5g}".format(
-                        float(row.get("usable_fraction", 0.0))
-                    ),
-                    "feature_contrast": "{0:.5g}".format(
-                        float(row.get("feature_contrast", 0.0))
-                    ),
-                    "risk_tags": ";".join(row.get("risk_tags", ())),
-                    "spectral_type_hint": row.get("spectral_type_hint", ""),
-                }
-            )
+    csv_rows = []
+    for row in rows:
+        csv_rows.append(
+            {
+                "id": row["id"],
+                "label": row["label"],
+                "region_A": "{0:.2f}-{1:.2f}".format(*row["region_A"]),
+                "roles": ";".join(row.get("roles", ())),
+                "score": "{0:.5g}".format(float(row.get("score", 0.0))),
+                "n_usable_pixels": int(row.get("n_usable_pixels", 0)),
+                "usable_fraction": "{0:.5g}".format(
+                    float(row.get("usable_fraction", 0.0))
+                ),
+                "feature_contrast": "{0:.5g}".format(
+                    float(row.get("feature_contrast", 0.0))
+                ),
+                "risk_tags": ";".join(row.get("risk_tags", ())),
+                "spectral_type_hint": row.get("spectral_type_hint", ""),
+            }
+        )
+    atomic_write_csv_rows(path, columns, csv_rows)
 
 
 def _core_mask_fit_value(record, key):
@@ -4603,8 +4553,6 @@ def _core_mask_fit_value(record, key):
 def _write_core_mask_comparison_csv(path, records):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "core_mask_halfwidth_A",
         "n_fit_candidate",
@@ -4623,39 +4571,38 @@ def _write_core_mask_comparison_csv(path, records):
         "chi2_red",
         "quality_flags",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for record in records:
-            fit = record.get("fit") or {}
-            writer.writerow(
-                {
-                    "core_mask_halfwidth_A": record["core_mask_halfwidth_A"],
-                    "n_fit_candidate": record["n_fit_candidate"],
-                    "information_retention_fraction": record.get(
-                        "information_retention_fraction"
-                    ),
-                    "additional_information_loss_fraction": record.get(
-                        "additional_information_loss_fraction"
-                    ),
-                    "core_mask_information_penalty": record.get(
-                        "core_mask_information_penalty"
-                    ),
-                    "excessive_core_mask": record.get("excessive_core_mask"),
-                    "recommended_core_mask": record.get("recommended_core_mask"),
-                    "rejected_inside_fit_window_fraction": record[
-                        "rejected_inside_fit_window_fraction"
-                    ],
-                    "publication_ready": record["publication_ready"],
-                    "publication_blockers": ";".join(record["publication_blockers"]),
-                    "teff": _core_mask_fit_value(record, "teff"),
-                    "logg": _core_mask_fit_value(record, "logg"),
-                    "feh": _core_mask_fit_value(record, "feh"),
-                    "rv_kms": _core_mask_fit_value(record, "rv_kms"),
-                    "chi2_red": _core_mask_fit_value(record, "chi2_red"),
-                    "quality_flags": ";".join(fit.get("quality_flags", ())),
-                }
-            )
+    rows = []
+    for record in records:
+        fit = record.get("fit") or {}
+        rows.append(
+            {
+                "core_mask_halfwidth_A": record["core_mask_halfwidth_A"],
+                "n_fit_candidate": record["n_fit_candidate"],
+                "information_retention_fraction": record.get(
+                    "information_retention_fraction"
+                ),
+                "additional_information_loss_fraction": record.get(
+                    "additional_information_loss_fraction"
+                ),
+                "core_mask_information_penalty": record.get(
+                    "core_mask_information_penalty"
+                ),
+                "excessive_core_mask": record.get("excessive_core_mask"),
+                "recommended_core_mask": record.get("recommended_core_mask"),
+                "rejected_inside_fit_window_fraction": record[
+                    "rejected_inside_fit_window_fraction"
+                ],
+                "publication_ready": record["publication_ready"],
+                "publication_blockers": ";".join(record["publication_blockers"]),
+                "teff": _core_mask_fit_value(record, "teff"),
+                "logg": _core_mask_fit_value(record, "logg"),
+                "feh": _core_mask_fit_value(record, "feh"),
+                "rv_kms": _core_mask_fit_value(record, "rv_kms"),
+                "chi2_red": _core_mask_fit_value(record, "chi2_red"),
+                "quality_flags": ";".join(fit.get("quality_flags", ())),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _write_core_mask_comparison_plot(path, records):
