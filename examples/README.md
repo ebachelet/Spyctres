@@ -178,6 +178,49 @@ After the fit assumptions are reviewed, add `--run-fits` and optionally
 against the literature values. The validation runner keeps those reference
 values out of the fit priors.
 
+If one benchmark fails, use explicit diagnostic window sets rather than
+silently changing the ordinary validation default. For example, to probe the
+Arcturus/cool-giant failure mode inside the bundled 480-680 nm HARPS coverage:
+
+```bash
+python scripts/gaia_benchmark_validation.py \
+  --run-fits \
+  --target Arcturus \
+  --window-set broad_metal_forest \
+  --output-json /tmp/spyctres_gbs_arcturus_metal.json \
+  --output-csv /tmp/spyctres_gbs_arcturus_metal.csv \
+  --fit-plot-dir /tmp/spyctres_gbs_arcturus_plots \
+  --force
+```
+
+For line-by-line reviewer inspection, add a line-plot directory. This uses the
+generic `Spyctres.plot_model_line_windows()` plotting helper with a
+Gaia-benchmark preset list of diagnostic windows; it is not special-case fitting
+logic for one target:
+
+```bash
+python scripts/gaia_benchmark_validation.py \
+  --run-fits \
+  --target Arcturus \
+  --window-set broad_metal_forest \
+  --error-floor-fraction 0.01 \
+  --line-plot-dir /tmp/spyctres_gbs_line_plots \
+  --line-plot-reference-model \
+  --output-json /tmp/spyctres_gbs_arcturus_lineplots.json \
+  --output-csv /tmp/spyctres_gbs_arcturus_lineplots.csv \
+  --force
+```
+
+The optional reference overlay evaluates PHOENIX at the manifest
+Teff/logg/[Fe/H] and reuses the fitted RV for display because the manifest does
+not provide a reference RV. The reference parameters remain excluded from the
+fit priors.
+
+For model-systematics sensitivity checks, add an explicit
+`--error-floor-fraction`, for example `--error-floor-fraction 0.01`. Treat
+non-zero error-floor runs as diagnostic evidence, not ordinary no-floor
+benchmark recovery statistics.
+
 Before fitting your own SDSS/SEGUE or UVES-POP spectra, you can run the
 external-spectrum validation helper. It checks ingestion, masks, metadata, and
 fit-readiness, and can keep clean/dirty test sets separated for later review;

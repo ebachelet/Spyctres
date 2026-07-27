@@ -10,15 +10,16 @@ blind model-selection engine and does not rank solutions by raw chi-square.
 from __future__ import annotations
 
 from collections.abc import Mapping
-import csv
-import json
-import os
 from pathlib import Path
-import tempfile
 import time
 
 import numpy as np
 
+from ._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+    json_safe as _json_native,
+)
 from .diagnostic_windows import (
     build_diagnostic_window_combinations,
     select_diagnostic_windows,
@@ -505,29 +506,13 @@ def evaluate_diagnostic_window_common_evaluation(
 
 def write_diagnostic_window_comparison_json(path, payload):
     """Write comparison payload as atomic JSON, creating the parent directory."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _json_native(payload)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=path.name + ".",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
-        handle.write("\n")
-        tmp_name = handle.name
-    os.replace(tmp_name, path)
+    atomic_write_json(path, payload, sort_keys=True)
 
 
 def write_diagnostic_window_comparison_csv(path, payload):
     """Write a compact CSV summary of planned or completed comparisons."""
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     rows = payload.get("fit_records") or [
         _planned_fit_record(item, fit_status="planned_not_run")
         for item in payload.get("planned_comparisons", ())
@@ -562,68 +547,57 @@ def write_diagnostic_window_comparison_csv(path, payload):
         "chi2_red",
         "quality_flags",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in rows:
-            comparison = row.get("comparison", row)
-            summary = row.get("result_summary") or {}
-            heldout = row.get("held_out_evaluation") or {}
-            heldout_overall = heldout.get("overall") or {}
-            common = row.get("common_evaluation") or {}
-            common_overall = common.get("overall") or {}
-            writer.writerow(
-                {
-                    "comparison_index": comparison.get("comparison_index"),
-                    "comparison_id": comparison.get("id"),
-                    "kind": comparison.get("kind"),
-                    "n_windows": comparison.get("n_windows"),
-                    "window_ids": ";".join(comparison.get("window_ids", ())),
-                    "feature_families": ";".join(
-                        comparison.get("feature_families", ())
-                    ),
-                    "regions_A": _format_regions(comparison.get("regions_for_fit_A", ())),
-                    "estimated_usable_pixels": comparison.get(
-                        "estimated_usable_pixels"
-                    ),
-                    "held_out_window_ids": ";".join(
-                        comparison.get("held_out_window_ids", ())
-                    ),
-                    "heldout_status": heldout.get("status"),
-                    "heldout_n_evaluated_windows": heldout.get(
-                        "n_evaluated_windows"
-                    ),
-                    "heldout_n_pixels": heldout_overall.get("n_pixels"),
-                    "heldout_mean_chi2_red_proxy": heldout_overall.get(
-                        "mean_chi2_red_proxy"
-                    ),
-                    "heldout_median_abs_sigma": heldout_overall.get(
-                        "median_abs_sigma"
-                    ),
-                    "common_status": common.get("status"),
-                    "common_n_evaluated_windows": common.get(
-                        "n_evaluated_windows"
-                    ),
-                    "common_n_pixels": common_overall.get("n_pixels"),
-                    "common_mean_chi2_red_proxy": common_overall.get(
-                        "mean_chi2_red_proxy"
-                    ),
-                    "common_median_abs_sigma": common_overall.get(
-                        "median_abs_sigma"
-                    ),
-                    "common_max_rms_fraction": common_overall.get(
-                        "max_rms_fraction"
-                    ),
-                    "fit_status": row.get("fit_status"),
-                    "success": summary.get("success"),
-                    "teff": summary.get("teff"),
-                    "logg": summary.get("logg"),
-                    "feh": summary.get("feh"),
-                    "rv_kms": summary.get("rv_kms"),
-                    "chi2_red": summary.get("chi2_red"),
-                    "quality_flags": ";".join(row.get("quality_flags", ())),
-                }
-            )
+    csv_rows = []
+    for row in rows:
+        comparison = row.get("comparison", row)
+        summary = row.get("result_summary") or {}
+        heldout = row.get("held_out_evaluation") or {}
+        heldout_overall = heldout.get("overall") or {}
+        common = row.get("common_evaluation") or {}
+        common_overall = common.get("overall") or {}
+        csv_rows.append(
+            {
+                "comparison_index": comparison.get("comparison_index"),
+                "comparison_id": comparison.get("id"),
+                "kind": comparison.get("kind"),
+                "n_windows": comparison.get("n_windows"),
+                "window_ids": ";".join(comparison.get("window_ids", ())),
+                "feature_families": ";".join(
+                    comparison.get("feature_families", ())
+                ),
+                "regions_A": _format_regions(comparison.get("regions_for_fit_A", ())),
+                "estimated_usable_pixels": comparison.get("estimated_usable_pixels"),
+                "held_out_window_ids": ";".join(
+                    comparison.get("held_out_window_ids", ())
+                ),
+                "heldout_status": heldout.get("status"),
+                "heldout_n_evaluated_windows": heldout.get("n_evaluated_windows"),
+                "heldout_n_pixels": heldout_overall.get("n_pixels"),
+                "heldout_mean_chi2_red_proxy": heldout_overall.get(
+                    "mean_chi2_red_proxy"
+                ),
+                "heldout_median_abs_sigma": heldout_overall.get(
+                    "median_abs_sigma"
+                ),
+                "common_status": common.get("status"),
+                "common_n_evaluated_windows": common.get("n_evaluated_windows"),
+                "common_n_pixels": common_overall.get("n_pixels"),
+                "common_mean_chi2_red_proxy": common_overall.get(
+                    "mean_chi2_red_proxy"
+                ),
+                "common_median_abs_sigma": common_overall.get("median_abs_sigma"),
+                "common_max_rms_fraction": common_overall.get("max_rms_fraction"),
+                "fit_status": row.get("fit_status"),
+                "success": summary.get("success"),
+                "teff": summary.get("teff"),
+                "logg": summary.get("logg"),
+                "feh": summary.get("feh"),
+                "rv_kms": summary.get("rv_kms"),
+                "chi2_red": summary.get("chi2_red"),
+                "quality_flags": ";".join(row.get("quality_flags", ())),
+            }
+        )
+    atomic_write_csv_rows(path, columns, csv_rows)
 
 
 def plot_diagnostic_window_comparison(payload, savepath=None):
@@ -1455,19 +1429,3 @@ def _emit_progress(callback, comparison, **payload):
 
 def _utc_now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def _json_native(value):
-    if isinstance(value, np.ndarray):
-        return [_json_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_native(value.item())
-    if isinstance(value, Mapping):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)

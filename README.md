@@ -497,7 +497,15 @@ literature parameters are recorded for comparison rather than used as hidden
 fit priors. Run
 `python scripts/gaia_benchmark_validation.py --output-json /tmp/gbs.json --output-csv /tmp/gbs.csv --output-summary-plot /tmp/gbs.png`
 for the audit-only benchmark summary; add `--run-fits` only when you want the
-PHOENIX recovery comparison.
+PHOENIX recovery comparison. Failure diagnosis should use explicit options
+such as `--window-set broad_metal_forest` or `--error-floor-fraction 0.01`;
+these choices are recorded in JSON/CSV and are diagnostic checks, not silent
+ordinary validation defaults. For reviewer-friendly local line views, add
+`--line-plot-dir /tmp/gbs_line_plots`; the runner uses the generic
+`plot_model_line_windows()` helper with a Gaia-benchmark preset list of
+diagnostic windows. Add `--line-plot-reference-model` only when you want a
+diagnostic PHOENIX overlay at the manifest Teff/logg/[Fe/H]; those reference
+values are still not used as fit priors.
 Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
 deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion
 frame and stellar-rest correction status are tracked independently. Instrumental

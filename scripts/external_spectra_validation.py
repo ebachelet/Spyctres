@@ -18,7 +18,6 @@ import argparse
 import csv
 import json
 import os
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +28,11 @@ ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
 from Spyctres import audit_spectrum_for_fit, select_diagnostic_windows, suggest_fit_setup
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+    safe_filename,
+)
 from Spyctres.io import get_instrument_info, list_instruments, read_spectrum
 from Spyctres.plotting import plot_spectrum_audit, plot_spectrum_quicklook
 from Spyctres.preprocessing import READINESS_INTENTS
@@ -224,50 +228,9 @@ def build_parser():
     return parser
 
 
-def _json_safe_scalar(value):
-    if value is None or isinstance(value, (str, bool, int, float)):
-        if isinstance(value, float) and not np.isfinite(value):
-            return None
-        return value
-    if isinstance(value, np.generic):
-        return _json_safe_scalar(value.item())
-    return str(value)
-
-
-def _json_safe(value):
-    if isinstance(value, np.ndarray):
-        return [_json_safe(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_safe(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    return _json_safe_scalar(value)
-
-
 def _atomic_write_json(path, payload):
-    path = os.path.abspath(os.path.expanduser(str(path)))
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(os.path.basename(path)),
-        suffix=".tmp",
-        dir=directory,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(_json_safe(payload), handle, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
+    """Backward-compatible wrapper around the shared atomic JSON writer."""
+    atomic_write_json(path, payload)
 
 
 def _format_recommended_actions(readiness):
@@ -301,9 +264,6 @@ def _format_intent_actions(readiness):
 def _atomic_write_csv(path, payload):
     if path is None:
         return
-    path = os.path.abspath(os.path.expanduser(str(path)))
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
     columns = [
         "target_id",
         "label",
@@ -336,79 +296,61 @@ def _atomic_write_csv(path, payload):
         "recommended_window_label",
         "path",
     ]
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(os.path.basename(path)),
-        suffix=".tmp",
-        dir=directory,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns)
-            writer.writeheader()
-            for row in payload.get("results", []):
-                readiness = row.get("readiness") or {}
-                coverage = row.get("coverage") or {}
-                setup = row.get("fit_setup_recommendation") or {}
-                window = setup.get("recommended_window") or {}
-                writer.writerow(
-                    {
-                        "target_id": row.get("target_id"),
-                        "label": row.get("label"),
-                        "role": row.get("role"),
-                        "instrument": row.get("instrument"),
-                        "status": row.get("status"),
-                        "role_expectation_assessment": row.get(
-                            "role_expectation_assessment"
-                        ),
-                        "fit_ready": readiness.get("fit_ready"),
-                        "quicklook_only": readiness.get("quicklook_only"),
-                        "readiness_intent": readiness.get("intent"),
-                        "ready_for_intent": readiness.get("ready_for_intent"),
-                        "blockers_for_intent": ";".join(
-                            readiness.get("blockers_for_intent") or ()
-                        ),
-                        "warnings_for_intent": ";".join(
-                            readiness.get("warnings_for_intent") or ()
-                        ),
-                        "actions_for_intent": _format_intent_actions(readiness),
-                        "invalid_interpretations_for_intent": ";".join(
-                            readiness.get("invalid_interpretations_for_intent") or ()
-                        ),
-                        "n_segments": readiness.get("n_segments"),
-                        "n_total": readiness.get("n_total"),
-                        "n_fit_candidate": readiness.get("n_fit_candidate"),
-                        "outside_fit_window_fraction": readiness.get(
-                            "outside_fit_window_fraction"
-                        ),
-                        "rejected_inside_fit_window_fraction": readiness.get(
-                            "rejected_inside_fit_window_fraction"
-                        ),
-                        "interpretation_flags": ";".join(
-                            readiness.get("interpretation_flags") or ()
-                        ),
-                        "warnings": ";".join(readiness.get("warnings") or ()),
-                        "recommended_actions": _format_recommended_actions(
-                            readiness
-                        ),
-                        "wave_min_A": coverage.get("wave_min_A"),
-                        "wave_max_A": coverage.get("wave_max_A"),
-                        "err_present": row.get("err_present"),
-                        "resolution_present": row.get("resolution_present"),
-                        "setup_mode": setup.get("mode"),
-                        "recommended_branch_id": setup.get("recommended_branch_id"),
-                        "recommended_window_label": window.get("label"),
-                        "path": row.get("path"),
-                    }
-                )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
+    rows = []
+    for row in payload.get("results", []):
+        readiness = row.get("readiness") or {}
+        coverage = row.get("coverage") or {}
+        setup = row.get("fit_setup_recommendation") or {}
+        window = setup.get("recommended_window") or {}
+        rows.append(
+            {
+                "target_id": row.get("target_id"),
+                "label": row.get("label"),
+                "role": row.get("role"),
+                "instrument": row.get("instrument"),
+                "status": row.get("status"),
+                "role_expectation_assessment": row.get(
+                    "role_expectation_assessment"
+                ),
+                "fit_ready": readiness.get("fit_ready"),
+                "quicklook_only": readiness.get("quicklook_only"),
+                "readiness_intent": readiness.get("intent"),
+                "ready_for_intent": readiness.get("ready_for_intent"),
+                "blockers_for_intent": ";".join(
+                    readiness.get("blockers_for_intent") or ()
+                ),
+                "warnings_for_intent": ";".join(
+                    readiness.get("warnings_for_intent") or ()
+                ),
+                "actions_for_intent": _format_intent_actions(readiness),
+                "invalid_interpretations_for_intent": ";".join(
+                    readiness.get("invalid_interpretations_for_intent") or ()
+                ),
+                "n_segments": readiness.get("n_segments"),
+                "n_total": readiness.get("n_total"),
+                "n_fit_candidate": readiness.get("n_fit_candidate"),
+                "outside_fit_window_fraction": readiness.get(
+                    "outside_fit_window_fraction"
+                ),
+                "rejected_inside_fit_window_fraction": readiness.get(
+                    "rejected_inside_fit_window_fraction"
+                ),
+                "interpretation_flags": ";".join(
+                    readiness.get("interpretation_flags") or ()
+                ),
+                "warnings": ";".join(readiness.get("warnings") or ()),
+                "recommended_actions": _format_recommended_actions(readiness),
+                "wave_min_A": coverage.get("wave_min_A"),
+                "wave_max_A": coverage.get("wave_max_A"),
+                "err_present": row.get("err_present"),
+                "resolution_present": row.get("resolution_present"),
+                "setup_mode": setup.get("mode"),
+                "recommended_branch_id": setup.get("recommended_branch_id"),
+                "recommended_window_label": window.get("label"),
+                "path": row.get("path"),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _as_bool(value, default=False):
@@ -438,15 +380,13 @@ def _optional_int(value, default=None):
 
 def _safe_target_id(instrument, path, label=None):
     seed = label or os.path.splitext(os.path.basename(str(path)))[0]
-    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in seed)
-    return "{0}:{1}".format(instrument, safe or "target")
+    return "{0}:{1}".format(instrument, safe_filename(seed))
 
 
 def _safe_scan_target_id(instrument, root, path):
     relative = Path(path).resolve().relative_to(Path(root).resolve()).with_suffix("")
     seed = "_".join(relative.parts)
-    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in seed)
-    return "{0}:{1}".format(instrument, safe or "target")
+    return "{0}:{1}".format(instrument, safe_filename(seed))
 
 
 def _resolve_path(path, base=None):
@@ -804,8 +744,7 @@ def _role_expectation_assessment(role, readiness):
 
 def _safe_plot_name(target):
     seed = str(target.get("target_id") or target.get("label") or "target")
-    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in seed)
-    return "{0}.png".format(safe or "target")
+    return "{0}.png".format(safe_filename(seed))
 
 
 def validate_target(target, args):

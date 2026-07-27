@@ -19,15 +19,18 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-import tempfile
 
 import numpy as np
 
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+    json_safe as _json_native,
+)
 from Spyctres.diagnostic_windows import (
     diagnostic_window_catalog,
     select_diagnostic_windows,
@@ -533,29 +536,13 @@ def summarize_audit_records(records):
 
 def write_audit_json(path, payload):
     """Write audit payload atomically as JSON."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _json_native(payload)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=path.name + ".",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
-        handle.write("\n")
-        tmp_name = handle.name
-    os.replace(tmp_name, path)
+    atomic_write_json(path, payload, sort_keys=True)
 
 
 def write_audit_csv(path, payload):
     """Write a compact per-target audit CSV."""
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "target_id",
         "instrument",
@@ -572,34 +559,33 @@ def write_audit_csv(path, payload):
         "missing_expected_groups",
         "status",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in payload.get("targets", ()):
-            coverage = row.get("coverage", {})
-            summary = row.get("selection_summary", {})
-            writer.writerow(
-                {
-                    "target_id": row.get("target_id"),
-                    "instrument": row.get("instrument"),
-                    "validation_role": row.get("validation_role"),
-                    "ordinary_recovery_target": row.get("ordinary_recovery_target"),
-                    "spectral_type": row.get("spectral_type"),
-                    "teff_ref": row.get("teff_ref"),
-                    "wave_min_A": coverage.get("wave_min_A"),
-                    "wave_max_A": coverage.get("wave_max_A"),
-                    "n_segments": coverage.get("n_segments"),
-                    "n_selected": summary.get("n_selected"),
-                    "top_window_ids": ";".join(summary.get("top_window_ids", ())),
-                    "selected_feature_families": ";".join(
-                        summary.get("selected_feature_families", ())
-                    ),
-                    "missing_expected_groups": ";".join(
-                        row.get("missing_expected_groups", ())
-                    ),
-                    "status": row.get("status"),
-                }
-            )
+    rows = []
+    for row in payload.get("targets", ()):
+        coverage = row.get("coverage", {})
+        summary = row.get("selection_summary", {})
+        rows.append(
+            {
+                "target_id": row.get("target_id"),
+                "instrument": row.get("instrument"),
+                "validation_role": row.get("validation_role"),
+                "ordinary_recovery_target": row.get("ordinary_recovery_target"),
+                "spectral_type": row.get("spectral_type"),
+                "teff_ref": row.get("teff_ref"),
+                "wave_min_A": coverage.get("wave_min_A"),
+                "wave_max_A": coverage.get("wave_max_A"),
+                "n_segments": coverage.get("n_segments"),
+                "n_selected": summary.get("n_selected"),
+                "top_window_ids": ";".join(summary.get("top_window_ids", ())),
+                "selected_feature_families": ";".join(
+                    summary.get("selected_feature_families", ())
+                ),
+                "missing_expected_groups": ";".join(
+                    row.get("missing_expected_groups", ())
+                ),
+                "status": row.get("status"),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def plot_audit_heatmap(payload, savepath=None, *, max_windows=18):
@@ -796,22 +782,6 @@ def _target_plot_label(target):
 def _emit_progress(callback, message):
     if callback is not None:
         callback(message)
-
-
-def _json_native(value):
-    if isinstance(value, np.ndarray):
-        return [_json_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_native(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
 
 
 if __name__ == "__main__":

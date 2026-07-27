@@ -1924,70 +1924,340 @@ def plot_fit_windows(
     if excluded_mask is not None:
         excluded_mask = _as_bool_array(excluded_mask, n_expected=wave.size)
 
-    nwin = len(windows)
+    used_mask = np.isfinite(wave) & np.isfinite(flux) & np.isfinite(model)
+    if excluded_mask is not None:
+        used_mask &= ~excluded_mask
+
+    return plot_model_line_windows(
+        wave,
+        flux,
+        windows,
+        models=[{"flux": model, "label": model_label}],
+        used_mask=used_mask,
+        model_used_masks=[used_mask],
+        excluded_mask=excluded_mask,
+        line_groups=line_groups,
+        title=title,
+        ncols=ncols,
+        figsize_per_panel=figsize_per_panel,
+        observed_label=data_label,
+    )
+
+
+def _normalize_line_window_spec(window):
+    """Normalize one line-window plotting specification."""
+    if isinstance(window, dict):
+        limits = (
+            window.get("limits_A")
+            or window.get("region_A")
+            or window.get("region")
+            or window.get("window_A")
+        )
+        if limits is None or len(limits) != 2:
+            raise ValueError("Line-window mappings require limits_A/region_A.")
+        label = window.get("label") or window.get("name") or window.get("id")
+        markers = window.get("markers_A") or window.get("markers") or ()
+    elif len(window) == 3:
+        label, wmin, wmax = window
+        limits = (wmin, wmax)
+        markers = ()
+    elif len(window) == 2:
+        limits = window
+        label = None
+        markers = ()
+    else:
+        raise ValueError(
+            "Each window must be a mapping, (label, wmin, wmax), or (wmin, wmax)."
+        )
+    wmin = float(limits[0])
+    wmax = float(limits[1])
+    if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+        raise ValueError("Line-window limits must be finite and increasing.")
+    return {
+        "label": None if label is None else str(label),
+        "wmin": wmin,
+        "wmax": wmax,
+        "markers": [float(marker) for marker in markers],
+    }
+
+
+def _plot_contiguous_masked_line(ax, wave, values, mask, *, label=None, **kwargs):
+    """Plot only contiguous True runs in ``mask`` and label the first run."""
+    mask = _as_bool_array(mask, n_expected=wave.size)
+    indices = np.flatnonzero(mask)
+    if indices.size == 0:
+        return False
+    first = True
+    for run in np.split(indices, np.where(np.diff(indices) > 1)[0] + 1):
+        ax.plot(
+            wave[run],
+            values[run],
+            label=label if first else None,
+            **kwargs,
+        )
+        first = False
+    return True
+
+
+def _window_plot_ylim(wave, flux, window_mask, models=()):
+    values = []
+    finite_flux = np.isfinite(flux)
+    if np.any(window_mask & finite_flux):
+        values.append(flux[window_mask & finite_flux])
+    for model in models:
+        model = _as_float_array(model)
+        finite_model = np.isfinite(model)
+        if np.any(window_mask & finite_model):
+            values.append(model[window_mask & finite_model])
+    if not values:
+        return None
+    sample = np.concatenate(values)
+    sample = sample[np.isfinite(sample)]
+    if sample.size == 0:
+        return None
+    ylo, yhi = _compute_robust_ylim(sample, lower=0.2, upper=99.8, pad_frac=0.10)
+    ylo, yhi = _expand_ylim_to_include(ylo, yhi, sample, pad_frac=0.02)
+    return ylo, yhi
+
+
+def plot_model_line_windows(
+    wave,
+    flux,
+    windows,
+    *,
+    models,
+    used_mask=None,
+    model_used_masks=None,
+    excluded_mask=None,
+    line_groups=None,
+    savepath=None,
+    title=None,
+    footer=None,
+    ncols=2,
+    figsize_per_panel=(7.2, 3.2),
+    observed_label="observed",
+    unused_label="not fitted",
+):
+    """Plot generic zoomed spectral windows with one or more same-grid models.
+
+    This helper is intentionally instrument-agnostic. It accepts plain arrays,
+    user-supplied wavelength windows, and one or more model arrays on the same
+    wavelength grid. Solid model traces are drawn on pixels used by the fit;
+    dashed traces can show model behavior on masked pixels inside the fitted
+    span. This is useful for benchmark validation, referee plots, and web/GUI
+    diagnostics where the user needs to see what was fitted without hiding
+    excluded cores or artifact regions.
+
+    ``excluded_mask`` and ``line_groups`` are plotting annotations only. They
+    do not change which pixels are treated as fitted; use ``used_mask`` or
+    ``model_used_masks`` for that.
+    """
+    wave = _as_float_array(wave)
+    flux = _as_float_array(flux)
+    if wave.shape != flux.shape:
+        raise ValueError("wave and flux must have the same shape.")
+    n = wave.size
+    if used_mask is None:
+        used_mask = np.isfinite(wave) & np.isfinite(flux)
+    else:
+        used_mask = _as_bool_array(used_mask, n_expected=n)
+    if excluded_mask is not None:
+        excluded_mask = _as_bool_array(excluded_mask, n_expected=n)
+
+    normalized_windows = [_normalize_line_window_spec(window) for window in windows]
+    normalized_windows = [
+        window
+        for window in normalized_windows
+        if np.count_nonzero(
+            np.isfinite(wave)
+            & (wave >= window["wmin"])
+            & (wave <= window["wmax"])
+        )
+        >= 3
+    ]
+    if not normalized_windows:
+        raise ValueError("No line windows overlap the supplied wavelength grid.")
+
+    model_specs = []
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["tab:red"])
+    for index, item in enumerate(models or ()):
+        if isinstance(item, dict):
+            if "flux" not in item:
+                raise ValueError("Model mappings require a 'flux' array.")
+            model_flux = _as_float_array(item["flux"])
+            label = item.get("label") or "model {0}".format(index + 1)
+            color = item.get("color") or default_colors[index % len(default_colors)]
+            ls = item.get("ls", "-")
+            masked_label = item.get("masked_label")
+        else:
+            model_flux = _as_float_array(item)
+            label = "model {0}".format(index + 1)
+            color = default_colors[index % len(default_colors)]
+            ls = "-"
+            masked_label = None
+        if model_flux.shape != wave.shape:
+            raise ValueError("Each model flux array must match wave shape.")
+        model_specs.append(
+            {
+                "flux": model_flux,
+                "label": str(label),
+                "color": color,
+                "ls": ls,
+                "masked_label": masked_label,
+            }
+        )
+    if not model_specs:
+        raise ValueError("At least one model must be supplied.")
+
+    if model_used_masks is None:
+        per_model_used = [used_mask for _item in model_specs]
+    else:
+        per_model_used = [
+            _as_bool_array(mask, n_expected=n) for mask in model_used_masks
+        ]
+        if len(per_model_used) != len(model_specs):
+            raise ValueError("model_used_masks length must match models length.")
+
+    nwin = len(normalized_windows)
     ncols = max(1, int(ncols))
     nrows = int(np.ceil(nwin / ncols))
-
     fig, axes = plt.subplots(
         nrows,
         ncols,
         figsize=(figsize_per_panel[0] * ncols, figsize_per_panel[1] * nrows),
         squeeze=False,
+        constrained_layout=True,
     )
+    if title:
+        fig.suptitle(str(title), fontsize=12)
 
-    first_visible = True
+    finite_obs = np.isfinite(wave) & np.isfinite(flux)
+    for ax, window in zip(axes.ravel(), normalized_windows):
+        window_mask = finite_obs & (wave >= window["wmin"]) & (wave <= window["wmax"])
+        ax.plot(
+            wave[window_mask],
+            flux[window_mask],
+            color="0.15",
+            lw=0.8,
+            label=observed_label,
+        )
+        unused = window_mask & ~used_mask
+        if np.any(unused):
+            ax.scatter(
+                wave[unused],
+                flux[unused],
+                s=6,
+                color="0.65",
+                alpha=0.45,
+                label=unused_label,
+                zorder=2,
+            )
+        if excluded_mask is not None and np.any(excluded_mask & window_mask):
+            for swmin, swmax in _mask_to_spans(wave, excluded_mask & window_mask):
+                ax.axvspan(
+                    swmin,
+                    swmax,
+                    color="tab:purple",
+                    alpha=0.10,
+                    lw=0,
+                )
 
-    for ax, win in zip(axes.ravel(), windows):
-        if len(win) == 3:
-            label, wmin, wmax = win
-        elif len(win) == 2:
-            wmin, wmax = win
-            label = None
-        else:
-            raise ValueError("Each window must be (label, wmin, wmax) or (wmin, wmax).")
+        any_model_fit_in_window = False
+        for model_spec, model_used in zip(model_specs, per_model_used):
+            model_flux = model_spec["flux"]
+            finite_model = np.isfinite(model_flux)
+            model_fit = window_mask & model_used & finite_model
+            if not np.any(model_fit):
+                continue
+            any_model_fit_in_window = True
+            fit_wave = wave[model_fit]
+            span = (
+                window_mask
+                & finite_model
+                & (wave >= float(np.nanmin(fit_wave)))
+                & (wave <= float(np.nanmax(fit_wave)))
+            )
+            _plot_contiguous_masked_line(
+                ax,
+                wave,
+                model_flux,
+                model_fit,
+                color=model_spec["color"],
+                ls=model_spec["ls"],
+                lw=1.2,
+                label=model_spec["label"],
+            )
+            masked_span = span & ~model_used
+            if np.any(masked_span):
+                _plot_contiguous_masked_line(
+                    ax,
+                    wave,
+                    model_flux,
+                    masked_span,
+                    color=model_spec["color"],
+                    ls="--",
+                    alpha=0.70,
+                    lw=1.0,
+                    label=model_spec["masked_label"],
+                )
 
-        m = (wave >= wmin) & (wave <= wmax)
-        if not m.any():
-            ax.set_visible(False)
-            continue
+        if not any_model_fit_in_window:
+            ax.text(
+                0.04,
+                0.08,
+                "no model trace in fitted pixels",
+                transform=ax.transAxes,
+                fontsize=8,
+                color="0.35",
+            )
 
-        if first_visible:
-            ax.plot(wave[m], flux[m], lw=0.9, label=data_label)
-            ax.plot(wave[m], model[m], lw=0.9, label=model_label)
-            first_visible = False
-        else:
-            ax.plot(wave[m], flux[m], lw=0.9)
-            ax.plot(wave[m], model[m], lw=0.9)
-
-        if excluded_mask is not None and excluded_mask.any():
-            for swmin, swmax in _mask_to_spans(wave, excluded_mask & m):
-                ax.axvspan(swmin, swmax, alpha=0.12)
-
-        ylo, yhi = _compute_robust_ylim(flux[m], lower=2.0, upper=98.0, pad_frac=0.08)
-        ax.set_ylim(ylo, yhi)
-        ax.set_xlim(wmin, wmax)
-
-        if label is not None:
-            ax.set_title(label)
-
+        for marker in window["markers"]:
+            if window["wmin"] <= marker <= window["wmax"]:
+                ax.axvline(marker, color="0.75", lw=0.8, ls=":")
         if line_groups is not None:
             for group in line_groups:
-                lines = _resolve_line_group(group)
-                mark_lines(ax, lines, xlim=(wmin, wmax), ymax=0.98)
+                mark_lines(
+                    ax,
+                    _resolve_line_group(group),
+                    xlim=(window["wmin"], window["wmax"]),
+                    ymax=0.98,
+                )
+        ax.set_xlim(window["wmin"], window["wmax"])
+        ylim = _window_plot_ylim(
+            wave,
+            flux,
+            window_mask,
+            models=[spec["flux"] for spec in model_specs],
+        )
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        if window["label"]:
+            ax.set_title(window["label"])
+        ax.set_xlabel("Wavelength [Å]")
+        ax.set_ylabel("Flux")
+        ax.grid(alpha=0.16, lw=0.5)
 
     for ax in axes.ravel()[nwin:]:
-        ax.set_visible(False)
+        ax.set_axis_off()
 
     handles, labels = axes.ravel()[0].get_legend_handles_labels()
-    if labels:
-        axes.ravel()[0].legend(frameon=False, loc="best")
-
-    if title is not None:
-        fig.suptitle(title)
-        fig.tight_layout(rect=[0, 0, 1, 0.97])
-    else:
-        fig.tight_layout()
-
+    if handles:
+        fig.legend(handles, labels, loc="upper right", fontsize=8)
+    if footer:
+        fig.text(
+            0.01,
+            0.01,
+            str(footer),
+            ha="left",
+            va="bottom",
+            fontsize=8,
+            color="0.25",
+        )
+    if savepath is not None:
+        savepath = Path(savepath)
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(savepath, dpi=160, bbox_inches="tight")
+        fig.spyctres_generated_files = {"line_window_plot": str(savepath)}
     return fig, axes
 
 

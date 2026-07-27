@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ._serialization import json_safe as _json_native
 from .io import SpectrumCollection, SpectrumSegment, coerce_spectrum
 from .waveutils import C_KMS, convert_wavelength_medium
 
@@ -324,7 +325,6 @@ def _split_roles(roles, window_id):
         "applicability_tags": tuple(applicability),
         "feature_family": tuple(dict.fromkeys(family)),
     }
-
 
 DIAGNOSTIC_WINDOW_CATALOG = (
     DiagnosticWindow(
@@ -1623,19 +1623,3 @@ def _combination_record(kind, label, records):
         ),
         "score_sum": float(sum(float(item.get("score", 0.0)) for item in records)),
     }
-
-
-def _json_native(value):
-    if isinstance(value, np.ndarray):
-        return [_json_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_native(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)

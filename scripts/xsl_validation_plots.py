@@ -8,11 +8,9 @@ python scripts/xsl_validation_plots.py /tmp/xsl_validation_results.json \
 """
 
 import argparse
-import csv
 import json
 import math
 import os
-import re
 from pathlib import Path
 
 from Spyctres import ensure_matplotlib_config_dir
@@ -26,6 +24,11 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from Spyctres import plot_xsl_validation_payload
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+    safe_filename as _safe_filename,
+)
 
 
 REFERENCE_RECOVERY_THRESHOLDS = {
@@ -161,15 +164,6 @@ def load_validation_results(path):
     if not isinstance(payload["results"], list):
         raise ValueError("Validation JSON field 'results' must be a list.")
     return payload
-
-
-def _safe_filename(value, fallback="target"):
-    value = str(value or "").strip()
-    if not value:
-        value = fallback
-    value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
-    value = value.strip("._")
-    return value or fallback
 
 
 def _plot_title(row):
@@ -695,16 +689,15 @@ def write_reference_recovery_summary_csv(path, summary):
         "feh_assessment",
         "quality_flags",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in summary.get("rows", ()):
-            writer.writerow(
-                {
-                    **{key: row.get(key) for key in columns if key != "quality_flags"},
-                    "quality_flags": ";".join(row.get("quality_flags") or ()),
-                }
-            )
+    rows = []
+    for row in summary.get("rows", ()):
+        rows.append(
+            {
+                **{key: row.get(key) for key in columns if key != "quality_flags"},
+                "quality_flags": ";".join(row.get("quality_flags") or ()),
+            }
+        )
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def write_reference_recovery_summary_markdown(path, summary):
@@ -821,11 +814,7 @@ def write_reference_recovery_summary_markdown(path, summary):
 def write_reference_recovery_summary_json(path, summary):
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(summary, handle, indent=2, allow_nan=False)
-        handle.write("\n")
+    atomic_write_json(path, summary)
 
 
 def plot_reference_recovery_summary(summary, savepath=None):

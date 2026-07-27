@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 import json
 import os
-import tempfile
 
 import numpy as np
+
+from ._serialization import atomic_write_json, json_safe as _jsonable
 
 
 def _looks_like_local_path(value):
@@ -20,20 +21,6 @@ def _looks_like_local_path(value):
     if len(value) >= 3 and value[1] == ":" and value[2] in ("\\", "/"):
         return True
     return False
-
-
-def _jsonable(value):
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return _jsonable(value.item())
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    return value
 
 
 def _without_local_paths(value):
@@ -1018,32 +1005,13 @@ class PhoenixFitResult(Mapping):
         if relative_to is None:
             relative_to = os.path.dirname(os.path.abspath(os.fspath(path))) or "."
         path = os.path.abspath(os.path.expanduser(os.fspath(path)))
-        directory = os.path.dirname(path) or "."
-        os.makedirs(directory, exist_ok=True)
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=".{0}.".format(os.path.basename(path)),
-            suffix=".tmp",
-            dir=directory,
+        atomic_write_json(
+            path,
+            self.to_dict(
+                include_arrays=include_arrays,
+                include_local_paths=include_local_paths,
+                plot_paths=plot_paths,
+                relative_to=relative_to,
+            ),
+            **kwargs,
         )
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(
-                    self.to_dict(
-                        include_arrays=include_arrays,
-                        include_local_paths=include_local_paths,
-                        plot_paths=plot_paths,
-                        relative_to=relative_to,
-                    ),
-                    handle,
-                    **kwargs,
-                )
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-        except Exception:
-            try:
-                os.unlink(temporary)
-            except FileNotFoundError:
-                pass
-            raise

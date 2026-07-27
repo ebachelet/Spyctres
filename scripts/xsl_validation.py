@@ -13,11 +13,11 @@ import importlib.metadata
 import json
 import os
 import subprocess
-import tempfile
 
 import numpy as np
 
 from Spyctres import fit_phoenix_spectrum
+from Spyctres._serialization import atomic_write_json, json_safe as _json_native
 from Spyctres.io import SpectrumCollection, read_spectrum
 
 
@@ -341,22 +341,6 @@ def _validation_provenance(args, manifest_path, run_configuration):
     }
 
 
-def _json_native(value):
-    if isinstance(value, np.ndarray):
-        return [_json_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_native(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    raise TypeError("Value is not JSON serializable: {0}".format(type(value).__name__))
-
-
 def _ordinary_recovery_statistics(results):
     ordinary = [
         item
@@ -535,26 +519,8 @@ def _validation_plot_payload(collection, fit_result, max_points_per_segment):
 
 
 def _atomic_write_json(path, payload):
-    path = os.path.abspath(os.path.expanduser(path))
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    native_payload = _json_native(payload)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(os.path.basename(path)), suffix=".tmp", dir=directory
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(native_payload, handle, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
+    """Backward-compatible wrapper around the shared atomic JSON writer."""
+    atomic_write_json(path, payload)
 
 
 def main(argv=None):

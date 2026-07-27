@@ -8,6 +8,7 @@ from Spyctres.io import SpectrumCollection, SpectrumSegment
 from Spyctres.plotting import (
     plot_diagnostic_windows,
     plot_fit_referee,
+    plot_model_line_windows,
     plot_spectrum,
     plot_spectrum_audit,
     plot_xsl_validation_payload,
@@ -175,6 +176,54 @@ def test_plot_fit_referee_does_not_draw_model_on_unused_pixels():
     assert np.isnan(y_resid[:2]).all()
     assert np.isnan(y_resid[-2:]).all()
     assert np.isfinite(y_resid[2:-2]).all()
+    fig.clf()
+
+
+def test_plot_model_line_windows_is_generic_and_shows_masked_model_span(tmp_path):
+    wave = np.linspace(4830.0, 4898.0, 21)
+    flux = 1.0 - 0.20 * np.exp(-0.5 * ((wave - 4861.33) / 5.0) ** 2)
+    model = 1.0 - 0.18 * np.exp(-0.5 * ((wave - 4861.33) / 5.5) ** 2)
+    reference = 1.0 - 0.15 * np.exp(-0.5 * ((wave - 4861.33) / 5.5) ** 2)
+    used = np.ones_like(wave, dtype=bool)
+    used[8:12] = False
+    path = tmp_path / "nested" / "line_windows.png"
+
+    fig, axes = plot_model_line_windows(
+        wave,
+        flux,
+        [{"label": "generic H-beta-like window", "limits_A": (4830.0, 4898.0), "markers_A": [4861.33]}],
+        models=[
+            {
+                "flux": model,
+                "label": "best model",
+                "color": "tab:red",
+                "masked_label": "best model masked span",
+            },
+            {
+                "flux": reference,
+                "label": "comparison model",
+                "color": "tab:blue",
+                "masked_label": "comparison masked span",
+            },
+        ],
+        used_mask=used,
+        model_used_masks=[used, used],
+        savepath=path,
+        footer="generic diagnostic",
+    )
+
+    assert path.exists()
+    assert fig.spyctres_generated_files == {"line_window_plot": str(path)}
+    labels = [line.get_label() for line in axes[0, 0].lines]
+    assert "best model" in labels
+    assert "comparison model" in labels
+    assert "best model masked span" in labels
+    assert "comparison masked span" in labels
+    masked_lines = [
+        line for line in axes[0, 0].lines if line.get_label().endswith("masked span")
+    ]
+    assert masked_lines
+    assert all(line.get_linestyle() == "--" for line in masked_lines)
     fig.clf()
 
 

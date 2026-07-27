@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ._serialization import json_safe
 from .diagnostic_windows import (
     build_diagnostic_window_combinations,
     select_diagnostic_windows,
@@ -320,17 +321,9 @@ def prepare_phoenix_fit_kwargs(
 
 
 def _jsonable(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
     if isinstance(value, FitSetup):
         return value.to_dict()
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    return value
+    return json_safe(value)
 
 
 def _as_segments(spectrum):

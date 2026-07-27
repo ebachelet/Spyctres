@@ -39,7 +39,6 @@ import csv
 import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +52,10 @@ if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+)
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
@@ -245,24 +248,6 @@ def build_parser():
     return parser
 
 
-def _json_native(value):
-    # Fit payloads contain NumPy scalars/arrays. Convert them to strict JSON so
-    # batch outputs are easy to inspect with json.tool, pandas, or notebooks.
-    if isinstance(value, np.ndarray):
-        return [_json_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_native(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_native(item) for item in value]
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
-
-
 def _resolution_override_payload(args):
     if getattr(args, "resolution_R", None) is None:
         return None
@@ -295,39 +280,11 @@ def _assumed_resolution_for_audit(args):
 def _atomic_write_json(path, payload):
     # Checkpoint through a temporary file and atomic replace so interrupted runs
     # do not leave behind half-written JSON.
-    path = os.path.abspath(os.path.expanduser(os.fspath(path)))
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(os.path.basename(path)),
-        suffix=".tmp",
-        dir=directory,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(_json_native(payload), handle, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, payload)
 
 
 def _atomic_write_summary_csv(path, payload):
     """Write a compact per-target CSV beside the detailed JSON checkpoint."""
-    path = os.path.abspath(os.path.expanduser(os.fspath(path)))
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(os.path.basename(path)),
-        suffix=".tmp",
-        dir=directory,
-    )
     fieldnames = [
         "target_id",
         "path",
@@ -359,83 +316,67 @@ def _atomic_write_summary_csv(path, payload):
         "refine_seconds",
         "total_seconds",
     ]
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            for item in payload.get("results", []):
-                refined = item.get("refined_result") or {}
-                quick = item.get("quick_result") or {}
-                primary = refined if refined else quick
-                readiness = item.get("spectrum_readiness") or {}
-                resolution_assumption = item.get("resolution_assumption") or {}
-                writer.writerow(
-                    {
-                        "target_id": item.get("target_id"),
-                        "path": item.get("path"),
-                        "status": item.get("status"),
-                        "refinement_skipped_reason": ",".join(
-                            str(reason)
-                            for reason in (
-                                item.get("refinement_skipped_reason") or []
-                            )
-                        ),
-                        "fit_ready": readiness.get("fit_ready"),
-                        "quicklook_only": readiness.get("quicklook_only"),
-                        "readiness_flags": ",".join(
-                            str(flag)
-                            for flag in (readiness.get("interpretation_flags") or [])
-                        ),
-                        "readiness_fit_pixels": readiness.get("n_fit_candidate"),
-                        "outside_fit_window_fraction": readiness.get(
-                            "outside_fit_window_fraction"
-                        ),
-                        "rejected_inside_fit_window_fraction": readiness.get(
-                            "rejected_inside_fit_window_fraction"
-                        ),
-                        "resolution_source": resolution_assumption.get(
-                            "resolution_source"
-                        ),
-                        "assumed_resolution_R": resolution_assumption.get(
-                            "assumed_resolution_R"
-                        ),
-                        "archive_mask_policy": (
-                            item.get("archive_mask_policy") or {}
-                        ).get("policy"),
-                        "archive_masks_applied": (
-                            item.get("archive_mask_policy") or {}
-                        ).get("applied"),
-                        "archive_mask_count": (
-                            item.get("archive_mask_policy") or {}
-                        ).get("recognized_mask_count"),
-                        "teff": primary.get("teff"),
-                        "feh": primary.get("feh"),
-                        "logg": primary.get("logg"),
-                        "rv_kms": primary.get("rv_kms"),
-                        "chi2_red": primary.get("chi2_red"),
-                        "quality_flags": ",".join(
-                            str(flag)
-                            for flag in (primary.get("quality_flags") or [])
-                        ),
-                        "quick_teff": quick.get("teff"),
-                        "quick_feh": quick.get("feh"),
-                        "quick_logg": quick.get("logg"),
-                        "quick_rv_kms": quick.get("rv_kms"),
-                        "quick_chi2_red": quick.get("chi2_red"),
-                        "quick_seconds": item.get("quick_seconds"),
-                        "refine_seconds": item.get("refine_seconds"),
-                        "total_seconds": item.get("total_seconds"),
-                    }
-                )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    rows = []
+    for item in payload.get("results", []):
+        refined = item.get("refined_result") or {}
+        quick = item.get("quick_result") or {}
+        primary = refined if refined else quick
+        readiness = item.get("spectrum_readiness") or {}
+        resolution_assumption = item.get("resolution_assumption") or {}
+        rows.append(
+            {
+                "target_id": item.get("target_id"),
+                "path": item.get("path"),
+                "status": item.get("status"),
+                "refinement_skipped_reason": ",".join(
+                    str(reason)
+                    for reason in (item.get("refinement_skipped_reason") or [])
+                ),
+                "fit_ready": readiness.get("fit_ready"),
+                "quicklook_only": readiness.get("quicklook_only"),
+                "readiness_flags": ",".join(
+                    str(flag)
+                    for flag in (readiness.get("interpretation_flags") or [])
+                ),
+                "readiness_fit_pixels": readiness.get("n_fit_candidate"),
+                "outside_fit_window_fraction": readiness.get(
+                    "outside_fit_window_fraction"
+                ),
+                "rejected_inside_fit_window_fraction": readiness.get(
+                    "rejected_inside_fit_window_fraction"
+                ),
+                "resolution_source": resolution_assumption.get("resolution_source"),
+                "assumed_resolution_R": resolution_assumption.get(
+                    "assumed_resolution_R"
+                ),
+                "archive_mask_policy": (
+                    item.get("archive_mask_policy") or {}
+                ).get("policy"),
+                "archive_masks_applied": (
+                    item.get("archive_mask_policy") or {}
+                ).get("applied"),
+                "archive_mask_count": (
+                    item.get("archive_mask_policy") or {}
+                ).get("recognized_mask_count"),
+                "teff": primary.get("teff"),
+                "feh": primary.get("feh"),
+                "logg": primary.get("logg"),
+                "rv_kms": primary.get("rv_kms"),
+                "chi2_red": primary.get("chi2_red"),
+                "quality_flags": ",".join(
+                    str(flag) for flag in (primary.get("quality_flags") or [])
+                ),
+                "quick_teff": quick.get("teff"),
+                "quick_feh": quick.get("feh"),
+                "quick_logg": quick.get("logg"),
+                "quick_rv_kms": quick.get("rv_kms"),
+                "quick_chi2_red": quick.get("chi2_red"),
+                "quick_seconds": item.get("quick_seconds"),
+                "refine_seconds": item.get("refine_seconds"),
+                "total_seconds": item.get("total_seconds"),
+            }
+        )
+    atomic_write_csv_rows(path, fieldnames, rows)
 
 
 def _load_checkpoint(path):

@@ -37,6 +37,33 @@ These spectra are meant for external validation of parameter recovery. The
 reference parameters in `manifest.json` are comparison labels, not hidden fit
 priors.
 
+For a failure diagnosis, the validation runner can keep the same
+reference-independent parameter bounds while changing only the fitted window
+set. For example, Arcturus/cool-giant checks can compare the default branch
+windows with a broader optical metal-forest diagnostic:
+
+```bash
+python scripts/gaia_benchmark_validation.py \
+  --run-fits \
+  --target Arcturus \
+  --window-set broad_metal_forest \
+  --line-plot-dir /tmp/spyctres_gbs_line_plots \
+  --output-json /tmp/spyctres_gbs_arcturus_metal.json \
+  --output-csv /tmp/spyctres_gbs_arcturus_metal.csv \
+  --fit-plot-dir /tmp/spyctres_gbs_arcturus_plots \
+  --force
+```
+
+Add `--line-plot-reference-model` to overlay a same-grid diagnostic model at
+the manifest Teff/logg/[Fe/H]. This is a visualization aid only: the reference
+parameters are not fit priors, and the plotting machinery is the generic
+`Spyctres.plot_model_line_windows()` helper.
+
+An optional `--error-floor-fraction` can be used for diagnostic sensitivity
+checks when formal errors are much smaller than PHOENIX/model/continuum
+systematics. Non-zero error floors should be reported separately from ordinary
+no-floor recovery statistics; they are not a hidden default.
+
 Please cite the Gaia FGK Benchmark Stars Library papers listed in
 `references.json` if these files are used in validation outputs or derived
 figures.

@@ -27,13 +27,9 @@ python scripts/gaia_benchmark_validation.py \
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
-import os
-import re
 import sys
-import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,10 +52,18 @@ import matplotlib.pyplot as plt
 from Spyctres import (
     fit_stellar_spectrum,
     plot_fit_referee,
+    plot_model_line_windows,
     read_spectrum,
     suggest_fit_setup,
 )
 from Spyctres.config import resolve_phoenix_dir
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+    json_safe,
+    safe_filename,
+)
+from Spyctres.fitting import reconstruct_phoenix_legendre_models_for_segments
 from Spyctres.phoenix import PhoenixLibrary
 
 
@@ -87,6 +91,96 @@ RECOVERY_THRESHOLDS = {
         "review_abs_delta": 0.6,
     },
 }
+
+BENCHMARK_WINDOW_SETS = {
+    "default": {
+        "label": "default diagnostic branch windows",
+        "regions": None,
+        "diagnostic_only": False,
+        "description": (
+            "Use the reviewed fit setup's recommended Gaia benchmark windows. "
+            "For the bundled HARPS subset this is normally H-beta, Mg I b, "
+            "Na I D, and H-alpha."
+        ),
+    },
+    "hydrogen_only": {
+        "label": "hydrogen-only diagnostic windows",
+        "regions": ((4830.0, 4898.0), (6530.0, 6600.0)),
+        "diagnostic_only": True,
+        "description": (
+            "Fit only H-beta and H-alpha to test whether Balmer features are "
+            "driving a benchmark recovery failure."
+        ),
+    },
+    "metal_only": {
+        "label": "metal-line diagnostic windows",
+        "regions": ((5150.0, 5208.0), (5870.0, 5906.0)),
+        "diagnostic_only": True,
+        "description": (
+            "Fit Mg I b and Na I D to test cool-star/metal-line sensitivity. "
+            "Na I D can include interstellar absorption, so this is diagnostic."
+        ),
+    },
+    "no_hbeta": {
+        "label": "default windows excluding H-beta",
+        "regions": ((5150.0, 5208.0), (5870.0, 5906.0), (6530.0, 6600.0)),
+        "diagnostic_only": True,
+        "description": (
+            "Fit Mg I b, Na I D, and H-alpha to test whether H-beta/DIB "
+            "or Balmer-wing mismatch is dominating."
+        ),
+    },
+    "broad_metal_forest": {
+        "label": "broad cool-giant optical metal-forest diagnostic",
+        "regions": ((5150.0, 5450.0), (6000.0, 6500.0)),
+        "diagnostic_only": True,
+        "description": (
+            "Fit broader optical metal-line forests inside the 480-680 nm "
+            "GBSv3 HARPS coverage. This is useful for K-giant diagnostics, "
+            "but is more continuum/model-systematics sensitive than the "
+            "default branch windows."
+        ),
+    },
+}
+
+GAIA_BENCHMARK_LINE_PLOT_WINDOWS = (
+    {
+        "id": "h_beta",
+        "label": "H-beta",
+        "limits_A": (4830.0, 4898.0),
+        "markers_A": (4861.33,),
+    },
+    {
+        "id": "mg_b_triplet",
+        "label": "Mg I b triplet",
+        "limits_A": (5150.0, 5208.0),
+        "markers_A": (5167.32, 5172.68, 5183.60),
+    },
+    {
+        "id": "na_d",
+        "label": "Na I D",
+        "limits_A": (5870.0, 5906.0),
+        "markers_A": (5889.95, 5895.92),
+    },
+    {
+        "id": "ca_i_6162",
+        "label": "Ca I 6162",
+        "limits_A": (6138.0, 6186.0),
+        "markers_A": (6162.17,),
+    },
+    {
+        "id": "ca_i_6439",
+        "label": "Ca I 6439",
+        "limits_A": (6418.0, 6462.0),
+        "markers_A": (6439.08,),
+    },
+    {
+        "id": "h_alpha",
+        "label": "H-alpha",
+        "limits_A": (6530.0, 6600.0),
+        "markers_A": (6562.80,),
+    },
+)
 
 
 def build_parser():
@@ -139,6 +233,25 @@ def build_parser():
         help="Optional directory for per-target referee fit plots when --run-fits is set.",
     )
     parser.add_argument(
+        "--line-plot-dir",
+        default=None,
+        help=(
+            "Optional directory for per-target benchmark line-window plots when "
+            "--run-fits is set. These plots zoom in on fixed diagnostic windows "
+            "such as H-beta, Mg I b, Na I D, Ca I, and H-alpha."
+        ),
+    )
+    parser.add_argument(
+        "--line-plot-reference-model",
+        action="store_true",
+        help=(
+            "When --line-plot-dir is used, also overlay a diagnostic PHOENIX "
+            "model evaluated at the manifest reference Teff/logg/[Fe/H]. The "
+            "reference values are not used as fit priors; the overlay uses the "
+            "best-fit RV because the manifest does not provide an independent RV."
+        ),
+    )
+    parser.add_argument(
         "--run-fits",
         action="store_true",
         help="Run PHOENIX fits. Without this flag, only ingestion/setup/audit metadata are written.",
@@ -182,6 +295,27 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--window-set",
+        choices=tuple(BENCHMARK_WINDOW_SETS),
+        default="default",
+        help=(
+            "Benchmark validation window set. The default uses the reviewed "
+            "diagnostic-branch setup. Other choices are diagnostic-only "
+            "sensitivity checks for failures such as cool-giant recovery."
+        ),
+    )
+    parser.add_argument(
+        "--error-floor-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional fractional error floor added in quadrature during fits. "
+            "Keep 0 for ordinary validation; non-zero values are diagnostic "
+            "checks for model/continuum/line-list systematics dominating tiny "
+            "formal errors."
+        ),
+    )
+    parser.add_argument(
         "--wave-medium",
         choices=("reader", "unknown", "air", "vacuum"),
         default="reader",
@@ -205,50 +339,9 @@ def build_parser():
     return parser
 
 
-def _json_safe(value):
-    if isinstance(value, np.generic):
-        return _json_safe(value.item())
-    if isinstance(value, np.ndarray):
-        return [_json_safe(item) for item in value.tolist()]
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    return value
-
-
-def _atomic_write_json(path, payload):
-    path = Path(path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(path.name),
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(_json_safe(payload), handle, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
-
-
 def _atomic_write_csv(path, payload):
     if path is None:
         return
-    path = Path(path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         "target_id",
         "name",
@@ -271,32 +364,16 @@ def _atomic_write_csv(path, payload):
         "overall_assessment",
         "chi2_red",
         "quality_flags",
+        "fit_quality_assessment",
+        "window_set",
+        "error_floor_fraction",
         "fit_window_A",
         "n_pixels",
         "n_used",
         "warnings",
     ]
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".{0}.".format(path.name),
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns)
-            writer.writeheader()
-            for record in payload.get("results", []):
-                row = _csv_row(record)
-                writer.writerow({key: row.get(key) for key in columns})
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
+    rows = [_csv_row(record) for record in payload.get("results", [])]
+    atomic_write_csv_rows(path, columns, rows)
 
 
 def _load_existing(path):
@@ -409,6 +486,21 @@ def _is_stress_role(role):
 
 def _benchmark_fit_kwargs(setup_payload, args, row=None):
     fit_kwargs = dict(setup_payload.get("fit_kwargs") or {})
+    window_set = str(getattr(args, "window_set", "default")).strip().lower()
+    if window_set not in BENCHMARK_WINDOW_SETS:
+        raise ValueError(
+            "window_set must be one of {0}.".format(
+                ", ".join(sorted(BENCHMARK_WINDOW_SETS))
+            )
+        )
+    window_definition = BENCHMARK_WINDOW_SETS[window_set]
+    if window_definition["regions"] is not None:
+        fit_kwargs["regions"] = [
+            (float(lo), float(hi)) for lo, hi in window_definition["regions"]
+        ]
+    error_floor_fraction = float(getattr(args, "error_floor_fraction", 0.0))
+    if not math.isfinite(error_floor_fraction) or error_floor_fraction < 0.0:
+        raise ValueError("error_floor_fraction must be finite and >= 0.")
     if args.bounds_policy == "benchmark_fgk":
         role = None if row is None else row.get("validation_role")
         if _is_stress_role(role):
@@ -446,20 +538,35 @@ def _benchmark_fit_kwargs(setup_payload, args, row=None):
             "forward_model": "native_interp",
             "physical_init": "coarse",
             "rv_init": "grid",
+            "error_floor_fraction": error_floor_fraction,
         }
     )
     return fit_kwargs
 
 
 def _fit_policy_record(args, fit_kwargs):
+    window_set = str(getattr(args, "window_set", "default")).strip().lower()
+    window_definition = dict(BENCHMARK_WINDOW_SETS.get(window_set, {}))
+    if window_definition.get("regions") is not None:
+        window_definition["regions"] = [
+            [float(lo), float(hi)] for lo, hi in window_definition["regions"]
+        ]
     return {
         "run_fits": bool(args.run_fits),
         "fit_mode": args.fit_mode,
         "bounds_policy": args.bounds_policy,
+        "window_set": window_set,
+        "window_set_definition": window_definition,
+        "error_floor_fraction": float(getattr(args, "error_floor_fraction", 0.0)),
+        "error_floor_interpretation": (
+            "Non-zero error floors are diagnostic checks for systematics in "
+            "model, continuum, LSF, line lists, or formal uncertainties. They "
+            "must be reported separately from ordinary no-floor recovery."
+        ),
         "reference_parameters_used_as_priors": False,
         "reference_parameters_used_for_postfit_deltas_only": True,
         "wave_medium_override": args.wave_medium,
-        "fit_kwargs": _json_safe(fit_kwargs),
+        "fit_kwargs": json_safe(fit_kwargs),
     }
 
 
@@ -501,12 +608,31 @@ def _overall_assessment(record):
     return "within_first_pass_tolerance"
 
 
+def _fit_quality_assessment(record):
+    """Classify formal fit quality separately from benchmark parameter recovery."""
+    if record.get("status") != "ok":
+        return record.get("status", "not_fit")
+    fit = record.get("fit") or {}
+    chi2_red = _float_or_none(fit.get("chi2_red"))
+    if chi2_red is None:
+        return "missing_formal_fit_quality"
+    flags = {str(flag) for flag in record.get("quality_flags", [])}
+    if chi2_red <= 5.0 and not flags.intersection(
+        {"high_chi2", "structured_residuals", "residual_slope"}
+    ):
+        return "nominal_formal_fit_quality"
+    if chi2_red <= 100.0:
+        return "flagged_formal_fit_quality"
+    return "systematics_dominated_formal_chi2"
+
+
 def _csv_row(record):
     deltas, assessments = _fit_deltas(record)
     reference = record.get("reference") or {}
     fit = record.get("fit") or {}
     segment = record.get("segment") or {}
     setup = record.get("setup") or {}
+    fit_policy = record.get("fit_policy") or {}
     fit_kwargs = ((record.get("fit_policy") or {}).get("fit_kwargs") or {})
     regions = fit_kwargs.get("regions") or ((setup.get("fit_kwargs") or {}).get("regions") or [])
     width = 0.0
@@ -535,6 +661,9 @@ def _csv_row(record):
         "overall_assessment": _overall_assessment(record),
         "chi2_red": fit.get("chi2_red"),
         "quality_flags": ";".join(str(item) for item in record.get("quality_flags", [])),
+        "fit_quality_assessment": _fit_quality_assessment(record),
+        "window_set": fit_policy.get("window_set"),
+        "error_floor_fraction": fit_policy.get("error_floor_fraction"),
         "fit_window_A": width,
         "n_pixels": segment.get("n_pixels"),
         "n_used": segment.get("n_used"),
@@ -552,6 +681,7 @@ def summarize_payload(records):
         and record.get("status") == "ok"
     ]
     ordinary_assessments = Counter(_overall_assessment(record) for record in ordinary)
+    ordinary_fit_quality = Counter(_fit_quality_assessment(record) for record in ordinary)
     return {
         "n_records": int(len(records)),
         "by_status": dict(sorted(statuses.items())),
@@ -559,19 +689,15 @@ def summarize_payload(records):
         "ordinary_roles": sorted(ORDINARY_ROLES),
         "ordinary_recovery_n": int(len(ordinary)),
         "ordinary_recovery_assessments": dict(sorted(ordinary_assessments.items())),
+        "ordinary_fit_quality_assessments": dict(sorted(ordinary_fit_quality.items())),
         "thresholds": RECOVERY_THRESHOLDS,
         "notes": [
             "Reference parameters are used only for post-fit deltas.",
             "Stress/diagnostic targets are reported separately from ordinary recovery statistics.",
+            "Formal fit quality is reported separately from parameter recovery because high-S/N benchmark spectra can be dominated by model/systematic residuals.",
             "Local covariance errors, when present in fit outputs, do not include external systematic uncertainty.",
         ],
     }
-
-
-def _safe_name(value, fallback="target"):
-    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
-    text = text.strip("._")
-    return text or fallback
 
 
 def _write_summary_plot(path, payload):
@@ -694,6 +820,188 @@ def _write_summary_plot(path, payload):
     plt.close(fig)
 
 
+def _variant_label_for_path(args):
+    pieces = [safe_filename(getattr(args, "window_set", "default"), "default")]
+    error_floor = float(getattr(args, "error_floor_fraction", 0.0) or 0.0)
+    if error_floor > 0.0:
+        pieces.append("efloor_{0:g}".format(error_floor).replace(".", "p"))
+    return "_".join(pieces)
+
+
+def _reference_model_overlay(segment, row, result_payload, fit_kwargs, phoenix_lib):
+    reference = _reference(row)
+    if any(reference.get(key) is None for key in ("teff", "logg", "feh")):
+        return {
+            "status": "skipped",
+            "reason": "missing_reference_parameters",
+            "summary": {
+                "status": "skipped",
+                "reason": "missing_reference_parameters",
+            },
+        }
+
+    rv_kms = _float_or_none(result_payload.get("rv_kms"))
+    rv_bary_kms = _float_or_none(result_payload.get("rv_bary_kms"))
+    if rv_kms is None:
+        rv_kms = 0.0
+    if rv_bary_kms is None:
+        rv_bary_kms = 0.0
+
+    diagnostic_fit_result = dict(result_payload)
+    diagnostic_fit_result.update(
+        {
+            "teff": float(reference["teff"]),
+            "feh": float(reference["feh"]),
+            "logg": float(reference["logg"]),
+            "rv_kms": float(rv_kms),
+            "rv_bary_kms": float(rv_bary_kms),
+            "forward_model": fit_kwargs.get(
+                "forward_model", result_payload.get("forward_model", "native_interp")
+            ),
+            "model_margin_A": float(
+                fit_kwargs.get(
+                    "model_margin_A",
+                    result_payload.get("model_margin_A", 200.0),
+                )
+            ),
+        }
+    )
+
+    models, coeffs, used_masks, excluded_masks = (
+        reconstruct_phoenix_legendre_models_for_segments(
+            segment,
+            phoenix_lib,
+            diagnostic_fit_result,
+            regions=fit_kwargs.get("regions"),
+            exclude_regions=fit_kwargs.get("exclude_regions"),
+            exclude_mask=fit_kwargs.get("exclude_mask"),
+            exclude_masks=fit_kwargs.get("exclude_masks"),
+            mask_threshold=fit_kwargs.get("mask_threshold", 0.5),
+            error_floor_fraction=fit_kwargs.get("error_floor_fraction", 0.0),
+            mdeg=fit_kwargs.get("mdeg", 2),
+            rv_bary_kms=rv_bary_kms,
+            R=fit_kwargs.get("R"),
+            fwhm_kms=fit_kwargs.get("fwhm_kms"),
+            forward_model=fit_kwargs.get("forward_model", "native_interp"),
+            model_margin_A=float(fit_kwargs.get("model_margin_A", 200.0)),
+        )
+    )
+
+    summary = {
+        "status": "ok",
+        "params": {
+            "teff": float(reference["teff"]),
+            "logg": float(reference["logg"]),
+            "feh": float(reference["feh"]),
+            "rv_kms": float(rv_kms),
+            "rv_bary_kms": float(rv_bary_kms),
+        },
+        "rv_source": "best_fit_rv",
+        "reference_parameters_used_as_priors": False,
+        "interpretation": (
+            "Diagnostic overlay only: PHOENIX is evaluated at manifest "
+            "Teff/logg/[Fe/H] and continuum-adjusted on the same fit pixels. "
+            "The fitted RV is reused because the manifest has no independent RV."
+        ),
+    }
+    return {
+        "status": "ok",
+        "models": tuple(np.asarray(model, dtype=float) for model in models),
+        "used_masks": tuple(np.asarray(mask, dtype=bool) for mask in used_masks),
+        "excluded_masks": tuple(np.asarray(mask, dtype=bool) for mask in excluded_masks),
+        "coeffs": tuple(np.asarray(coeff, dtype=float) for coeff in coeffs),
+        "summary": summary,
+    }
+
+
+def _write_line_window_plot(path, segment, result, row, args, reference_overlay=None):
+    path = Path(path).expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    windows = GAIA_BENCHMARK_LINE_PLOT_WINDOWS
+
+    models = tuple(getattr(result, "models", ()) or ())
+    used_masks = tuple(getattr(result, "used_masks", ()) or ())
+    if not models:
+        raise ValueError(
+            "Line-window plots require reconstructed model arrays; run the fit "
+            "with reconstruct=True."
+        )
+
+    wave = np.asarray(segment.wave, dtype=float)
+    flux = np.asarray(segment.flux, dtype=float)
+    model = np.asarray(models[0], dtype=float)
+    if used_masks:
+        used = np.asarray(used_masks[0], dtype=bool)
+    else:
+        used = np.asarray(segment.mask, dtype=bool)
+
+    reference_models = ()
+    reference_used_masks = ()
+    reference_summary = None
+    if reference_overlay and reference_overlay.get("status") == "ok":
+        reference_models = tuple(reference_overlay.get("models") or ())
+        reference_used_masks = tuple(reference_overlay.get("used_masks") or ())
+        reference_summary = reference_overlay.get("summary")
+    reference_model = (
+        np.asarray(reference_models[0], dtype=float) if reference_models else None
+    )
+    reference_used = (
+        np.asarray(reference_used_masks[0], dtype=bool)
+        if reference_used_masks
+        else used
+    )
+
+    title = "{0}: {1}".format(
+        _target_id(row),
+        row.get("name") or Path(str(row.get("file", "spectrum"))).name,
+    )
+    footer = (
+        "Solid model traces are plotted only on pixels used by the fit; dashed "
+        "traces mark masked pixels inside a fitted line span. "
+        "Reference overlays are diagnostic only and are not fit priors."
+    )
+    if reference_summary and reference_summary.get("rv_source"):
+        footer += " Reference overlay RV source: {0}.".format(
+            reference_summary["rv_source"]
+        )
+
+    plot_models = [
+        {
+            "flux": model,
+            "label": "best-fit PHOENIX",
+            "color": "tab:red",
+            "masked_label": "best-fit PHOENIX (masked span)",
+        }
+    ]
+    model_used_masks = [used]
+    if reference_model is not None:
+        plot_models.append(
+            {
+                "flux": reference_model,
+                "label": "reference Teff/logg/[Fe/H]",
+                "color": "tab:blue",
+                "masked_label": "reference model (masked span)",
+            }
+        )
+        model_used_masks.append(reference_used)
+
+    fig, _axes = plot_model_line_windows(
+        wave,
+        flux,
+        windows,
+        models=plot_models,
+        used_mask=used,
+        model_used_masks=model_used_masks,
+        savepath=path,
+        title="Gaia benchmark line-window diagnostics\n{0}".format(title),
+        footer=footer,
+        ncols=2 if len(windows) > 1 else 1,
+    )
+    plt.close(fig)
+    return str(path)
+
+
 def _progress_printer(target_id, verbose):
     def callback(event):
         phase = getattr(event, "phase", "")
@@ -705,24 +1013,70 @@ def _progress_printer(target_id, verbose):
 
 def _fit_record(segment, row, setup_payload, fit_kwargs, args, phoenix_lib):
     target_id = _target_id(row)
+    line_plot_dir = getattr(args, "line_plot_dir", None)
+    fit_plot_dir = getattr(args, "fit_plot_dir", None)
+    need_reconstructed_models = bool(fit_plot_dir or line_plot_dir)
     result = fit_stellar_spectrum(
         segment,
         model="phoenix",
         phoenix_lib=phoenix_lib,
         auto_defaults=False,
-        reconstruct=bool(args.fit_plot_dir),
+        reconstruct=need_reconstructed_models,
         warn_unknown=False,
         progress_callback=_progress_printer(target_id, args.verbose),
         **fit_kwargs,
     )
     plot_paths = {}
-    if args.fit_plot_dir:
-        plot_dir = Path(args.fit_plot_dir).expanduser().resolve()
+    if fit_plot_dir:
+        plot_dir = Path(fit_plot_dir).expanduser().resolve()
         plot_dir.mkdir(parents=True, exist_ok=True)
-        plot_path = plot_dir / "{0}_fit.png".format(_safe_name(target_id))
+        plot_path = plot_dir / "{0}_fit.png".format(safe_filename(target_id))
         fig, _axes = plot_fit_referee(result, segment=segment, savepath=str(plot_path))
         plt.close(fig)
         plot_paths["referee_fit"] = str(plot_path)
+
+    reference_model_diagnostic = None
+    result_preview = result.to_dict(
+        include_arrays=False,
+        include_local_paths=True,
+        plot_paths=None,
+    )
+    if line_plot_dir:
+        line_dir = Path(line_plot_dir).expanduser().resolve()
+        line_dir.mkdir(parents=True, exist_ok=True)
+        line_path = line_dir / "{0}_{1}_line_windows.png".format(
+            safe_filename(target_id),
+            _variant_label_for_path(args),
+        )
+        reference_overlay = None
+        if getattr(args, "line_plot_reference_model", False):
+            try:
+                reference_overlay = _reference_model_overlay(
+                    segment,
+                    row,
+                    result_preview,
+                    fit_kwargs,
+                    phoenix_lib,
+                )
+            except Exception as exc:
+                reference_overlay = {
+                    "status": "error",
+                    "summary": {
+                        "status": "error",
+                        "error": "{0}: {1}".format(type(exc).__name__, exc),
+                    },
+                }
+            reference_model_diagnostic = reference_overlay.get("summary")
+        line_plot_path = _write_line_window_plot(
+            line_path,
+            segment,
+            result,
+            row,
+            args,
+            reference_overlay=reference_overlay,
+        )
+        plot_paths["line_windows"] = str(line_plot_path)
+
     result_payload = result.to_dict(
         include_arrays=False,
         include_local_paths=True,
@@ -740,6 +1094,7 @@ def _fit_record(segment, row, setup_payload, fit_kwargs, args, phoenix_lib):
         "fit_result": result_payload,
         "quality_flags": list(result_payload.get("quality_flags") or []),
         "generated_files": result_payload.get("generated_files"),
+        "reference_model_diagnostic": reference_model_diagnostic,
     }
 
 
@@ -790,6 +1145,13 @@ def build_payload(manifest_path, manifest_payload, records, args):
             "run_fits": bool(args.run_fits),
             "fit_mode": args.fit_mode,
             "bounds_policy": args.bounds_policy,
+            "window_set": args.window_set,
+            "error_floor_fraction": float(args.error_floor_fraction),
+            "line_plot_requested": bool(args.line_plot_dir),
+            "line_plot_reference_model": bool(args.line_plot_reference_model),
+            "line_plot_reference_rv_source": "best_fit_rv"
+            if args.line_plot_reference_model
+            else None,
             "wave_medium": args.wave_medium,
             "reference_parameters_used_as_priors": False,
             "reference_parameters_used_for_postfit_deltas_only": True,
@@ -803,6 +1165,10 @@ def build_payload(manifest_path, manifest_payload, records, args):
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (args.line_plot_dir or args.line_plot_reference_model) and not args.run_fits:
+        parser.error("--line-plot-dir and --line-plot-reference-model require --run-fits.")
+    if args.line_plot_reference_model and not args.line_plot_dir:
+        parser.error("--line-plot-reference-model requires --line-plot-dir.")
     manifest_path, manifest_payload, rows = load_manifest(args.manifest)
     rows = select_manifest_rows(rows, selected=args.target, max_targets=args.max_targets)
     existing = _load_existing(args.output_json) if args.resume and not args.force else {}
@@ -852,6 +1218,7 @@ def main(argv=None):
                 "deltas": _fit_deltas(record)[0],
                 "assessments": _fit_deltas(record)[1],
                 "overall_assessment": _overall_assessment(record),
+                "fit_quality_assessment": _fit_quality_assessment(record),
             }
         except Exception as exc:
             record = {
@@ -865,7 +1232,7 @@ def main(argv=None):
                 "status": "error",
                 "error": "{0}: {1}".format(type(exc).__name__, exc),
             }
-        records_by_id[target_id] = _json_safe(record)
+        records_by_id[target_id] = json_safe(record)
         completed.append(target_id)
         ordered_records = [records_by_id[_target_id(item)] for item in rows if _target_id(item) in records_by_id]
         extras = [
@@ -874,7 +1241,7 @@ def main(argv=None):
             if key not in {_target_id(item) for item in rows}
         ]
         payload = build_payload(manifest_path, manifest_payload, ordered_records + extras, args)
-        _atomic_write_json(args.output_json, payload)
+        atomic_write_json(args.output_json, payload)
         _atomic_write_csv(args.output_csv, payload)
         print("  Wrote checkpoint: {0}".format(args.output_json), flush=True)
 
@@ -885,7 +1252,7 @@ def main(argv=None):
         if key not in {_target_id(item) for item in rows}
     ]
     payload = build_payload(manifest_path, manifest_payload, ordered_records + extras, args)
-    _atomic_write_json(args.output_json, payload)
+    atomic_write_json(args.output_json, payload)
     _atomic_write_csv(args.output_csv, payload)
     _write_summary_plot(args.output_summary_plot, payload)
     print(

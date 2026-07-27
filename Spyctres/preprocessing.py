@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ._serialization import json_safe as _json_safe
+
 C_KMS = 299792.458
 
 
@@ -1658,25 +1660,7 @@ def apply_fit_mask(
 
 
 def _json_safe_scalar(value):
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
-
-
-def _json_safe(value):
-    if isinstance(value, np.ndarray):
-        return [_json_safe(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return _json_safe(value.item())
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    return _json_safe_scalar(value)
+    return _json_safe(value)
 
 
 def _audit_segments(spectrum):

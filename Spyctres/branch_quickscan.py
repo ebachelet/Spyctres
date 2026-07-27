@@ -12,20 +12,20 @@ The default is intentionally a dry run.  PHOENIX fits happen only when
 
 from __future__ import annotations
 
-import csv
-import json
-import os
 from pathlib import Path
-import tempfile
 
 import numpy as np
 
+from ._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+    json_safe as _json_native,
+)
 from .defaults import suggest_phoenix_fit_defaults
 from .diagnostic_window_comparison import (
     _as_result_payload,
     _callable_name,
     _format_regions,
-    _json_native,
     _result_summary,
     _utc_now,
 )
@@ -300,29 +300,13 @@ def summarize_branch_fit_stability(records):
 
 def write_branch_quickscan_json(path, payload):
     """Write branch quickscan payload as atomic JSON."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _json_native(payload)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=path.name + ".",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
-        handle.write("\n")
-        temporary = handle.name
-    os.replace(temporary, path)
+    atomic_write_json(path, payload, sort_keys=True)
 
 
 def write_branch_quickscan_csv(path, payload):
     """Write a compact CSV summary of branch quickscan rows."""
     if path is None:
         return
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     rows = payload.get("fit_records") or [
         _planned_fit_record(branch, fit_status="planned_not_run")
         for branch in payload.get("planned_branches", ())
@@ -349,36 +333,35 @@ def write_branch_quickscan_csv(path, payload):
         "chi2_red",
         "quality_flags",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for row in rows:
-            branch = row.get("branch", row)
-            summary = row.get("result_summary") or {}
-            writer.writerow(
-                {
-                    "branch_index": branch.get("branch_index"),
-                    "branch_id": branch.get("id"),
-                    "label": branch.get("label"),
-                    "status": branch.get("status"),
-                    "score": branch.get("score"),
-                    "recommended": branch.get("recommended"),
-                    "ordinary_default": branch.get("ordinary_default"),
-                    "matched_window_count": branch.get("matched_window_count"),
-                    "total_overlap_A": branch.get("total_overlap_A"),
-                    "fit_window_ids": ";".join(branch.get("fit_window_ids", ())),
-                    "fit_regions_A": _format_regions(branch.get("fit_regions_A", ())),
-                    "risk_tags": ";".join(branch.get("risk_tags", ())),
-                    "fit_status": row.get("fit_status"),
-                    "success": summary.get("success"),
-                    "teff": summary.get("teff"),
-                    "logg": summary.get("logg"),
-                    "feh": summary.get("feh"),
-                    "rv_kms": summary.get("rv_kms"),
-                    "chi2_red": summary.get("chi2_red"),
-                    "quality_flags": ";".join(row.get("quality_flags", ())),
-                }
-            )
+    csv_rows = []
+    for row in rows:
+        branch = row.get("branch", row)
+        summary = row.get("result_summary") or {}
+        csv_rows.append(
+            {
+                "branch_index": branch.get("branch_index"),
+                "branch_id": branch.get("id"),
+                "label": branch.get("label"),
+                "status": branch.get("status"),
+                "score": branch.get("score"),
+                "recommended": branch.get("recommended"),
+                "ordinary_default": branch.get("ordinary_default"),
+                "matched_window_count": branch.get("matched_window_count"),
+                "total_overlap_A": branch.get("total_overlap_A"),
+                "fit_window_ids": ";".join(branch.get("fit_window_ids", ())),
+                "fit_regions_A": _format_regions(branch.get("fit_regions_A", ())),
+                "risk_tags": ";".join(branch.get("risk_tags", ())),
+                "fit_status": row.get("fit_status"),
+                "success": summary.get("success"),
+                "teff": summary.get("teff"),
+                "logg": summary.get("logg"),
+                "feh": summary.get("feh"),
+                "rv_kms": summary.get("rv_kms"),
+                "chi2_red": summary.get("chi2_red"),
+                "quality_flags": ";".join(row.get("quality_flags", ())),
+            }
+        )
+    atomic_write_csv_rows(path, columns, csv_rows)
 
 
 def plot_branch_quickscan(payload, savepath=None):
