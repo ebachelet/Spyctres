@@ -1098,6 +1098,7 @@ class PhoenixFitResult(Mapping):
     provenance: dict = field(default_factory=dict)
     diagnostics: PhoenixFitDiagnostics | dict = field(default_factory=dict)
     quality_flags: tuple = field(default_factory=tuple)
+    input_spectrum: object = None
 
     def __post_init__(self):
         diagnostics = self.diagnostics or self.summary.get("diagnostics", {})

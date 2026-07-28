@@ -1538,8 +1538,10 @@ def plot_fit_referee(
         Fit result containing reconstructed ``models``, ``used_masks``, and
         ``excluded_masks``. The function does not mutate this object.
     segment : SpectrumSegment, SpectrumCollection, or sequence, optional
-        Observed spectrum used for the fit. Required because the result object
-        intentionally avoids storing observed flux arrays by default.
+        Observed spectrum used for the fit. Optional for results produced by
+        the public ``fit_stellar_spectrum(spec, ...)`` path because those keep
+        a non-serialized in-memory reference to the fitted spectrum. Required
+        for plain dictionaries, reloaded JSON, or older result objects.
     rest_frame : bool, optional
         Reserved for future explicit rest-frame display. The current
         implementation leaves wavelengths in the supplied segment frame and
@@ -1599,6 +1601,8 @@ def plot_fit_referee(
     if max_points_per_segment < 1:
         raise ValueError("max_points_per_segment must be >= 1.")
 
+    if segment is None:
+        segment = getattr(result, "input_spectrum", None)
     segments = _coerce_segment_sequence(segment)
     models = tuple(getattr(result, "models", ()))
     used_masks = tuple(getattr(result, "used_masks", ()))

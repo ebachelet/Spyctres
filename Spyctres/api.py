@@ -288,6 +288,7 @@ def fit_phoenix_spectrum(
         used_masks=tuple(used_masks),
         excluded_masks=tuple(excluded_masks),
         provenance=provenance,
+        input_spectrum=canonical,
     )
 
 

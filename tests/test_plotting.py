@@ -47,6 +47,31 @@ def _fit_result_for_segments(segments):
     )
 
 
+def test_plot_fit_referee_uses_result_input_spectrum_when_available():
+    wave = np.linspace(5000.0, 5010.0, 25)
+    segment = SpectrumSegment(
+        wave,
+        1.0 - 0.1 * np.exp(-0.5 * ((wave - 5005.0) / 1.0) ** 2),
+        err=np.full(wave.size, 0.02),
+        name="synthetic",
+    )
+    result = _fit_result_for_segments([segment])
+    result = PhoenixFitResult(
+        summary=result.summary,
+        models=result.models,
+        continuum_coefficients=result.continuum_coefficients,
+        used_masks=result.used_masks,
+        excluded_masks=result.excluded_masks,
+        input_spectrum=segment,
+    )
+
+    fig, axes = plot_fit_referee(result)
+
+    assert axes.shape == (1, 2)
+    assert "synthetic" in axes[0, 0].get_title(loc="left")
+    fig.clf()
+
+
 def test_plot_fit_referee_saves_without_mutating_result(tmp_path):
     wave = np.linspace(5000.0, 5010.0, 25)
     segment = SpectrumSegment(

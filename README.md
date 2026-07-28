@@ -115,8 +115,8 @@ Use this checklist for a first local run from a source checkout.
 
    ```bash
    spyctres doctor \
-     --spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --reader xshooter_merge1d
+     --spectrum examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz \
+     --reader gbs_v3_ascii
    ```
 
    If PHOENIX is not configured yet, the checker reports the missing path as a
