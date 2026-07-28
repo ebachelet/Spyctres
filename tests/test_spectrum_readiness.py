@@ -203,6 +203,37 @@ def test_audit_flags_obvious_artifacts_inside_fit_window_only():
     assert audit["segments"][0]["artifact_metrics"]["flat_zero_block_count"] == 1
 
 
+def test_audit_does_not_treat_high_resolution_absorption_lines_as_spikes():
+    wave = np.linspace(4800.0, 5200.0, 4000)
+    flux = np.ones_like(wave)
+    for center, depth, sigma in (
+        (4861.3, 0.45, 0.45),
+        (5167.3, 0.25, 0.12),
+        (5172.7, 0.30, 0.12),
+        (5183.6, 0.28, 0.12),
+    ):
+        flux -= depth * np.exp(-0.5 * ((wave - center) / sigma) ** 2)
+    segment = SpectrumSegment(
+        wave=wave,
+        flux=flux,
+        err=np.full(wave.size, 0.02),
+        wave_medium="air",
+        observer_frame="barycentric",
+        stellar_rest_status="corrected",
+        resolution=ResolutionDescriptor(quantity="R", value=42000.0),
+    )
+
+    audit = audit_spectrum_for_fit(
+        segment,
+        fit_windows=[(4830.0, 4898.0), (5150.0, 5208.0)],
+    )
+
+    flags = set(audit["interpretation_flags"])
+    assert "artifact_review_required" not in flags
+    metrics = audit["segments"][0]["artifact_metrics"]
+    assert metrics["extreme_spike_fraction"] == 0.0
+
+
 def test_audit_flags_lsf_undersampling_when_pixels_are_too_coarse():
     segment = SpectrumSegment(
         wave=[5000.0, 5010.0, 5020.0, 5030.0],

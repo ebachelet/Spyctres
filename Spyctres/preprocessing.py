@@ -2361,10 +2361,14 @@ def _segment_readiness(
         mad = float(np.nanmedian(np.abs(robust_pool - median)))
         robust_sigma = 1.4826 * mad
         if np.isfinite(robust_sigma) and robust_sigma > 0:
+            # Treat only upward outliers as generic "spikes".  Downward
+            # excursions in normalized high-resolution stellar spectra are
+            # often real absorption lines; nonfinite, negative, and near-zero
+            # bad pixels are handled by separate artifact terms below.
             spike = (
                 fit_candidate
                 & np.isfinite(flux)
-                & (np.abs(flux - median) > float(spike_sigma) * robust_sigma)
+                & ((flux - median) > float(spike_sigma) * robust_sigma)
             )
 
     finite_sorted_wave = np.sort(wave[finite_wave])
