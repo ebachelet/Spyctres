@@ -329,10 +329,12 @@ def test_publication_baseline_report_writer_saves_versioned_envelope(tmp_path):
             str(tmp_path / "publication_fit.json"),
             "--output-report-json",
             str(tmp_path / "publication_report.json"),
+            "--record-input-checksum",
             "--output-plot",
             str(tmp_path / "publication_fit.png"),
         ]
     )
+    assert args.record_input_checksum is True
     result = PhoenixFitResult(
         summary={
             "success": True,

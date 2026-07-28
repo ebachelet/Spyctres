@@ -49,7 +49,11 @@ import numpy as np
 from Spyctres import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
-from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
+from Spyctres import (
+    fit_stellar_spectrum,
+    input_checksum_provenance,
+    prepare_phoenix_fit_kwargs,
+)
 from Spyctres._spectrum_helpers import spectrum_segments
 from Spyctres._workflow_helpers import (
     archive_mask_count as _shared_archive_mask_count,
@@ -254,6 +258,16 @@ def build_parser():
             "Optional versioned fit-report JSON envelope for reviewer/web "
             "hand-off. The existing --output-json remains the compact direct "
             "result payload."
+        ),
+    )
+    output_group.add_argument(
+        "--record-input-checksum",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Opt in to recording a SHA256 checksum of the original input file "
+            "bytes in saved result/report provenance. Disabled by default for "
+            "speed and privacy."
         ),
     )
     output_group.add_argument("--output-plot", default=None)
@@ -1038,6 +1052,10 @@ def main(argv=None):
     }
     result.provenance["spectrum_readiness"] = readiness
     result.provenance["archive_mask_policy"] = dict(result.summary["archive_mask_policy"])
+    if args.record_input_checksum:
+        checksum_policy, input_checksum = input_checksum_provenance(args.spectrum)
+        result.provenance["input_checksum_policy"] = checksum_policy
+        result.provenance["input_checksum"] = input_checksum
     if args.wave_medium != "keep":
         result.summary["wave_medium_override"] = {
             "wave_medium": args.wave_medium,

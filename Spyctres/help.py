@@ -149,6 +149,44 @@ PUBLIC_FUNCTION_HELP = {
             "setup.summary(), then call fit_stellar_spectrum(spec, setup=setup)."
         ),
     },
+    "input_checksum_provenance": {
+        "name": "input_checksum_provenance",
+        "purpose": (
+            "Compute the same opt-in input-file checksum provenance used by "
+            "fit_stellar_spectrum(record_input_checksum=True)."
+        ),
+        "minimal_call": 'input_checksum_provenance("spectrum.fits")',
+        "required": [
+            {
+                "name": "spectrum",
+                "description": (
+                    "Usually a path to the original input spectrum. Already "
+                    "loaded spectrum containers return a policy explaining "
+                    "that no file-byte checksum could be computed."
+                ),
+            },
+        ],
+        "optional": [
+            {
+                "name": "requested",
+                "default": "True",
+                "description": (
+                    "Set False to record an explicit not-requested policy "
+                    "without hashing the file."
+                ),
+            },
+            {
+                "name": "algorithm",
+                "default": "sha256",
+                "description": "Checksum algorithm. Only sha256 is currently supported.",
+            },
+        ],
+        "advice": (
+            "Most direct fits should use fit_stellar_spectrum(path, ..., "
+            "record_input_checksum=True). Use this helper when an example or "
+            "GUI pre-loads the file before fitting."
+        ),
+    },
     "suggest_fit_setup": {
         "name": "suggest_fit_setup",
         "purpose": "Inspect Spyctres' first-pass fitting assumptions without running PHOENIX.",
@@ -570,6 +608,7 @@ PUBLIC_FUNCTION_GROUPS = {
         "functions": (
             "plot_fit_referee",
             "compare_fits",
+            "input_checksum_provenance",
         ),
     },
     "advanced": {

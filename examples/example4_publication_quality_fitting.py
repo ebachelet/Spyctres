@@ -87,6 +87,15 @@ def build_parser():
         default="/tmp/spyctres_example4_publication.json",
     )
     parser.add_argument("--output-report-json", default=None)
+    parser.add_argument(
+        "--record-input-checksum",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "When --run-baseline-fit writes a result/report, record a SHA256 "
+            "checksum of the original input file bytes. Off by default."
+        ),
+    )
     parser.add_argument("--output-plot", default=None)
     return parser
 
@@ -104,6 +113,8 @@ def main(argv=None):
         delegated.append("--run-baseline-fit")
     if args.output_report_json:
         delegated.extend(["--output-report-json", str(args.output_report_json)])
+    if args.record_input_checksum:
+        delegated.append("--record-input-checksum")
     if args.output_plot:
         delegated.extend(["--output-plot", str(args.output_plot)])
     exit_code = publication_quality_xshooter_uvb.main(delegated)

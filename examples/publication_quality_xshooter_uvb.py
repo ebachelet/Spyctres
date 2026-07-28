@@ -77,6 +77,7 @@ if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
 from Spyctres import (
     build_diagnostic_window_combinations,
     fit_stellar_spectrum,
+    input_checksum_provenance,
     prepare_phoenix_fit_kwargs,
     publication_readiness_audit,
     select_diagnostic_windows,
@@ -260,6 +261,16 @@ def build_parser():
             "Optional versioned PhoenixFitResult report for the baseline fit. "
             "Requires --run-baseline-fit. The existing --output-json remains "
             "the full scaffold checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--record-input-checksum",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Opt in to recording a SHA256 checksum of the original spectrum "
+            "file bytes in baseline-fit provenance/report JSON. Disabled by "
+            "default for speed and privacy."
         ),
     )
     parser.add_argument(
@@ -4772,6 +4783,10 @@ def _run_baseline_fit(
     result.provenance["archive_mask_policy"] = dict(
         result.summary["archive_mask_policy"]
     )
+    if args.record_input_checksum:
+        checksum_policy, input_checksum = input_checksum_provenance(args.spectrum)
+        result.provenance["input_checksum_policy"] = checksum_policy
+        result.provenance["input_checksum"] = input_checksum
     resolution = _resolution_assumption(args)
     if resolution is not None:
         result.summary["resolution_override"] = resolution

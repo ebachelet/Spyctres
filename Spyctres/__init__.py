@@ -1,7 +1,12 @@
 from .matplotlib_setup import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 
-from .api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
+from .api import (
+    classify_spectrum,
+    fit_phoenix_spectrum,
+    fit_stellar_spectrum,
+    input_checksum_provenance,
+)
 from .help import (
     describe_public_function,
     describe_public_function_group,
@@ -127,6 +132,7 @@ from .io import (
 
 __all__ = [
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
+    "input_checksum_provenance",
     "describe_public_function", "describe_public_function_group",
     "format_public_api_guide", "format_public_function_help",
     "list_public_functions", "list_public_function_groups",

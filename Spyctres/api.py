@@ -114,6 +114,24 @@ def _input_checksum_provenance(spectrum, *, requested, algorithm="sha256"):
     }
 
 
+def input_checksum_provenance(spectrum, *, requested=True, algorithm="sha256"):
+    """Return opt-in input-file checksum provenance for reports/examples.
+
+    This helper uses the same policy and metadata schema as
+    ``fit_stellar_spectrum(..., record_input_checksum=True)``.  It is useful for
+    examples that intentionally read a spectrum first, inspect/audit it, and
+    then pass the already-loaded common container to the fitter.  In that case
+    the original path is no longer visible to ``fit_stellar_spectrum()``, so the
+    example can compute the checksum from the original file path and attach it
+    to the returned result provenance.
+    """
+    return _input_checksum_provenance(
+        spectrum,
+        requested=bool(requested),
+        algorithm=algorithm,
+    )
+
+
 def _setup_payload(setup):
     if setup is None:
         return None

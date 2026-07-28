@@ -4,7 +4,12 @@ import json
 import numpy as np
 import pytest
 
-from Spyctres.api import classify_spectrum, fit_phoenix_spectrum, fit_stellar_spectrum
+from Spyctres.api import (
+    classify_spectrum,
+    fit_phoenix_spectrum,
+    fit_stellar_spectrum,
+    input_checksum_provenance,
+)
 from Spyctres.defaults import suggest_fit_setup
 from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
@@ -893,6 +898,26 @@ def test_fit_stellar_spectrum_can_record_input_checksum(monkeypatch, tmp_path):
         "algorithm": "sha256",
         "sha256": hashlib.sha256(b"synthetic spectrum bytes\n").hexdigest(),
         "size_bytes": len(b"synthetic spectrum bytes\n"),
+    }
+
+
+def test_input_checksum_provenance_is_public_helper(tmp_path):
+    path = tmp_path / "input.fits"
+    path.write_bytes(b"standalone helper bytes\n")
+
+    policy, checksum = input_checksum_provenance(path)
+
+    assert policy == {
+        "requested": True,
+        "algorithm": "sha256",
+        "scope": "input_file_bytes",
+        "computed": True,
+        "reason": "requested",
+    }
+    assert checksum == {
+        "algorithm": "sha256",
+        "sha256": hashlib.sha256(b"standalone helper bytes\n").hexdigest(),
+        "size_bytes": len(b"standalone helper bytes\n"),
     }
 
 

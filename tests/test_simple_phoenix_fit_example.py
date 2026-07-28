@@ -219,11 +219,13 @@ def test_parser_accepts_optional_versioned_report_output(tmp_path):
             str(tmp_path / "compact.json"),
             "--output-report-json",
             str(tmp_path / "report.json"),
+            "--record-input-checksum",
         ]
     )
 
     assert args.output_json.endswith("compact.json")
     assert args.output_report_json.endswith("report.json")
+    assert args.record_input_checksum is True
 
 
 def test_line_diagnostics_skip_zero_flux_blocks():

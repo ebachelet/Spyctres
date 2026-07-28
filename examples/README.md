@@ -736,6 +736,9 @@ path relative to the JSON file and strips local cache/template paths by default.
 Add `--output-report-json` when you want a versioned result envelope for
 reviewer, web, or Django hand-off; this wraps the compact fit result with schema
 version, path policy, generated plots, and a provenance summary.
+Add `--record-input-checksum` when you want that report to include a SHA256
+checksum of the original input file bytes. This is opt-in because not every
+workflow should expose or spend time hashing local files.
 The default plot focuses on the wavelength span actually used in the fit and
 draws PHOENIX/model residuals only on fitted pixels; this avoids making masked
 or out-of-window data look as if they influenced the solution. The

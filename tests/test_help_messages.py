@@ -8,6 +8,7 @@ from Spyctres import (
     fit_phoenix_spectrum,
     fit_stellar_spectrum,
     format_public_function_help,
+    input_checksum_provenance,
     list_public_functions,
     list_public_function_groups,
     read_spectrum,
@@ -26,6 +27,7 @@ def test_public_function_help_is_structured_and_formatted():
     assert "audit_spectrum_for_fit" in topics
     assert "compare_fits" in topics
     assert "suggest_fit_setup" in topics
+    assert "input_checksum_provenance" in topics
     assert "readiness_flag_actions" in topics
     assert "read_spectrum" in topics
 
@@ -48,6 +50,10 @@ def test_public_function_help_is_structured_and_formatted():
 
     readiness_text = format_public_function_help("readiness_flag_actions")
     assert "Translate readiness-audit flags" in readiness_text
+
+    checksum_text = format_public_function_help("input_checksum_provenance")
+    assert "input-file checksum provenance" in checksum_text
+    assert input_checksum_provenance is not None
 
 
 def test_public_function_groups_expose_beginner_path_first():
