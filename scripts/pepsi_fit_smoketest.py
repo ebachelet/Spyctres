@@ -304,7 +304,7 @@ def run_legacy_pepsi_fit(args, parser):
         print("Reading PEPSI spectrum: {0}".format(path), flush=True)
         seg = read_spectrum(
             path,
-            instrument="pepsi",
+            reader="pepsi_nor",
             product_profile=args.product_profile,
         )
         meta = dict(seg.meta)
@@ -931,7 +931,7 @@ def main():
     print("Reading PEPSI spectrum...", flush=True)
     seg0 = read_spectrum(
         args.file,
-        instrument="pepsi",
+        reader="pepsi_nor",
         product_profile=args.product_profile,
     )
     seg0 = seg0.copy(mask=build_pepsi_normalized_mask(seg0))

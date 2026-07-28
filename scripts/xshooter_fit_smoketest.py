@@ -639,7 +639,7 @@ def main():
         parser.error("--wmax must be greater than --wmin.")
 
     print("Reading X-SHOOTER spectrum...", flush=True)
-    seg0 = read_spectrum(args.file, instrument="xshooter")
+    seg0 = read_spectrum(args.file, reader="xshooter_merge1d")
     arm = str(seg0.meta.get("arm", "")).strip().upper()
     if arm and arm != "UVB":
         parser.error(

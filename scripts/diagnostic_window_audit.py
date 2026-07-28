@@ -128,10 +128,11 @@ def build_parser():
         help="CSV manifest. Defaults to the bundled XSL Figure 1 manifest.",
     )
     parser.add_argument(
-        "--instrument",
-        default="xsl",
-        help="Default reader when a manifest row lacks an instrument column.",
+        "--reader",
+        default=None,
+        help="Default reader when a manifest row lacks a reader/instrument column.",
     )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--output-json",
         default="/tmp/spyctres_diagnostic_window_audit.json",
@@ -217,7 +218,7 @@ def load_manifest_rows(path, *, selected_ids=None):
 def audit_manifest(
     manifest,
     *,
-    instrument="xsl",
+    reader="xsl_dr3",
     roles=None,
     max_windows=40,
     top_n=12,
@@ -244,7 +245,7 @@ def audit_manifest(
             audit_target(
                 row,
                 manifest=manifest,
-                default_instrument=instrument,
+                default_reader=reader,
                 roles=roles,
                 max_windows=max_windows,
                 top_n=top_n,
@@ -280,7 +281,7 @@ def audit_target(
     row,
     *,
     manifest,
-    default_instrument,
+    default_reader,
     roles=None,
     max_windows=40,
     top_n=12,
@@ -290,10 +291,10 @@ def audit_target(
     """Audit one manifest row and return a compact JSON-safe record."""
     target_id = _target_id(row)
     path = _resolve_manifest_path(manifest, row["path"])
-    instrument = str(row.get("instrument") or default_instrument)
+    reader = str(row.get("reader") or row.get("instrument") or default_reader)
     teff_ref = _optional_float(row, "teff_ref")
     validation_role = str(row.get("validation_role") or "standard").strip() or "standard"
-    spectrum = read_spectrum(path, instrument=instrument)
+    spectrum = read_spectrum(path, reader=reader)
     coverage = spectrum_coverage(spectrum)
     selection = select_diagnostic_windows(
         spectrum,
@@ -323,7 +324,8 @@ def audit_target(
             "target_id": target_id,
             "xsl_id": row.get("xsl_id") or None,
             "path": str(path),
-            "instrument": instrument,
+            "reader": reader,
+            "instrument": reader,
             "star_name": row.get("star_name") or None,
             "spectral_type": row.get("spectral_type") or None,
             "teff_ref": teff_ref,
@@ -647,6 +649,12 @@ def plot_audit_heatmap(payload, savepath=None, *, max_windows=18):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.reader is not None and args.instrument is not None:
+        raise ValueError("Pass --reader or --instrument, not both.")
+    if args.instrument is not None:
+        args.reader = args.instrument
+    if args.reader is None:
+        args.reader = "xsl_dr3"
     roles = _parse_roles(args.roles)
 
     def progress(message):
@@ -655,7 +663,7 @@ def main(argv=None):
     print("Running diagnostic-window audit...", flush=True)
     payload = audit_manifest(
         args.manifest,
-        instrument=args.instrument,
+        reader=args.reader,
         roles=roles,
         max_windows=args.max_windows,
         top_n=args.top_n,

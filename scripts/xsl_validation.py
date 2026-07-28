@@ -691,7 +691,7 @@ def main(argv=None):
         try:
             spectrum = read_spectrum(
                 path,
-                instrument="xsl_dr3",
+                reader="xsl_dr3",
                 wave_medium=args.wave_medium,
                 warn_unknown=False,
             )

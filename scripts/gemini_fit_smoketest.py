@@ -227,7 +227,7 @@ def main():
         )
 
     print("Reading Gemini spectrum...", flush=True)
-    seg0 = read_spectrum(args.file, instrument="gemini")
+    seg0 = read_spectrum(args.file, reader="gemini_ascii")
 
     broad_telluric_fallback = None
     if args.use_broad_telluric_fallback_mask:

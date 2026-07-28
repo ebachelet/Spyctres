@@ -34,7 +34,7 @@ from Spyctres._serialization import (
     safe_filename,
     save_figure,
 )
-from Spyctres.io import get_instrument_info, list_instruments, read_spectrum
+from Spyctres.io import get_reader_info, list_readers, read_spectrum
 from Spyctres.plotting import plot_spectrum_audit, plot_spectrum_quicklook
 from Spyctres.preprocessing import READINESS_INTENTS
 
@@ -61,7 +61,7 @@ def build_parser():
             "--manifest external_manifest.csv "
             "--output-json /tmp/spyctres_external_validation.json "
             "--output-csv /tmp/spyctres_external_validation.csv\n\n"
-            "Manifest columns: path, instrument, optional target_id, role "
+            "Manifest columns: path, reader/instrument, optional target_id, role "
             "(clean/dirty/unknown), label, notes, wave_unit, err_column, "
             "sdss_mask_policy, use_and_mask, attach_wdisp_resolution, "
             "assumed_resolution_R, fit_wmin, fit_wmax."
@@ -73,15 +73,21 @@ def build_parser():
         "files",
         nargs="*",
         help=(
-            "Optional explicit files. Use with --instrument. For multi-instrument "
-            "sets, prefer --manifest or --scan-root."
+            "Optional explicit files. Use with --reader. For mixed-reader sets, "
+            "prefer --manifest or --scan-root."
         ),
+    )
+    parser.add_argument(
+        "--reader",
+        default=None,
+        choices=SUPPORTED_EXTERNAL_INSTRUMENTS,
+        help="Reader for explicit positional files.",
     )
     parser.add_argument(
         "--instrument",
         default=None,
         choices=SUPPORTED_EXTERNAL_INSTRUMENTS,
-        help="Reader for explicit positional files.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--manifest",
@@ -408,10 +414,10 @@ def _normalize_instrument(value):
     if key not in SUPPORTED_EXTERNAL_INSTRUMENTS:
         raise ValueError(
             "External validation currently supports {0}; got {1!r}. "
-            "Registered Spyctres instruments are: {2}.".format(
+            "Registered Spyctres readers are: {2}.".format(
                 ", ".join(SUPPORTED_EXTERNAL_INSTRUMENTS),
                 value,
-                ", ".join(list_instruments()),
+                ", ".join(list_readers()),
             )
         )
     return key
@@ -482,17 +488,16 @@ def _read_manifest(path, root=None):
         rows = list(csv.DictReader(handle))
     if not rows:
         raise ValueError("External spectra manifest contains no rows.")
-    required = {"path", "instrument"}
-    missing = sorted(required - set(rows[0]))
-    if missing:
+    columns = set(rows[0])
+    missing = sorted({"path"} - columns)
+    if missing or not ({"reader", "instrument"} & columns):
+        expected = "path plus reader or instrument"
         raise ValueError(
-            "External spectra manifest requires columns: {0}.".format(
-                ", ".join(sorted(required))
-            )
+            "External spectra manifest requires columns: {0}.".format(expected)
         )
     targets = []
     for index, row in enumerate(rows, start=1):
-        instrument = _normalize_instrument(row.get("instrument"))
+        instrument = _normalize_instrument(row.get("reader") or row.get("instrument"))
         label = row.get("label") or row.get("target_id") or Path(row["path"]).stem
         target = {
             "path": _resolve_path(row["path"], base=base),
@@ -529,9 +534,12 @@ def discover_targets(args):
         for root in args.scan_root:
             targets.extend(_scan_root(root, role=args.role))
     if args.files:
-        if args.instrument is None:
-            raise ValueError("Positional files require --instrument.")
-        instrument = _normalize_instrument(args.instrument)
+        if args.reader is not None and args.instrument is not None:
+            raise ValueError("Pass --reader or --instrument, not both.")
+        reader = args.reader if args.reader is not None else args.instrument
+        if reader is None:
+            raise ValueError("Positional files require --reader.")
+        instrument = _normalize_instrument(reader)
         for path in args.files:
             resolved = _resolve_path(path)
             targets.append(
@@ -547,7 +555,7 @@ def discover_targets(args):
                 }
             )
     if not targets:
-        raise ValueError("Provide --manifest, --scan-root, or files with --instrument.")
+        raise ValueError("Provide --manifest, --scan-root, or files with --reader.")
 
     seen = {}
     duplicates = []
@@ -756,6 +764,7 @@ def validate_target(target, args):
         "target_id": target.get("target_id"),
         "label": target.get("label"),
         "role": target.get("role", "unknown"),
+        "reader": instrument,
         "instrument": instrument,
         "path": path,
         "path_input": target.get("path_input", path),
@@ -780,7 +789,7 @@ def validate_target(target, args):
         flush=True,
     )
     try:
-        spectrum = read_spectrum(path, instrument=instrument, **reader_kwargs)
+        spectrum = read_spectrum(path, reader=instrument, **reader_kwargs)
         fit_windows = _fit_windows(target, args)
         assumed_resolution = _assumed_resolution(target, args)
         readiness = audit_spectrum_for_fit(
@@ -806,7 +815,8 @@ def validate_target(target, args):
         record.update(
             {
                 "status": "ok",
-                "instrument_info": get_instrument_info(instrument).to_metadata(),
+                "instrument_info": get_reader_info(instrument).to_metadata(),
+                "reader_info": get_reader_info(instrument).to_metadata(),
                 "fit_windows_A": fit_windows,
                 "assumed_resolution_R": assumed_resolution,
                 "coverage": coverage,

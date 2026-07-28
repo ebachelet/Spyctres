@@ -178,7 +178,7 @@ def main():
         )
 
     print("Reading FLOYDS spectrum...", flush=True)
-    seg0 = read_spectrum(args.file, instrument="floyds")
+    seg0 = read_spectrum(args.file, reader="floyds_csv")
 
     if args.wave_medium != "unknown":
         meta = dict(seg0.meta)

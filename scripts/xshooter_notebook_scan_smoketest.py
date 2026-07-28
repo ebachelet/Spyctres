@@ -366,7 +366,7 @@ def main():
     if not os.path.isdir(args.phoenix_dir):
         parser.error("PHOENIX directory not found: {0}".format(args.phoenix_dir))
     
-    seg0 = read_spectrum(args.file, instrument="xshooter")
+    seg0 = read_spectrum(args.file, reader="xshooter_merge1d")
     arm = str(seg0.meta.get("arm", "")).strip().upper()
     if arm and arm != "UVB":
         parser.error(
