@@ -135,4 +135,12 @@ if missing:
         env=env,
     )
     payload = json.loads(completed.stdout)
-    assert "xshooter" in payload["instruments"]
+    assert "xshooter_merge1d" in payload["instruments"]
+
+    completed = _run(
+        [str(script), "readers", "--aliases", "--json"],
+        cwd=tmp_path,
+        env=env,
+    )
+    payload = json.loads(completed.stdout)
+    assert "xshooter" in payload["readers"]

@@ -78,7 +78,8 @@ def build_parser():
     )
     parser.add_argument("spectra", nargs="*")
     parser.add_argument("--manifest", default=None)
-    parser.add_argument("--instrument", default="xshooter")
+    parser.add_argument("--reader", default="xshooter_merge1d")
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument("--R", type=float, default=None, dest="resolution_R")
     parser.add_argument("--quicklook", action="store_true")
@@ -94,13 +95,17 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
     spectra = list(args.spectra) if args.spectra else [str(EXAMPLE_UVB)]
     delegated = []
     if args.manifest:
         delegated.extend(["--manifest", str(args.manifest)])
     else:
         delegated.extend(spectra)
-    delegated.extend(["--instrument", str(args.instrument)])
+    delegated.extend(["--reader", str(args.reader)])
     if args.phoenix_dir:
         delegated.extend(["--phoenix-dir", str(args.phoenix_dir)])
     if args.resolution_R is not None:

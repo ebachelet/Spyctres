@@ -14,17 +14,18 @@ PUBLIC_FUNCTION_HELP = {
     "read_spectrum": {
         "name": "read_spectrum",
         "purpose": "Read a reduced one-dimensional spectrum into the common Spyctres spectrum container.",
-        "minimal_call": 'read_spectrum("spectrum.fits", instrument="xshooter")',
+        "minimal_call": 'read_spectrum("spectrum.fits", reader="xshooter_merge1d")',
         "required": [
             {
                 "name": "path",
                 "description": "Path to the input spectrum file.",
             },
             {
-                "name": "instrument",
+                "name": "reader",
                 "description": (
-                    "Registered reader name or alias, e.g. xshooter, pepsi, "
-                    "floyds, gemini, sdss, uves_pop, or xsl."
+                    "Registered reader name or alias, e.g. xshooter_merge1d, "
+                    "pepsi_nor, floyds_csv, gemini_ascii, sdss_spec, "
+                    "uves_pop_ascii, gbs_v3_ascii, or xsl_dr3."
                 ),
             },
         ],
@@ -43,7 +44,7 @@ PUBLIC_FUNCTION_HELP = {
                 ),
             },
         ],
-        "advice": "Choose a reader with list_instruments() or inspect details with get_instrument_info('xshooter').",
+        "advice": "Choose a reader with list_readers() or inspect details with get_reader_info('xshooter_merge1d').",
     },
     "fit_stellar_spectrum": {
         "name": "fit_stellar_spectrum",
@@ -60,7 +61,7 @@ PUBLIC_FUNCTION_HELP = {
                 ),
             },
             {
-                "name": "instrument",
+                "name": "reader",
                 "description": (
                     "Required only when spectrum is a path; tells Spyctres "
                     "which reader to use."
@@ -129,9 +130,9 @@ PUBLIC_FUNCTION_HELP = {
                 "description": "List of wavelength windows to fit, e.g. [(3800, 5200)].",
             },
             {
-                "name": "mask / exclude_masks / exclude_regions",
+                "name": "valid_mask / exclude_masks / exclude_regions",
                 "default": "None",
-                "description": "Explicit masks or wavelength ranges to exclude from the fit; mask=... is the beginner-facing alias for exclude_masks.",
+                "description": "valid_mask=True marks usable pixels; exclude_masks/exclude_regions name rejected pixels or wavelength ranges explicitly.",
             },
             {
                 "name": "resolution_R / R or fwhm_kms",
@@ -297,7 +298,7 @@ PUBLIC_FUNCTION_HELP = {
             "classification workflows; it is not a formal MK classifier."
         ),
         "minimal_call": (
-            'classify_spectrum("spectrum.fits", instrument="xshooter", '
+            'classify_spectrum("spectrum.fits", reader="xshooter_merge1d", '
             'phoenix_dir="/path/to/PHOENIX")'
         ),
         "required": [
@@ -608,7 +609,6 @@ PUBLIC_FUNCTION_GROUPS = {
         "functions": (
             "plot_fit_referee",
             "compare_fits",
-            "input_checksum_provenance",
         ),
     },
     "advanced": {
@@ -620,6 +620,7 @@ PUBLIC_FUNCTION_GROUPS = {
         "functions": (
             "fit_phoenix_spectrum",
             "classify_spectrum",
+            "input_checksum_provenance",
         ),
     },
 }
@@ -740,7 +741,7 @@ def format_public_api_guide(group=None):
         "",
         "Recommended one-import path:",
         "  import Spyctres as sp",
-        '  spec = sp.read_spectrum("my_spectrum.fits", instrument="xshooter")',
+        '  spec = sp.read_spectrum("my_spectrum.fits", reader="xshooter_merge1d")',
         "  setup = sp.suggest_fit_setup(spec)",
         '  result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)',
         "  sp.plot_fit_referee(result)",

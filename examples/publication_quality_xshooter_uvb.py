@@ -244,10 +244,11 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        "--instrument",
-        default="xshooter",
-        help="Registered Spyctres reader name. Default: xshooter.",
+        "--reader",
+        default="xshooter_merge1d",
+        help="Registered Spyctres reader name. Default: xshooter_merge1d.",
     )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
         "--output-json",
@@ -385,7 +386,26 @@ def build_parser():
         default=False,
         help=(
             "Run a baseline native-grid PHOENIX fit on the Balmer-window "
-            "segments. Default: False, so the scaffold can run without PHOENIX."
+            "segments only after publication readiness passes, unless an "
+            "explicit exploratory override is supplied. Default: False, so "
+            "the scaffold can run without PHOENIX."
+        ),
+    )
+    parser.add_argument(
+        "--allow-exploratory-fit",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Expert-only override: allow --run-baseline-fit even when the "
+            "publication readiness gate is blocked. The result is recorded as "
+            "exploratory and not publication-valid."
+        ),
+    )
+    parser.add_argument(
+        "--override-reason",
+        default=None,
+        help=(
+            "Required non-empty reason when --allow-exploratory-fit is used."
         ),
     )
     parser.add_argument(
@@ -3617,11 +3637,11 @@ def _append_option(parts, flag, value):
 def _publication_replay_parts(args):
     """Return the scientific settings worth carrying into suggested commands."""
     if args is None:
-        return [str(EXAMPLE_UVB), "--instrument", "xshooter"]
+        return [str(EXAMPLE_UVB), "--reader", "xshooter_merge1d"]
 
     defaults = build_parser().parse_args([])
     parts = [str(args.spectrum)]
-    _append_option(parts, "--instrument", getattr(args, "instrument", "xshooter"))
+    _append_option(parts, "--reader", getattr(args, "reader", "xshooter_merge1d"))
     _append_option(parts, "--phoenix-dir", getattr(args, "phoenix_dir", None))
     if getattr(args, "allow_assumed_resolution", False):
         parts.append("--allow-assumed-resolution")
@@ -4451,7 +4471,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         "status": "audit_started",
         "input": {
             "spectrum": str(spectrum_path),
-            "instrument": str(args.instrument),
+            "reader": str(args.reader),
         },
         "analysis_design": {
             "phase": "scaffold",
@@ -5020,6 +5040,46 @@ def _run_core_mask_sensitivity(args, segment):
     }
 
 
+def _exploratory_override_payload(args, publication_readiness):
+    """Return override provenance for an expert exploratory blocked-gate fit."""
+    reason = "" if args.override_reason is None else str(args.override_reason).strip()
+    if not args.allow_exploratory_fit:
+        return None
+    if not reason:
+        raise ValueError("--allow-exploratory-fit requires a non-empty --override-reason.")
+    blockers = list((publication_readiness or {}).get("blockers") or [])
+    return {
+        "schema_version": 1,
+        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "requested_intent": "publication_quality_stellar_parameters",
+        "effective_interpretation": "exploratory_not_publication_valid",
+        "override_reason": reason,
+        "original_blockers": blockers,
+        "overridden_blockers": blockers,
+        "user_guidance": (
+            "This fit was allowed only as an exploratory diagnostic. Do not "
+            "treat its atmospheric parameters as publication-quality until "
+            "the recorded blockers have been resolved and the run is repeated "
+            "without an exploratory override."
+        ),
+    }
+
+
+def _skipped_blocked_baseline(publication_readiness):
+    blockers = list((publication_readiness or {}).get("blockers") or [])
+    return {
+        "success": False,
+        "status": "skipped_publication_gate_blocked",
+        "reason": "publication readiness gate is blocked",
+        "blockers": blockers,
+        "user_guidance": (
+            "Resolve the blockers before running a publication-oriented fit, "
+            "or rerun with --allow-exploratory-fit --override-reason '...' "
+            "to produce an explicitly exploratory diagnostic fit."
+        ),
+    }
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -5051,8 +5111,13 @@ def main(argv=None):
         )
         return 0
 
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
+
     print("Reading X-SHOOTER UVB spectrum...", flush=True)
-    spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
+    spectrum = read_spectrum(args.spectrum, reader=args.reader)
     segment = _single_segment(spectrum)
 
     print("Preparing explicit Balmer-window scaffold...", flush=True)
@@ -5090,6 +5155,16 @@ def main(argv=None):
         ),
         flush=True,
     )
+    exploratory_override = _exploratory_override_payload(args, publication)
+    if exploratory_override is not None:
+        payload["exploratory_override"] = exploratory_override
+        _atomic_write_json(output_path, payload)
+        print(
+            "Exploratory override recorded: {0}".format(
+                exploratory_override["override_reason"]
+            ),
+            flush=True,
+        )
 
     core_mask_result = _run_core_mask_sensitivity(args, segment)
     payload["core_mask_sensitivity"] = core_mask_result["records"]
@@ -5115,7 +5190,8 @@ def main(argv=None):
     )
     _atomic_write_json(output_path, payload)
 
-    if args.run_baseline_fit:
+    baseline_allowed = bool(publication["publication_ready"]) or exploratory_override is not None
+    if args.run_baseline_fit and baseline_allowed:
         baseline_payload, baseline_result = _run_baseline_fit(
             args,
             collection,
@@ -5125,6 +5201,8 @@ def main(argv=None):
             ordinary_readiness=ordinary,
             publication_readiness=publication,
         )
+        if exploratory_override is not None:
+            baseline_payload["exploratory_override"] = exploratory_override
         payload["baseline_fit"] = baseline_payload
         payload["baseline_line_residual_diagnostics"] = (
             _balmer_model_residual_diagnostics(
@@ -5149,6 +5227,12 @@ def main(argv=None):
             for key in ("success", "teff", "feh", "logg", "rv_kms", "chi2_red")
         }
         print(json.dumps(summary, indent=2), flush=True)
+        if exploratory_override is not None:
+            print(
+                "Exploratory fit completed; this is not valid for publication "
+                "inference until blockers are resolved.",
+                flush=True,
+            )
         if args.run_systematic_variants:
             if not payload["baseline_fit"].get("success"):
                 print(
@@ -5200,6 +5284,41 @@ def main(argv=None):
                 payload["injection_recovery"],
             )
             _atomic_write_json(output_path, payload)
+    elif args.run_baseline_fit:
+        payload["baseline_fit"] = _skipped_blocked_baseline(publication)
+        payload["baseline_line_residual_diagnostics"] = None
+        payload["status"] = "baseline_fit_skipped_publication_gate_blocked"
+        print(
+            "Skipping baseline fit because publication readiness is blocked: {0}".format(
+                ", ".join(publication["blockers"]) or "none"
+            ),
+            flush=True,
+        )
+        print(
+            "For an explicitly exploratory diagnostic fit, rerun with "
+            "--allow-exploratory-fit --override-reason '...'.",
+            flush=True,
+        )
+        if args.run_systematic_variants:
+            payload["systematic_variant_results"] = _skipped_systematic_results(
+                "skipped_baseline_not_run",
+                "Systematic variants require a completed baseline fit.",
+            )
+            _write_systematic_variant_results_csv(
+                args.output_systematic_results_csv,
+                payload["systematic_variant_results"],
+            )
+        if args.run_injection_recovery:
+            payload["injection_recovery"] = _skipped_injection_recovery(
+                "skipped_baseline_not_run",
+                "Synthetic recovery requires a completed baseline fit.",
+                truth=None,
+            )
+            _write_injection_recovery_csv(
+                args.output_injection_recovery_csv,
+                payload["injection_recovery"],
+            )
+        _atomic_write_json(output_path, payload)
     else:
         if args.run_systematic_variants:
             print(

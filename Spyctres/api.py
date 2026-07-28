@@ -3,7 +3,10 @@
 import hashlib
 import inspect
 import os
+import warnings
 from collections.abc import Mapping
+
+import numpy as np
 
 from .config import resolve_phoenix_dir
 from .defaults import FitSetup, prepare_phoenix_fit_kwargs
@@ -13,6 +16,7 @@ from .fitting import (
     reconstruct_phoenix_legendre_models_for_segments,
 )
 from .io import coerce_spectrum, read_spectrum
+from .io import SpectrumCollection, SpectrumSegment
 from .phoenix import PhoenixLibrary
 from .results import PhoenixFitResult
 
@@ -155,6 +159,75 @@ def _setup_payload(setup):
     return dict(payload)
 
 
+def _coerce_valid_mask_array(valid_mask, n_expected, label):
+    mask = np.asarray(valid_mask, dtype=bool)
+    if mask.shape != (int(n_expected),):
+        raise ValueError(
+            "{0} must be a one-dimensional boolean usable-pixel mask with "
+            "shape ({1},).".format(label, int(n_expected))
+        )
+    return mask
+
+
+def _apply_valid_mask_override(canonical, valid_mask):
+    """Apply a public usable-pixel mask while preserving segment metadata."""
+    if valid_mask is None:
+        return canonical
+
+    if isinstance(canonical, SpectrumSegment):
+        user_mask = _coerce_valid_mask_array(
+            valid_mask,
+            len(canonical.wave),
+            "valid_mask",
+        )
+        combined = np.asarray(canonical.mask, dtype=bool) & user_mask
+        meta = dict(canonical.meta)
+        meta["valid_mask_override"] = {
+            "source": "fit_stellar_spectrum.valid_mask",
+            "polarity": "True means usable",
+            "n_pixels": int(combined.size),
+            "n_valid_before": int(np.count_nonzero(canonical.mask)),
+            "n_valid_after": int(np.count_nonzero(combined)),
+            "n_rejected_by_override": int(
+                np.count_nonzero(np.asarray(canonical.mask, dtype=bool) & ~user_mask)
+            ),
+        }
+        return canonical.copy(mask=combined, meta=meta)
+
+    if isinstance(canonical, SpectrumCollection):
+        segments = list(canonical.segments)
+        if isinstance(valid_mask, Mapping):
+            masks = []
+            for index, segment in enumerate(segments):
+                key = segment.name if segment.name in valid_mask else index
+                if key not in valid_mask:
+                    raise ValueError(
+                        "valid_mask mapping must contain each segment name or index."
+                    )
+                masks.append(valid_mask[key])
+        else:
+            masks = list(valid_mask)
+        if len(masks) != len(segments):
+            raise ValueError(
+                "valid_mask for a SpectrumCollection must contain one mask per segment."
+            )
+        masked_segments = [
+            _apply_valid_mask_override(segment, mask)
+            for segment, mask in zip(segments, masks)
+        ]
+        meta = dict(canonical.meta)
+        meta["valid_mask_override"] = {
+            "source": "fit_stellar_spectrum.valid_mask",
+            "polarity": "True means usable",
+            "n_segments": int(len(masked_segments)),
+        }
+        return canonical.copy(segments=masked_segments, meta=meta)
+
+    raise TypeError(
+        "valid_mask can only be applied to SpectrumSegment or SpectrumCollection."
+    )
+
+
 def fit_phoenix_spectrum(
     spectrum=None,
     phoenix_lib=None,
@@ -220,6 +293,7 @@ def fit_phoenix_spectrum(
 
 def fit_stellar_spectrum(
     spectrum=None,
+    reader=None,
     instrument=None,
     model="phoenix",
     phoenix_lib=None,
@@ -229,6 +303,7 @@ def fit_stellar_spectrum(
     mode=None,
     science_case="classification",
     setup=None,
+    valid_mask=None,
     mask=None,
     resolution_R=None,
     continuum_degree=None,
@@ -244,7 +319,8 @@ def fit_stellar_spectrum(
     This is the "out of the box" entry point for users who should not need to
     know the internal module layout. It accepts either an already-loaded
     ``SpectrumSegment``/``SpectrumCollection``/array-like spectrum, or a path
-    plus an ``instrument`` reader name. For the current alpha workflow,
+    plus a ``reader`` name. ``instrument=`` remains a temporary compatibility
+    alias. For the current alpha workflow,
     ``model="phoenix"`` is supported.
 
     The function applies Spyctres' conservative first-pass PHOENIX defaults by
@@ -299,6 +375,8 @@ def fit_stellar_spectrum(
         if setup_science_case:
             science_case = setup_science_case
         explicit_controls = []
+        if valid_mask is not None:
+            explicit_controls.append("valid_mask")
         if mask is not None:
             explicit_controls.append("mask")
         if resolution_R is not None:
@@ -322,11 +400,23 @@ def fit_stellar_spectrum(
             raise ValueError("Pass mode or defaults_mode, not conflicting values.")
         defaults_mode = str(mode).strip().lower()
 
+    if valid_mask is not None and mask is not None:
+        raise ValueError(
+            "Pass valid_mask or mask, not both. valid_mask=True means usable; "
+            "mask= is the deprecated exclusion-mask alias."
+        )
     if mask is not None:
+        warnings.warn(
+            "fit_stellar_spectrum(..., mask=...) is deprecated because its "
+            "polarity is ambiguous; use valid_mask= for usable pixels or "
+            "exclude_masks= for rejected pixels.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if "exclude_mask" in fit_kwargs or "exclude_masks" in fit_kwargs:
             raise ValueError(
                 "Pass mask or exclude_mask(s), not both. mask is the "
-                "beginner-facing alias for exclude_masks."
+                "deprecated alias for exclude_masks."
             )
         fit_kwargs["exclude_masks"] = mask
     if resolution_R is not None:
@@ -343,17 +433,27 @@ def fit_stellar_spectrum(
     reader_kwargs = {} if reader_kwargs is None else dict(reader_kwargs)
     input_was_path = isinstance(spectrum, (str, os.PathLike))
     if input_was_path:
-        if instrument is None:
+        if reader is not None and instrument is not None:
+            raise ValueError("Pass reader or instrument, not both.")
+        if instrument is not None:
+            warnings.warn(
+                "fit_stellar_spectrum(..., instrument=...) is deprecated; "
+                "use reader=.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            reader = instrument
+        if reader is None:
             raise ValueError(
                 missing_call_error(
                     "fit_stellar_spectrum",
-                    "A spectrum path was supplied, but no instrument reader was "
+                    "A spectrum path was supplied, but no spectrum reader was "
                     "specified.",
                 )
             )
         canonical = read_spectrum(
             spectrum,
-            instrument=instrument,
+            reader=reader,
             warn_unknown=warn_unknown,
             **reader_kwargs,
         )
@@ -363,6 +463,7 @@ def fit_stellar_spectrum(
             warn_unknown=warn_unknown,
             source="fit_stellar_spectrum",
         )
+    canonical = _apply_valid_mask_override(canonical, valid_mask)
 
     input_checksum_policy, input_checksum = _input_checksum_provenance(
         spectrum,
@@ -410,6 +511,7 @@ def fit_stellar_spectrum(
             "workflow_api": "fit_stellar_spectrum",
             "workflow_model": "phoenix",
             "input_was_path": bool(input_was_path),
+            "reader": None if reader is None else str(reader),
             "instrument": None if instrument is None else str(instrument),
             "auto_defaults": bool(auto_defaults),
             "defaults_mode": str(defaults_mode),

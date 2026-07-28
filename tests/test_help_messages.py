@@ -39,7 +39,7 @@ def test_public_function_help_is_structured_and_formatted():
     text = format_public_function_help("read_spectrum")
     assert "Minimal call:" in text
     assert "Optional extras:" in text
-    assert "list_instruments()" in text
+    assert "list_readers()" in text
 
     line_text = format_public_function_help("fit_line")
     assert 'fit_line(spec, "Hgamma")' in line_text
@@ -115,8 +115,8 @@ def test_read_spectrum_incomplete_call_explains_minimal_requirements(tmp_path):
         read_spectrum(spectrum_path)
 
     message = str(caught.value)
-    assert "No instrument reader was specified" in message
-    assert "list_instruments()" in message
+    assert "No spectrum reader was specified" in message
+    assert "list_readers()" in message
 
 
 def test_fit_entry_points_incomplete_calls_explain_minimal_requirements():

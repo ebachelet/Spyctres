@@ -111,9 +111,15 @@ def test_suggest_fit_setup_wraps_defaults_and_readiness_for_users():
     assert compact["setup_hash"] == setup.setup_hash
     assert compact["recommended_branch_id"] == "blue_optical_balmer_metal"
     assert compact["ready_for_intent"] is True
+    assert compact["reader"] == "unknown/already-loaded"
+    assert compact["n_segments"] == 1
+    assert compact["resolution_summary"] == "from segment metadata"
+    assert compact["uncertainty_summary"] == "formal 1-sigma errors available"
     assert setup.to_dict()["setup_hash"] == setup.setup_hash
     assert '"setup_hash"' in setup.to_json()
     assert "Spyctres fit setup" in setup.summary_text()
+    assert "resolution: from segment metadata" in setup.summary_text()
+    assert "FitSetup(" in repr(setup)
 
 
 def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
@@ -133,6 +139,31 @@ def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
     assert setup["readiness"]["intent"] == "quicklook_classification"
     assert setup["readiness"]["ready_for_intent"] is False
     assert "resolution_assumption_required" in setup["readiness"]["blockers_for_intent"]
+
+
+def test_fit_setup_exploratory_override_requires_reason_and_records_blockers():
+    segment = SpectrumSegment(
+        wave=np.linspace(5000.0, 7100.0, 100),
+        flux=np.ones(100),
+        err=None,
+        wave_medium="unknown",
+        observer_frame="unknown",
+        stellar_rest_status="unknown",
+        meta={"instrument": "GMOS"},
+    )
+    setup = suggest_fit_setup(segment)
+
+    with pytest.raises(ValueError, match="non-empty reason"):
+        setup.allow_exploratory("")
+
+    exploratory = setup.allow_exploratory("checking residual morphology only")
+    override = exploratory["exploratory_override"]
+
+    assert exploratory.setup_hash != setup.setup_hash
+    assert override["override_reason"] == "checking residual morphology only"
+    assert override["effective_interpretation"] == "exploratory_not_publication_valid"
+    assert "resolution_assumption_required" in override["original_blockers"]
+    assert override["created_utc"].endswith("Z")
     assert "wave_medium_unknown" in setup["readiness"]["warnings_for_intent"]
     assert "unknown_wave_medium" in setup["risk_flags"]
     assert "wave_medium_unknown" in setup["risk_flags"]

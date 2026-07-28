@@ -9,6 +9,7 @@ from Spyctres.io import (
     COMMON_SPECTRUM_SCHEMA_VERSION,
     InstrumentInfo,
     READERS,
+    ReaderInfo,
     ResolutionDescriptor,
     SpectrumCollection,
     SpectrumSegment,
@@ -16,7 +17,9 @@ from Spyctres.io import (
     concatenate_segments,
     coerce_spectrum,
     get_instrument_info,
+    get_reader_info,
     list_instruments,
+    list_readers,
     pepsi_ssbvel_correction_kms,
     read_pepsi_nor,
     read_xsl_dr3,
@@ -150,44 +153,66 @@ def test_resolution_descriptor_supports_constant_and_tabulated_lsf():
     assert _resolve_segment_fwhm_kms(segment) == pytest.approx(29.9792458)
 
 
-def test_instrument_registry_lists_canonical_names_and_aliases():
-    canonical = list_instruments()
-    aliases = list_instruments(include_aliases=True)
+def test_reader_registry_lists_canonical_names_and_aliases():
+    canonical = list_readers()
+    aliases = list_readers(include_aliases=True)
 
     assert {
-        "pepsi",
-        "xsl",
-        "xshooter",
-        "floyds",
-        "gemini",
-        "uves_pop",
-        "gaia_benchmark",
-        "sdss",
+        "pepsi_nor",
+        "xsl_dr3",
+        "xshooter_merge1d",
+        "floyds_csv",
+        "gemini_ascii",
+        "uves_pop_ascii",
+        "gbs_v3_ascii",
+        "sdss_spec",
     } <= set(canonical)
-    assert {"x-shooter", "uves-pop", "gbs", "segue", "pepsi_nor"} <= set(aliases)
+    assert {
+        "x-shooter",
+        "xshooter",
+        "uves-pop",
+        "uves_pop",
+        "gbs",
+        "gaia_benchmark",
+        "segue",
+        "sdss",
+        "pepsi",
+    } <= set(aliases)
 
-    info = get_instrument_info("x-shooter")
+    info = get_reader_info("x-shooter")
+    assert isinstance(info, ReaderInfo)
     assert isinstance(info, InstrumentInfo)
-    assert info.canonical_name == "xshooter"
+    assert info.canonical_name == "xshooter_merge1d"
     assert "x-shooter" in info.aliases
     assert info.default_wave_medium == "air"
     assert info.default_observer_frame == "topocentric"
 
     metadata = info.to_metadata()
     assert metadata["reader_function"] == "read_xshooter_1d"
-    assert metadata["canonical_name"] == "xshooter"
+    assert metadata["canonical_name"] == "xshooter_merge1d"
+    assert metadata["canonical_reader"] == "xshooter_merge1d"
     assert "aliases" in metadata
 
 
-def test_instrument_registry_error_uses_human_readable_lists():
+def test_reader_registry_error_uses_human_readable_lists():
     with pytest.raises(ValueError) as caught:
-        get_instrument_info("not_a_reader")
+        get_reader_info("not_a_reader")
 
     message = str(caught.value)
-    assert "Supported instruments:" in message
+    assert "Supported readers:" in message
     assert "Accepted aliases:" in message
-    assert "xshooter" in message
+    assert "xshooter_merge1d" in message
     assert "x-shooter" in message
+
+
+def test_legacy_instrument_helpers_warn_and_forward_to_readers():
+    with pytest.warns(DeprecationWarning):
+        canonical = list_instruments()
+    assert canonical == list_readers()
+
+    with pytest.warns(DeprecationWarning):
+        info = get_instrument_info("x-shooter")
+    assert info == get_reader_info("x-shooter")
 
 
 def test_current_fitter_rejects_recorded_variable_lsf_clearly():

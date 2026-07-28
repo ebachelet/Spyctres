@@ -17,7 +17,7 @@ Example
 -------
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output /tmp/spyctres_batch_xshooter_uvb.json \
   --resume
 
@@ -26,10 +26,10 @@ For a multi-file demonstration, pass bundled spectra explicitly:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_VIS_TELL_CORR.fits \
-  --instrument xshooter --output /tmp/spyctres_batch.json --resume
+  --reader xshooter_merge1d --output /tmp/spyctres_batch.json --resume
 
 For heterogeneous batches, use --manifest with a CSV containing at least a
-path column and optional target_id, instrument, and R/resolution_R columns.
+path column and optional target_id, reader/instrument, and R/resolution_R columns.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def build_parser():
             "Example:\n"
             "  python examples/batch_quickscan_then_refine.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter "
+            "--reader xshooter_merge1d "
             "--output-json /tmp/spyctres_batch_xshooter_uvb.json "
             "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv --resume\n\n"
             "Manifest example after saving a CSV with examples/data paths:\n"
@@ -100,7 +100,7 @@ def build_parser():
             "--refine-quality-policy skip-risky "
             "--output-json /tmp/spyctres_batch_manifest.json --resume\n\n"
             "Manifest columns: path or spectrum; optional target_id, "
-            "instrument, R/resolution_R."
+            "reader/instrument, R/resolution_R."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -123,10 +123,11 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        "--instrument",
-        default="xshooter",
-        help="Registered Spyctres reader name. Default: xshooter.",
+        "--reader",
+        default="xshooter_merge1d",
+        help="Registered Spyctres reader name. Default: xshooter_merge1d.",
     )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--sdss-mask-policy",
         choices=("auto", "ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
@@ -764,7 +765,7 @@ def _fit_one(record, args, phoenix_lib):
         )
     spectrum = read_spectrum(
         path,
-        instrument=local_args.instrument,
+        reader=local_args.instrument,
         **reader_kwargs,
     )
     archive_masks = _archive_masks_by_segment(spectrum)
@@ -949,6 +950,11 @@ def _fit_one(record, args, phoenix_lib):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
+    args.instrument = args.reader
     records = _input_records(args)
     run_configuration = _run_configuration(args, records)
     if _resolution_override_payload(args) is not None:

@@ -50,6 +50,43 @@ def test_structured_result_is_mapping_and_json_serializable():
     assert payload["quality_report"]["reduced_chi2"] == 1.0
 
 
+def test_structured_result_has_notebook_friendly_summary_text():
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": 5772.0,
+            "feh": 0.0,
+            "logg": 4.44,
+            "rv_kms": 0.0,
+            "chi2_red": 1.2,
+            "quality_flags": ["ok"],
+            "fit_setup": {
+                "setup_hash": "abc123456789",
+                "readiness": {
+                    "intent": "quicklook_classification",
+                    "ready_for_intent": True,
+                },
+            },
+        },
+        diagnostics={
+            "n_pixels": 123,
+            "parameter_uncertainty": {"status": "local_covariance"},
+        },
+        provenance={"reader": "gbs_v3_ascii", "resolution_source": "segment_metadata"},
+    )
+
+    compact = result.compact_summary()
+
+    assert compact["fit_intent"] == "quicklook_classification"
+    assert compact["interpretation_status"] == "reviewed_first_pass"
+    assert compact["reader"] == "gbs_v3_ascii"
+    assert compact["setup_hash"] == "abc123456789"
+    assert compact["fitted_pixels"] == 123
+    assert "Spyctres PHOENIX fit" in result.summary_text()
+    assert "reader=gbs_v3_ascii" in result.summary_text()
+    assert "PhoenixFitResult(" in repr(result)
+
+
 def test_structured_result_quality_report_summarizes_fit_selection():
     result = PhoenixFitResult(
         summary={
@@ -448,12 +485,15 @@ def test_fit_report_envelope_records_schema_and_provenance():
 
     payload = result.to_report_dict(include_arrays=False)
 
+    assert payload["schema_name"] == "spyctres.fit_result_report"
+    assert payload["schema_status"] == "experimental"
     assert payload["schema_version"] == 1
     assert payload["report_type"] == "spyctres.fit_result_report"
     assert payload["result_payload_schema_version"] == 1
+    assert payload["created_utc"].endswith("Z")
     assert payload["path_policy"]["include_local_paths"] is False
     assert payload["path_policy"]["local_paths_sanitized"] is True
-    assert isinstance(payload["spyctres"]["version"], str)
+    assert payload["spyctres"]["version"] == "0.5.0a1"
     assert "git_commit" in payload["spyctres"]
     assert "result" in payload
     assert "models" not in payload["result"]
@@ -796,10 +836,10 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
         resolution=5000.0,
     )
 
-    def fake_read(path, instrument, warn_unknown=True, **kwargs):
+    def fake_read(path, reader, warn_unknown=True, **kwargs):
         captured["read"] = {
             "path": path,
-            "instrument": instrument,
+            "reader": reader,
             "warn_unknown": warn_unknown,
             "kwargs": kwargs,
         }
@@ -826,10 +866,10 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
 
     result = fit_stellar_spectrum(
         "example.fits",
-        instrument="xshooter",
+        reader="xshooter_merge1d",
         phoenix_lib=object(),
         mode="standard",
-        mask=user_mask,
+        exclude_masks=user_mask,
         resolution_R=6200.0,
         continuum_degree=3,
         reader_kwargs={"product_profile": "demo"},
@@ -837,7 +877,7 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
         rv_grid_n=11,
     )
 
-    assert captured["read"]["instrument"] == "xshooter"
+    assert captured["read"]["reader"] == "xshooter_merge1d"
     assert captured["read"]["kwargs"] == {"product_profile": "demo"}
     assert captured["fit_spectrum"] is segment
     assert captured["fit_kwargs"]["regions"] == [(4000.0, 5000.0)]
@@ -849,7 +889,8 @@ def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
     assert "fit_default_suggestion" in result.summary
     assert result.provenance["workflow_api"] == "fit_stellar_spectrum"
     assert result.provenance["input_was_path"] is True
-    assert result.provenance["instrument"] == "xshooter"
+    assert result.provenance["reader"] == "xshooter_merge1d"
+    assert result.provenance["instrument"] is None
     assert result.provenance["defaults_mode"] == "standard"
     assert result.provenance["input_checksum_policy"] == {
         "requested": False,
@@ -888,7 +929,7 @@ def test_fit_stellar_spectrum_can_record_input_checksum(monkeypatch, tmp_path):
 
     result = fit_stellar_spectrum(
         path,
-        instrument="xshooter",
+        reader="xshooter_merge1d",
         phoenix_lib=object(),
         record_input_checksum=True,
     )
@@ -899,6 +940,53 @@ def test_fit_stellar_spectrum_can_record_input_checksum(monkeypatch, tmp_path):
         "sha256": hashlib.sha256(b"synthetic spectrum bytes\n").hexdigest(),
         "size_bytes": len(b"synthetic spectrum bytes\n"),
     }
+
+
+def test_fit_stellar_spectrum_valid_mask_is_usable_pixel_mask(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment(
+        np.linspace(4000.0, 4010.0, 4),
+        np.ones(4),
+        err=np.full(4, 0.1),
+        mask=[True, True, False, True],
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+
+    def fake_fit(spectrum, **kwargs):
+        captured["spectrum"] = spectrum
+        return PhoenixFitResult(
+            summary={"success": True, "teff": 6000.0},
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    fit_stellar_spectrum(
+        segment,
+        phoenix_lib=object(),
+        auto_defaults=False,
+        valid_mask=[True, False, True, True],
+        p0=(6000.0, 0.0, 4.0, 0.0),
+    )
+
+    assert np.array_equal(captured["spectrum"].mask, [True, False, False, True])
+    assert captured["spectrum"].meta["valid_mask_override"]["polarity"] == (
+        "True means usable"
+    )
+
+
+def test_fit_stellar_spectrum_rejects_valid_mask_and_legacy_mask():
+    segment = SpectrumSegment([5000.0, 5001.0], [1.0, 1.0])
+    with pytest.raises(ValueError, match="valid_mask or mask"):
+        fit_stellar_spectrum(
+            segment,
+            phoenix_lib=object(),
+            valid_mask=[True, True],
+            mask=[lambda wave: np.zeros_like(wave, dtype=bool)],
+        )
 
 
 def test_input_checksum_provenance_is_public_helper(tmp_path):
@@ -1021,8 +1109,8 @@ def test_classify_spectrum_alias_and_manual_defaults(monkeypatch):
     assert result.provenance["auto_defaults"] is False
 
 
-def test_fit_stellar_spectrum_rejects_missing_instrument_for_paths():
-    with pytest.raises(ValueError, match="no instrument reader was specified"):
+def test_fit_stellar_spectrum_rejects_missing_reader_for_paths():
+    with pytest.raises(ValueError, match="no spectrum reader was specified"):
         fit_stellar_spectrum("example.fits", phoenix_lib=object())
 
 

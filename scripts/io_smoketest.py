@@ -13,7 +13,7 @@ ensure_matplotlib_config_dir()
 import matplotlib.pyplot as plt
 
 from Spyctres._serialization import save_figure
-from Spyctres.io import concatenate_segments, list_instruments, read_spectrum
+from Spyctres.io import concatenate_segments, list_readers, read_spectrum
 from Spyctres.plotting import plot_spectrum_quicklook
 
 
@@ -76,15 +76,15 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
-            "  python scripts/io_smoketest.py --instrument xshooter "
+            "  python scripts/io_smoketest.py --reader xshooter_merge1d "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits\n"
-            "  python scripts/io_smoketest.py --instrument pepsi "
+            "  python scripts/io_smoketest.py --reader pepsi_nor "
             "examples/data/pepsir.20230603.009.dxt.nor "
             "examples/data/pepsir.20230603.010.dxt.nor\n"
-            "  python scripts/io_smoketest.py --instrument floyds "
+            "  python scripts/io_smoketest.py --reader floyds_csv "
             "examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv "
             "--no-show --plot-dir io_plots\n\n"
-            "  python scripts/io_smoketest.py --instrument gaia_benchmark "
+            "  python scripts/io_smoketest.py --reader gbs_v3_ascii "
             "examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz "
             "--no-show --plot-dir io_plots\n\n"
             "UVES-POP, SDSS, Gemini, and other readers are supported for "
@@ -110,11 +110,12 @@ def main():
         help="Input spectrum file(s)",
     )
     parser.add_argument(
-        "--instrument",
-        required=True,
-        choices=list_instruments(),
-        help="Instrument reader to use",
+        "--reader",
+        default=None,
+        choices=list_readers(include_aliases=True),
+        help="Spectrum reader to use.",
     )
+    parser.add_argument("--instrument", default=None, choices=list_readers(include_aliases=True), help=argparse.SUPPRESS)
     parser.add_argument(
         "--join",
         action="store_true",
@@ -131,6 +132,12 @@ def main():
         help="Optional directory where quick-look PNG plots are written.",
     )
     args = parser.parse_args()
+    if args.reader is not None and args.instrument is not None:
+        parser.error("Pass --reader or --instrument, not both.")
+    if args.instrument is not None:
+        args.reader = args.instrument
+    if args.reader is None:
+        parser.error("--reader is required.")
 
     missing = [p for p in args.files if not os.path.isfile(p)]
     if missing:
@@ -141,7 +148,7 @@ def main():
 
     segs = []
     for index, p in enumerate(args.files):
-        s = read_spectrum(p, instrument=args.instrument)
+        s = read_spectrum(p, reader=args.reader)
         segs.append(s)
         print(p)
         print(summarize(s))
@@ -157,7 +164,7 @@ def main():
             plt.show()
 
     if args.join and len(segs) > 1:
-        joined = concatenate_segments(segs, sort=True, name="{0}_joined".format(args.instrument))
+        joined = concatenate_segments(segs, sort=True, name="{0}_joined".format(args.reader))
         print("\nJOINED")
         print(summarize(joined))
 

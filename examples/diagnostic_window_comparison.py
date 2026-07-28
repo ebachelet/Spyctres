@@ -11,7 +11,7 @@ Example quick dry run:
 
   python examples/diagnostic_window_comparison.py \
     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-    --instrument xshooter \
+    --reader xshooter_merge1d \
     --output-json /tmp/spyctres_window_comparison.json \
     --output-csv /tmp/spyctres_window_comparison.csv \
     --output-plot /tmp/spyctres_window_comparison.png
@@ -20,7 +20,7 @@ Example opt-in bounded fit run:
 
   python examples/diagnostic_window_comparison.py \
     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-    --instrument xshooter \
+    --reader xshooter_merge1d \
     --run-fits \
     --R 6200 \
     --max-comparisons 4 \
@@ -68,13 +68,13 @@ def build_parser():
             "Fast dry run:\n"
             "  python examples/diagnostic_window_comparison.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter --output-json /tmp/spyctres_windows.json "
+            "--reader xshooter_merge1d --output-json /tmp/spyctres_windows.json "
             "--output-csv /tmp/spyctres_windows.csv "
             "--output-plot /tmp/spyctres_windows.png\n\n"
             "Bounded opt-in fit run:\n"
             "  python examples/diagnostic_window_comparison.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter --run-fits --R 6200 --max-comparisons 4"
+            "--reader xshooter_merge1d --run-fits --R 6200 --max-comparisons 4"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -86,10 +86,11 @@ def build_parser():
         help="Spectrum to inspect. Defaults to the bundled X-SHOOTER UVB example.",
     )
     parser.add_argument(
-        "--instrument",
-        default="xshooter",
-        help="Registered Spyctres instrument reader. Default: xshooter.",
+        "--reader",
+        default="xshooter_merge1d",
+        help="Registered Spyctres reader. Default: xshooter_merge1d.",
     )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--output-json",
         default="/tmp/spyctres_diagnostic_window_comparison.json",
@@ -228,11 +229,15 @@ def _progress(event):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
 
     # Ingest once, then keep all downstream operations on Spyctres' canonical
     # SpectrumSegment/SpectrumCollection representation.
     print("Reading spectrum...", flush=True)
-    spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
+    spectrum = read_spectrum(args.spectrum, reader=args.reader)
 
     # Fit options are deliberately small and bounded.  The comparison runner
     # will override ``regions`` for each selected window combination.

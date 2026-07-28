@@ -80,7 +80,7 @@ def test_uves_pop_ascii_auto_detects_nm_and_does_not_assume_error(tmp_path):
     assert segment.err is None
     assert np.array_equal(segment.mask, [True, True])
     assert segment.wave_medium == "unknown"
-    assert segment.observer_frame == "heliocentric"
+    assert segment.observer_frame == "unknown"
     assert segment.stellar_rest_status == "unknown"
     assert isinstance(segment.resolution, ResolutionDescriptor)
     assert segment.resolution.quantity == "R"
@@ -184,13 +184,13 @@ def test_read_spectrum_aliases_for_uves_pop_and_sdss(tmp_path):
     sdss_path = tmp_path / "spec-1-2-3.fits"
     _write_sdss_spec(sdss_path, np.log10([4000.0, 4001.0]), [1.0, 1.1], ivar=[1.0, 1.0])
 
-    for alias in ("uves_pop", "uves-pop", "uvespop"):
-        segment = read_spectrum(uves_path, instrument=alias, warn_unknown=False)
+    for alias in ("uves_pop_ascii", "uves_pop", "uves-pop", "uvespop"):
+        segment = read_spectrum(uves_path, reader=alias, warn_unknown=False)
         assert np.allclose(segment.wave, [5000.0, 5001.0])
         assert segment.meta["ingestion"][-1]["source"] == "reader:{0}".format(alias)
 
-    for alias in ("sdss", "sdss_spec", "segue"):
-        segment = read_spectrum(sdss_path, instrument=alias)
+    for alias in ("sdss_spec", "sdss", "segue"):
+        segment = read_spectrum(sdss_path, reader=alias)
         assert np.allclose(segment.wave, [4000.0, 4001.0])
         assert segment.meta["ingestion"][-1]["source"] == "reader:{0}".format(alias)
 
@@ -200,12 +200,12 @@ def test_unknown_instrument_error_lists_registered_readers(tmp_path):
     path.write_text("1 1\n", encoding="utf-8")
 
     with pytest.raises(ValueError) as caught:
-        read_spectrum(path, instrument="not_a_reader", warn_unknown=False)
+        read_spectrum(path, reader="not_a_reader", warn_unknown=False)
 
     message = str(caught.value)
-    assert "sdss" in message
-    assert "uves_pop" in message
-    assert "xshooter" in message
+    assert "sdss_spec" in message
+    assert "uves_pop_ascii" in message
+    assert "xshooter_merge1d" in message
 
 
 def test_io_smoketest_no_show_and_plot_dir(tmp_path):

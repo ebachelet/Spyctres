@@ -29,6 +29,10 @@ def _run_command(*args):
         (["-m", "Spyctres.cli", "inspect-spectrum", "--help"], "Minimal call:"),
         (["scripts/check_spyctres_setup.py", "--help"], "Setup diagnostic"),
         (["scripts/io_smoketest.py", "--help"], "Setup/ingestion diagnostic"),
+        (
+            ["scripts/benchmark_phoenix_runtime.py", "--help"],
+            "runtime benchmark",
+        ),
         (["examples/simple_phoenix_fit.py", "--help"], "Minimal fit_stellar_spectrum"),
         (
             ["examples/example1_quickstart.py", "--help"],

@@ -10,7 +10,7 @@ Example dry run using bundled data:
 
   python examples/branch_quickscan.py \
     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-    --instrument xshooter \
+    --reader xshooter_merge1d \
     --output-json /tmp/spyctres_branch_quickscan.json \
     --output-csv /tmp/spyctres_branch_quickscan.csv \
     --output-plot /tmp/spyctres_branch_quickscan.png
@@ -19,7 +19,7 @@ Example opt-in bounded fit run:
 
   python examples/branch_quickscan.py \
     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-    --instrument xshooter \
+    --reader xshooter_merge1d \
     --run-fits \
     --R 6200 \
     --max-branches 3 \
@@ -62,13 +62,13 @@ def build_parser():
             "Fast dry run:\n"
             "  python examples/branch_quickscan.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter --output-json /tmp/spyctres_branches.json "
+            "--reader xshooter_merge1d --output-json /tmp/spyctres_branches.json "
             "--output-csv /tmp/spyctres_branches.csv "
             "--output-plot /tmp/spyctres_branches.png\n\n"
             "Bounded opt-in fit run:\n"
             "  python examples/branch_quickscan.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter --run-fits --R 6200 --max-branches 3"
+            "--reader xshooter_merge1d --run-fits --R 6200 --max-branches 3"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -80,10 +80,11 @@ def build_parser():
         help="Spectrum to inspect. Defaults to the bundled X-SHOOTER UVB example.",
     )
     parser.add_argument(
-        "--instrument",
-        default="xshooter",
-        help="Registered Spyctres instrument reader. Default: xshooter.",
+        "--reader",
+        default="xshooter_merge1d",
+        help="Registered Spyctres reader. Default: xshooter_merge1d.",
     )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--output-json",
         default="/tmp/spyctres_branch_quickscan.json",
@@ -199,11 +200,15 @@ def _base_fit_kwargs(args):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
 
     # First canonicalize the input.  Everything downstream sees the same
-    # SpectrumSegment/SpectrumCollection structure regardless of instrument.
+    # SpectrumSegment/SpectrumCollection structure regardless of reader.
     print("Reading spectrum...", flush=True)
-    spectrum = read_spectrum(args.spectrum, instrument=args.instrument)
+    spectrum = read_spectrum(args.spectrum, reader=args.reader)
 
     # Build the branch plan, and optionally run a bounded number of PHOENIX
     # fits.  The default path is cheap and does not load the PHOENIX library.

@@ -138,6 +138,42 @@ def test_gaia_benchmark_fit_kwargs_use_reference_independent_search_box():
     assert fit_kwargs["error_floor_fraction"] == pytest.approx(0.0)
 
 
+def test_gaia_benchmark_summary_reports_engineering_gates_and_aggregate_targets():
+    payload = gbs.summarize_payload(
+        [
+            {
+                "status": "ok",
+                "validation_role": "standard",
+                "reference": {"teff": 5800.0, "logg": 4.4, "feh": 0.0},
+                "fit": {"teff": 5850.0, "logg": 4.5, "feh": 0.05},
+                "quality_flags": [],
+            },
+            {
+                "status": "ok",
+                "validation_role": "peculiar_stress",
+                "reference": {"teff": 4500.0, "logg": 1.5, "feh": -0.5},
+                "fit": {"teff": 5200.0, "logg": 3.0, "feh": 0.2},
+                "quality_flags": [],
+            },
+        ]
+    )
+
+    assert payload["ordinary_recovery_n"] == 1
+    assert payload["by_validation_role"] == {
+        "peculiar_stress": 1,
+        "standard": 1,
+    }
+    assert payload["per_star_engineering_gates"]["teff"]["acceptable_abs_delta"] == 300.0
+    assert payload["per_star_engineering_gates"]["rv_kms"]["acceptable_abs_delta"] == 5.0
+    teff_stats = payload["ordinary_aggregate_recovery"]["teff"]
+    assert teff_stats["n"] == 1
+    assert teff_stats["median_bias"] == pytest.approx(50.0)
+    assert (
+        payload["ordinary_aggregate_recovery"]["rv_kms"]["target_status"]
+        == "not_evaluated_no_reference_deltas"
+    )
+
+
 def test_gaia_benchmark_diagnostic_window_set_and_error_floor_are_explicit():
     args = SimpleNamespace(
         bounds_policy="benchmark_fgk",

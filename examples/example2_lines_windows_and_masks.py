@@ -70,7 +70,8 @@ def build_parser():
         default=str(EXAMPLE_UVB),
         help="Spectrum file. Defaults to the bundled X-SHOOTER UVB example.",
     )
-    parser.add_argument("--instrument", default="xshooter")
+    parser.add_argument("--reader", default="xshooter_merge1d")
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--line", default="Hgamma", help="Known line name.")
     parser.add_argument(
         "--mask-dibs",
@@ -97,9 +98,13 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
 
     print("Reading spectrum...", flush=True)
-    spec = sp.read_spectrum(args.spectrum, instrument=args.instrument)
+    spec = sp.read_spectrum(args.spectrum, reader=args.reader)
 
     print("Selecting diagnostic windows...", flush=True)
     windows = sp.select_diagnostic_windows(spec)

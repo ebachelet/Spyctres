@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from Spyctres import read_gaia_benchmark_ascii
-from Spyctres.io import get_instrument_info, read_spectrum
+from Spyctres.io import get_reader_info, read_spectrum
 
 
 def _write_gzip_text(path, text):
@@ -94,6 +94,7 @@ def test_gaia_benchmark_wave_medium_can_be_overridden(medium, tmp_path):
     "alias",
     [
         "gaia_benchmark",
+        "gbs_v3_ascii",
         "gaia-benchmark",
         "gbs",
         "gbs_v3",
@@ -105,17 +106,17 @@ def test_gaia_benchmark_reader_aliases(alias, tmp_path):
     path = tmp_path / "HIP79672_HARPS_1_R42KNorm.txt.gz"
     _write_gzip_text(path, "480.0 1.0 0.01\n480.1 1.1 0.02\n")
 
-    segment = read_spectrum(path, instrument=alias, warn_unknown=False)
+    segment = read_spectrum(path, reader=alias, warn_unknown=False)
 
     assert segment.meta["instrument"] == "Gaia FGK Benchmark Stars"
     assert segment.meta["resolution_R"] == pytest.approx(42000.0)
     assert segment.wave_medium == "air"
 
 
-def test_gaia_benchmark_instrument_info_is_discoverable():
-    info = get_instrument_info("gbs")
+def test_gaia_benchmark_reader_info_is_discoverable():
+    info = get_reader_info("gbs")
 
-    assert info.canonical_name == "gaia_benchmark"
+    assert info.canonical_name == "gbs_v3_ascii"
     assert "gbs" in info.aliases
     assert info.default_observer_frame == "barycentric"
     assert info.default_stellar_rest_status == "corrected"

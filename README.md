@@ -114,9 +114,9 @@ Use this checklist for a first local run from a source checkout.
    example spectrum are visible:
 
    ```bash
-   python scripts/check_spyctres_setup.py \
+   spyctres doctor \
      --spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --instrument xshooter
+     --reader xshooter_merge1d
    ```
 
    If PHOENIX is not configured yet, the checker reports the missing path as a
@@ -124,7 +124,7 @@ Use this checklist for a first local run from a source checkout.
    use:
 
    ```bash
-   python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
+   spyctres doctor --require-phoenix --skip-phoenix-scan
    ```
 
 4. Run the numbered quickstart. The default run is intentionally cheap: it
@@ -176,7 +176,7 @@ Use this checklist for a first local run from a source checkout.
    ```bash
    python examples/branch_quickscan.py \
      examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --instrument xshooter \
+     --reader xshooter_merge1d \
      --output-json /tmp/spyctres_branches.json \
      --output-csv /tmp/spyctres_branches.csv \
      --output-plot /tmp/spyctres_branches.png
@@ -268,7 +268,7 @@ import Spyctres as sp
 
 spec = sp.read_spectrum(
     "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
-    instrument="xshooter",
+    reader="xshooter_merge1d",
 )
 sp.plot_spectrum(spec)
 
@@ -290,7 +290,7 @@ For explicit mask review, keep warning and masking choices visible:
 ```python
 mask = sp.build_mask(spec, archive=True, tellurics="warn")
 sp.plot_spectrum(spec, mask=mask, show_nonstellar=True)
-result_masked = sp.fit_stellar_spectrum(spec, mask=mask, resolution_R=6200)
+result_masked = sp.fit_stellar_spectrum(spec, exclude_masks=mask, resolution_R=6200)
 comparison = sp.compare_fits(result, result_masked, labels=("baseline", "masked"))
 ```
 
@@ -331,7 +331,7 @@ For batches, start with the X-SHOOTER UVB throughput example:
 ```bash
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_batch_xshooter_uvb.json \
   --summary-csv /tmp/spyctres_batch_xshooter_uvb.csv \
   --resume
@@ -349,7 +349,7 @@ Minimal copy/paste sequence, assuming PHOENIX is already configured:
 ```bash
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --quicklook \
   --output-json /tmp/spyctres_batch_quick.json \
   --summary-csv /tmp/spyctres_batch_quick.csv \
@@ -357,7 +357,7 @@ python examples/batch_quickscan_then_refine.py \
 
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_batch_refined.json \
   --summary-csv /tmp/spyctres_batch_refined.csv \
   --resume
@@ -397,10 +397,10 @@ Readers return a generic `SpectrumSegment` object so that fitting code can remai
 You can inspect the registered reader assumptions from Python:
 
 ```python
-from Spyctres import get_instrument_info, list_instruments
+from Spyctres import get_reader_info, list_readers
 
-print(list_instruments())
-print(get_instrument_info("xshooter").to_metadata())
+print(list_readers())
+print(get_reader_info("xshooter_merge1d").to_metadata())
 ```
 
 This is a discoverability layer only: it documents what each reader accepts and
@@ -411,10 +411,10 @@ The installed package also provides a deliberately read-only CLI for discovery
 and ingestion checks:
 
 ```bash
-spyctres instruments
-spyctres instrument-info xshooter
+spyctres readers
+spyctres reader-info xshooter_merge1d
 spyctres inspect-spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter
+  --reader xshooter_merge1d
 ```
 
 If `spyctres` is not found after pulling a newer checkout, rerun
@@ -465,7 +465,7 @@ is immediately ready for a precision PHOENIX fit. Use:
 ```python
 from Spyctres import audit_spectrum_for_fit, read_spectrum
 
-spec = read_spectrum("my_spectrum.fits", instrument="sdss")
+spec = read_spectrum("my_spectrum.fits", reader="sdss_spec")
 audit = audit_spectrum_for_fit(
     spec,
     fit_windows=[(3800.0, 5200.0)],
@@ -544,7 +544,7 @@ from Spyctres import fit_stellar_spectrum
 
 result = fit_stellar_spectrum(
     "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
-    instrument="xshooter",
+    reader="xshooter_merge1d",
     phoenix_dir="/path/to/PHOENIXv2",
 )
 print(result["teff"], result["rv_kms"])
@@ -590,7 +590,7 @@ versioned report envelope that records the Spyctres version/git commit when
 available, path-sanitization policy, generated plot paths, PHOENIX
 interpolator-grid hashes, checksum policy, and a small provenance summary for
 reviewer-facing, web, or Django hand-off products. File-content checksums are
-opt-in: call `fit_stellar_spectrum(path, instrument=..., record_input_checksum=True)`
+opt-in: call `fit_stellar_spectrum(path, reader=..., record_input_checksum=True)`
 when you want the input-file SHA256 recorded for reproducibility.
 Existing low-level fitting functions keep returning dictionaries for backward
 compatibility.
@@ -625,7 +625,7 @@ explicit `--run-fits` flag:
 ```bash
 python examples/diagnostic_window_comparison.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_windows.json \
   --output-csv /tmp/spyctres_windows.csv \
   --output-plot /tmp/spyctres_windows.png

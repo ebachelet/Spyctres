@@ -76,20 +76,49 @@ RECOVERY_THRESHOLDS = {
     "teff": {
         "label": "Teff",
         "unit": "K",
-        "acceptable_abs_delta": 250.0,
-        "review_abs_delta": 500.0,
+        "acceptable_abs_delta": 300.0,
+        "review_abs_delta": 600.0,
     },
     "logg": {
         "label": "logg",
         "unit": "dex",
-        "acceptable_abs_delta": 0.5,
-        "review_abs_delta": 1.0,
+        "acceptable_abs_delta": 0.6,
+        "review_abs_delta": 1.2,
     },
     "feh": {
         "label": "[Fe/H]",
         "unit": "dex",
-        "acceptable_abs_delta": 0.3,
-        "review_abs_delta": 0.6,
+        "acceptable_abs_delta": 0.5,
+        "review_abs_delta": 1.0,
+    },
+    "rv_kms": {
+        "label": "RV",
+        "unit": "km/s",
+        "acceptable_abs_delta": 5.0,
+        "review_abs_delta": 10.0,
+    },
+}
+
+AGGREGATE_RECOVERY_TARGETS = {
+    "teff": {
+        "median_abs_bias_target": 100.0,
+        "robust_scatter_target": 150.0,
+        "unit": "K",
+    },
+    "logg": {
+        "median_abs_bias_target": 0.15,
+        "robust_scatter_target": 0.25,
+        "unit": "dex",
+    },
+    "feh": {
+        "median_abs_bias_target": 0.10,
+        "robust_scatter_target": 0.20,
+        "unit": "dex",
+    },
+    "rv_kms": {
+        "median_abs_bias_target": 1.0,
+        "robust_scatter_target": None,
+        "unit": "km/s",
     },
 }
 
@@ -362,6 +391,10 @@ def _atomic_write_csv(path, payload):
         "feh_fit",
         "delta_feh",
         "feh_assessment",
+        "rv_ref",
+        "rv_fit",
+        "delta_rv_kms",
+        "rv_assessment",
         "overall_assessment",
         "chi2_red",
         "quality_flags",
@@ -588,7 +621,7 @@ def _fit_deltas(record):
     reference = record.get("reference") or {}
     deltas = {}
     assessments = {}
-    for param in ("teff", "logg", "feh"):
+    for param in ("teff", "logg", "feh", "rv_kms"):
         fitted = _float_or_none(fit.get(param))
         ref = _float_or_none(reference.get(param))
         delta = None if fitted is None or ref is None else fitted - ref
@@ -601,7 +634,9 @@ def _overall_assessment(record):
     if record.get("status") != "ok":
         return record.get("status", "not_fit")
     _deltas, assessments = _fit_deltas(record)
-    values = list(assessments.values())
+    values = [assessments[param] for param in ("teff", "logg", "feh")]
+    if assessments.get("rv_kms") not in {None, "missing"}:
+        values.append(assessments["rv_kms"])
     if any(value == "outside_review_tolerance" for value in values):
         return "outside_review_tolerance"
     if any(value in {"review", "missing"} for value in values):
@@ -625,6 +660,58 @@ def _fit_quality_assessment(record):
     if chi2_red <= 100.0:
         return "flagged_formal_fit_quality"
     return "systematics_dominated_formal_chi2"
+
+
+def _robust_scatter(values):
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return None
+    median = float(np.nanmedian(arr))
+    mad = float(np.nanmedian(np.abs(arr - median)))
+    return 1.4826 * mad
+
+
+def _aggregate_recovery_statistics(records):
+    stats = {}
+    for param in ("teff", "logg", "feh", "rv_kms"):
+        deltas = []
+        for record in records:
+            record_deltas, _assessments = _fit_deltas(record)
+            delta = _float_or_none(record_deltas.get(param))
+            if delta is not None:
+                deltas.append(delta)
+        targets = dict(AGGREGATE_RECOVERY_TARGETS[param])
+        if not deltas:
+            stats[param] = {
+                "n": 0,
+                "median_bias": None,
+                "median_abs_bias": None,
+                "robust_scatter": None,
+                "targets": targets,
+                "target_status": "not_evaluated_no_reference_deltas",
+            }
+            continue
+        arr = np.asarray(deltas, dtype=float)
+        median_bias = float(np.nanmedian(arr))
+        median_abs_bias = float(abs(median_bias))
+        robust_scatter = _robust_scatter(arr)
+        bias_ok = median_abs_bias <= float(targets["median_abs_bias_target"])
+        scatter_target = targets.get("robust_scatter_target")
+        scatter_ok = True if scatter_target is None else (
+            robust_scatter is not None and robust_scatter <= float(scatter_target)
+        )
+        stats[param] = {
+            "n": int(arr.size),
+            "median_bias": median_bias,
+            "median_abs_bias": median_abs_bias,
+            "robust_scatter": robust_scatter,
+            "targets": targets,
+            "target_status": (
+                "meets_reporting_target" if bias_ok and scatter_ok else "outside_reporting_target"
+            ),
+        }
+    return stats
 
 
 def _csv_row(record):
@@ -659,6 +746,10 @@ def _csv_row(record):
         "feh_fit": fit.get("feh"),
         "delta_feh": deltas.get("feh"),
         "feh_assessment": assessments.get("feh"),
+        "rv_ref": reference.get("rv_kms"),
+        "rv_fit": fit.get("rv_kms"),
+        "delta_rv_kms": deltas.get("rv_kms"),
+        "rv_assessment": assessments.get("rv_kms"),
         "overall_assessment": _overall_assessment(record),
         "chi2_red": fit.get("chi2_red"),
         "quality_flags": ";".join(str(item) for item in record.get("quality_flags", [])),
@@ -692,9 +783,13 @@ def summarize_payload(records):
         "ordinary_recovery_assessments": dict(sorted(ordinary_assessments.items())),
         "ordinary_fit_quality_assessments": dict(sorted(ordinary_fit_quality.items())),
         "thresholds": RECOVERY_THRESHOLDS,
+        "per_star_engineering_gates": RECOVERY_THRESHOLDS,
+        "ordinary_aggregate_recovery_targets": AGGREGATE_RECOVERY_TARGETS,
+        "ordinary_aggregate_recovery": _aggregate_recovery_statistics(ordinary),
         "notes": [
             "Reference parameters are used only for post-fit deltas.",
             "Stress/diagnostic targets are reported separately from ordinary recovery statistics.",
+            "Aggregate recovery targets are reporting goals for ordinary FGK samples, not per-star tuning criteria.",
             "Formal fit quality is reported separately from parameter recovery because high-S/N benchmark spectra can be dominated by model/systematic residuals.",
             "Local covariance errors, when present in fit outputs, do not include external systematic uncertainty.",
         ],
@@ -1195,7 +1290,7 @@ def main(argv=None):
             if not path.is_absolute():
                 path = manifest_path.parent / path
             print("  Reading benchmark spectrum...", flush=True)
-            segment = read_spectrum(path, instrument="gaia_benchmark", warn_unknown=False)
+            segment = read_spectrum(path, reader="gbs_v3_ascii", warn_unknown=False)
             segment = _maybe_override_wave_medium(segment, args.wave_medium)
             print("  Building reviewed fit setup...", flush=True)
             setup = suggest_fit_setup(

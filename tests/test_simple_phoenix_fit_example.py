@@ -129,7 +129,7 @@ def test_append_exclusion_mask_preserves_existing_masks():
 def test_reader_kwargs_use_stellar_strict_for_sdss_auto_policy():
     module = _load_example_module()
     args = SimpleNamespace(
-        instrument="sdss",
+        reader="sdss_spec",
         sdss_mask_policy="auto",
         uves_err_column=None,
     )
@@ -138,10 +138,10 @@ def test_reader_kwargs_use_stellar_strict_for_sdss_auto_policy():
         "sdss_mask_policy": "stellar_strict"
     }
 
-    args.instrument = "xshooter"
+    args.reader = "xshooter_merge1d"
     assert module._reader_kwargs_from_args(args) == {}
 
-    args.instrument = "uves-pop"
+    args.reader = "uves-pop"
     args.uves_err_column = 2
     assert module._reader_kwargs_from_args(args) == {"err_column": 2}
 
@@ -213,8 +213,8 @@ def test_parser_accepts_optional_versioned_report_output(tmp_path):
     args = module.build_parser().parse_args(
         [
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
-            "--instrument",
-            "xshooter",
+            "--reader",
+            "xshooter_merge1d",
             "--output-json",
             str(tmp_path / "compact.json"),
             "--output-report-json",

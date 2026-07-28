@@ -1,6 +1,7 @@
 from .matplotlib_setup import ensure_matplotlib_config_dir
 ensure_matplotlib_config_dir()
 
+from ._version import __version__
 from .api import (
     classify_spectrum,
     fit_phoenix_spectrum,
@@ -119,10 +120,13 @@ from .waveutils import convert_segment_wavelength_medium, convert_wavelength_med
 from .fitting import FitProgressEvent
 from .io import (
     InstrumentInfo,
+    ReaderInfo,
     SpectrumCollection,
     SpectrumSegment,
     get_instrument_info,
+    get_reader_info,
     list_instruments,
+    list_readers,
     read_gaia_benchmark_ascii,
     read_sdss_spec,
     read_spectrum,
@@ -131,12 +135,14 @@ from .io import (
 )
 
 __all__ = [
+    "__version__",
     "fit_phoenix_spectrum", "fit_stellar_spectrum", "classify_spectrum",
     "input_checksum_provenance",
     "describe_public_function", "describe_public_function_group",
     "format_public_api_guide", "format_public_function_help",
     "list_public_functions", "list_public_function_groups",
-    "read_spectrum", "list_instruments", "get_instrument_info",
+    "read_spectrum", "list_readers", "get_reader_info",
+    "ReaderInfo", "list_instruments", "get_instrument_info",
     "InstrumentInfo", "read_uves_pop_ascii", "read_gaia_benchmark_ascii",
     "read_sdss_spec",
     "sdss_wdisp_to_resolution_descriptor",

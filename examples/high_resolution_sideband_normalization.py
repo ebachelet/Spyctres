@@ -13,7 +13,7 @@ Example
 -------
 python examples/high_resolution_sideband_normalization.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --line-center 4861.33 \
   --wmin 4830 --wmax 4895 \
   --sideband-left -55 -30 \
@@ -51,14 +51,15 @@ def build_parser():
             "Example:\n"
             "  python examples/high_resolution_sideband_normalization.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter --line-center 4861.33 "
+            "--reader xshooter_merge1d --line-center 4861.33 "
             "--wmin 4830 --wmax 4895 --no-show"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
     parser.add_argument("spectrum", help="Input reduced one-dimensional spectrum.")
-    parser.add_argument("--instrument", required=True, help="Registered reader name.")
+    parser.add_argument("--reader", default=None, help="Registered reader name.")
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--line-center", type=float, required=True, help="Line center in the data wavelength medium, Angstrom.")
     parser.add_argument("--line-label", default="diagnostic line")
     parser.add_argument("--wmin", type=float, required=True, help="Window minimum in Angstrom.")
@@ -97,11 +98,17 @@ def _coerce_one_segment(spectrum):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.reader is not None and args.instrument is not None:
+        raise ValueError("Pass --reader or --instrument, not both.")
+    if args.instrument is not None:
+        args.reader = args.instrument
+    if args.reader is None:
+        raise ValueError("A spectrum reader is required; pass --reader xshooter_merge1d.")
     if args.wmax <= args.wmin:
         raise ValueError("--wmax must be greater than --wmin.")
 
     print("Reading spectrum...", flush=True)
-    seg = _coerce_one_segment(read_spectrum(args.spectrum, instrument=args.instrument))
+    seg = _coerce_one_segment(read_spectrum(args.spectrum, reader=args.reader))
     window = seg.window(args.wmin, args.wmax, name=args.line_label)
     if np.sum(window.mask) < 6:
         raise ValueError("Selected line window has too few usable pixels.")

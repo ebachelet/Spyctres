@@ -36,7 +36,7 @@ The beginner Python mental model is deliberately one import:
 ```python
 import Spyctres as sp
 
-spec = sp.read_spectrum("examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits", instrument="xshooter")
+spec = sp.read_spectrum("examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits", reader="xshooter_merge1d")
 sp.plot_spectrum(spec)
 setup = sp.suggest_fit_setup(spec)  # inspect suggested windows, risks, and assumptions
 setup.summary()
@@ -94,7 +94,7 @@ report, and can save compact JSON plus a diagnostic referee plot:
 ```bash
 python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_result.json \
   --output-report-json /tmp/spyctres_fit_report.json \
   --output-plot /tmp/spyctres_fit.png
@@ -145,7 +145,7 @@ UVES-POP:
 
 ```bash
 python scripts/io_smoketest.py \
-  --instrument gaia_benchmark \
+  --reader gbs_v3_ascii \
   examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz \
   --no-show \
   --plot-dir /tmp/spyctres_io_plots
@@ -259,7 +259,7 @@ coverage, and writes JSON/CSV/PNG summaries without loading PHOENIX.
 ```bash
 python examples/branch_quickscan.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_branches.json \
   --output-csv /tmp/spyctres_branches.csv \
   --output-plot /tmp/spyctres_branches.png
@@ -271,7 +271,7 @@ bounded branch-specific fits:
 ```bash
 python examples/branch_quickscan.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --run-fits \
   --R 6200 \
   --max-branches 3 \
@@ -296,7 +296,7 @@ X-SHOOTER fitting:
 ```bash
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_batch_xshooter_uvb.json \
   --summary-csv /tmp/spyctres_batch_xshooter_uvb.csv \
   --resume
@@ -308,7 +308,7 @@ For a multi-file batch using bundled spectra, pass several packaged files:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_VIS_TELL_CORR.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_batch.json \
   --summary-csv /tmp/spyctres_batch.csv \
   --resume
@@ -324,7 +324,7 @@ Minimal reproduction sequence, assuming PHOENIX is already configured:
 ```bash
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --quicklook \
   --output-json /tmp/spyctres_batch_quick.json \
   --summary-csv /tmp/spyctres_batch_quick.csv \
@@ -332,7 +332,7 @@ python examples/batch_quickscan_then_refine.py \
 
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_batch_refined.json \
   --summary-csv /tmp/spyctres_batch_refined.csv \
   --resume
@@ -413,7 +413,7 @@ PHOENIX unless `--run-fits` is supplied.
 ```bash
 python examples/diagnostic_window_comparison.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_windows.json \
   --output-csv /tmp/spyctres_windows.csv \
   --output-plot /tmp/spyctres_windows.png
@@ -429,7 +429,7 @@ summary across window choices:
 ```bash
 python examples/diagnostic_window_comparison.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --run-fits \
   --R 6200 \
   --max-comparisons 4 \
@@ -462,7 +462,7 @@ not a PHOENIX atmospheric-parameter fit:
 ```bash
 python examples/high_resolution_sideband_normalization.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --line-label Hbeta \
   --line-center 4861.33 \
   --wmin 4830 --wmax 4895 \
@@ -809,7 +809,7 @@ catalog overlaps but keeps the stellar fit unchanged:
 ```bash
 python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_default.json \
   --output-plot /tmp/spyctres_default.png \
   --no-show
@@ -820,7 +820,7 @@ The second run applies the named DIB masks explicitly:
 ```bash
 python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --mask-dibs \
   --output-json /tmp/spyctres_mask_dibs.json \
   --output-plot /tmp/spyctres_mask_dibs.png \
@@ -984,6 +984,6 @@ To add a new instrument:
 - make that function return a `SpectrumSegment`
 - register the reader under one or more aliases in the read_spectrum registry,
   including a short `InstrumentInfo` description so users can inspect the
-  reader assumptions with `list_instruments()` and `get_instrument_info()`
+  reader assumptions with `list_readers()` and `get_reader_info()`
 
 Instrument-specific I/O belongs in `Spyctres/io.py`, while the fitter itself operates on generic `SpectrumSegment` objects.

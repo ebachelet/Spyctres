@@ -19,7 +19,7 @@ The public path should remain simple:
 ```python
 from Spyctres import read_spectrum, suggest_fit_setup, fit_stellar_spectrum, plot_fit_referee
 
-spec = read_spectrum("my_spectrum.fits", instrument="xshooter")
+spec = read_spectrum("my_spectrum.fits", reader="xshooter_merge1d")
 setup = suggest_fit_setup(spec)  # inspect windows, assumptions, readiness, and actions
 setup.summary()
 result = fit_stellar_spectrum(spec, model="phoenix", setup=setup)

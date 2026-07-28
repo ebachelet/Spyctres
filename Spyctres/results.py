@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
 import json
 import os
@@ -10,14 +11,19 @@ import subprocess
 import numpy as np
 
 from ._serialization import atomic_write_json, json_safe as _jsonable
+from ._version import __version__ as PACKAGE_VERSION
 
 
 FIT_REPORT_SCHEMA_VERSION = 1
 FIT_RESULT_PAYLOAD_SCHEMA_VERSION = 1
 FIT_REPORT_TYPE = "spyctres.fit_result_report"
+FIT_REPORT_SCHEMA_NAME = "spyctres.fit_result_report"
+FIT_REPORT_SCHEMA_STATUS = "experimental"
 
 
 def _spyctres_version():
+    if PACKAGE_VERSION:
+        return str(PACKAGE_VERSION)
     try:
         return importlib_metadata.version("Spyctres")
     except importlib_metadata.PackageNotFoundError:
@@ -140,6 +146,18 @@ def _first_present(*values):
     return None
 
 
+def _format_optional(value, precision=5):
+    if value is None:
+        return "n/a"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not np.isfinite(number):
+        return "n/a"
+    return "{0:.{1}g}".format(number, int(precision))
+
+
 def _as_result_payload(result):
     if isinstance(result, PhoenixFitResult):
         return result.to_dict(include_arrays=False)
@@ -225,6 +243,7 @@ def _fit_report_provenance_summary(payload):
             "model_backend": model_backend,
             "fit_setup_source": provenance.get("fit_setup_source"),
             "fit_setup_hash": setup_hash,
+            "reader": provenance.get("reader"),
             "instrument": provenance.get("instrument"),
             "input_was_path": provenance.get("input_was_path"),
             "input_checksum_policy": provenance.get("input_checksum_policy"),
@@ -1164,9 +1183,14 @@ class PhoenixFitResult(Mapping):
             relative_to=relative_to,
         )
         report = {
+            "schema_name": FIT_REPORT_SCHEMA_NAME,
+            "schema_status": FIT_REPORT_SCHEMA_STATUS,
             "schema_version": FIT_REPORT_SCHEMA_VERSION,
             "report_type": FIT_REPORT_TYPE,
             "result_payload_schema_version": FIT_RESULT_PAYLOAD_SCHEMA_VERSION,
+            "created_utc": datetime.now(timezone.utc).replace(
+                microsecond=0
+            ).isoformat().replace("+00:00", "Z"),
             "spyctres": {
                 "version": _spyctres_version(),
                 "git_commit": _spyctres_git_commit(),
@@ -1196,6 +1220,144 @@ class PhoenixFitResult(Mapping):
     def quality_report_text(self):
         """Return a compact human-readable fit-quality summary."""
         return format_fit_quality_report(self)
+
+    def compact_summary(self):
+        """Return a notebook-friendly, JSON-safe fit summary.
+
+        ``PhoenixFitResult.summary`` is the historic dictionary payload, so the
+        callable notebook helper uses a distinct name rather than replacing
+        that public attribute.
+        """
+        payload = self.to_dict(include_arrays=False)
+        provenance_summary = _fit_report_provenance_summary(payload)
+        fit_setup = payload.get("fit_setup") or {}
+        readiness = fit_setup.get("readiness") if isinstance(fit_setup, Mapping) else {}
+        if not isinstance(readiness, Mapping):
+            readiness = {}
+        exploratory = (
+            fit_setup.get("exploratory_override")
+            if isinstance(fit_setup, Mapping)
+            else None
+        )
+        quality = self.quality_report()
+        flags = list(quality.get("quality_flags") or [])
+        review_flags = [
+            str(flag) for flag in flags if str(flag).lower() not in {"ok", "none"}
+        ]
+        uncertainty = quality.get("parameter_uncertainty")
+        if isinstance(uncertainty, Mapping):
+            uncertainty_status = uncertainty.get("status") or uncertainty.get("method")
+        elif uncertainty is None:
+            uncertainty_status = "not_reported"
+        else:
+            uncertainty_status = str(uncertainty)
+
+        if exploratory:
+            interpretation = "exploratory_not_publication_valid"
+            sentence = (
+                "Fit completed under an explicit exploratory override; use it "
+                "for diagnosis, not publication inference."
+            )
+        elif readiness.get("ready_for_intent") is False:
+            interpretation = "computed_but_interpretation_blocked"
+            sentence = (
+                "Fit completed, but setup/readiness blockers must be reviewed "
+                "before interpreting the parameters."
+            )
+        elif review_flags:
+            interpretation = "review_quality_flags"
+            sentence = (
+                "Fit completed, but quality flags indicate the result needs "
+                "human review before scientific use."
+            )
+        else:
+            interpretation = "reviewed_first_pass"
+            sentence = (
+                "Fit completed as a reviewed first-pass estimate; inspect "
+                "diagnostic plots before using it quantitatively."
+            )
+
+        return _jsonable(
+            {
+                "success": payload.get("success"),
+                "teff": payload.get("teff"),
+                "logg": payload.get("logg"),
+                "feh": payload.get("feh"),
+                "rv_kms": payload.get("rv_kms"),
+                "chi2_red": quality.get("reduced_chi2"),
+                "fit_intent": readiness.get("intent")
+                or provenance_summary.get("readiness_intent"),
+                "interpretation_status": interpretation,
+                "interpretation": sentence,
+                "uncertainty_status": uncertainty_status,
+                "reader": provenance_summary.get("reader")
+                or provenance_summary.get("instrument"),
+                "resolution_source": provenance_summary.get("resolution_source"),
+                "assumed_resolution_R": provenance_summary.get("assumed_resolution_R"),
+                "fitted_pixels": quality.get("n_points"),
+                "quality_flags": flags,
+                "setup_hash": provenance_summary.get("fit_setup_hash"),
+            }
+        )
+
+    def summary_text(self):
+        """Return a compact plain-language result summary for notebooks."""
+        summary = self.compact_summary()
+        pieces = [
+            "Spyctres PHOENIX fit",
+            "  Teff={0} K, logg={1}, [Fe/H]={2}, RV={3} km/s".format(
+                _format_optional(summary.get("teff")),
+                _format_optional(summary.get("logg")),
+                _format_optional(summary.get("feh")),
+                _format_optional(summary.get("rv_kms")),
+            ),
+        ]
+        if summary.get("chi2_red") is not None:
+            pieces.append("  chi2_red={0}".format(_format_optional(summary["chi2_red"])))
+        pieces.append(
+            "  intent={0}; status={1}".format(
+                summary.get("fit_intent"),
+                summary.get("interpretation_status"),
+            )
+        )
+        pieces.append(
+            "  reader={0}; resolution_source={1}".format(
+                summary.get("reader") or "unknown",
+                summary.get("resolution_source") or "unknown",
+            )
+        )
+        if summary.get("assumed_resolution_R") is not None:
+            pieces.append(
+                "  assumed R={0}".format(
+                    _format_optional(summary.get("assumed_resolution_R"))
+                )
+            )
+        pieces.append(
+            "  fitted_pixels={0}; uncertainty={1}; flags={2}".format(
+                summary.get("fitted_pixels"),
+                summary.get("uncertainty_status"),
+                ", ".join(summary.get("quality_flags") or ["none"]),
+            )
+        )
+        if summary.get("setup_hash"):
+            pieces.append("  setup_hash={0}".format(str(summary["setup_hash"])[:12]))
+        pieces.append("  {0}".format(summary.get("interpretation")))
+        return "\n".join(pieces)
+
+    def __repr__(self):
+        summary = self.compact_summary()
+        return (
+            "PhoenixFitResult(success={success!r}, teff={teff}, logg={logg}, "
+            "feh={feh}, rv_kms={rv}, chi2_red={chi2}, status={status!r})"
+        ).format(
+            success=summary.get("success"),
+            teff=_format_optional(summary.get("teff")),
+            logg=_format_optional(summary.get("logg")),
+            feh=_format_optional(summary.get("feh")),
+            rv=_format_optional(summary.get("rv_kms")),
+            chi2=_format_optional(summary.get("chi2_red")),
+            status=summary.get("interpretation_status"),
+        )
 
     def to_json(self, **kwargs):
         kwargs.setdefault("allow_nan", False)

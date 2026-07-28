@@ -4,7 +4,8 @@
 Learning goal
 -------------
 This is the shortest beginner path through the public Spyctres API.  It uses
-the bundled X-SHOOTER UVB spectrum by default and deliberately separates
+the bundled 18 Sco / HIP79672 Gaia FGK Benchmark Stars spectrum by default and
+deliberately separates
 "review the setup" from "launch the PHOENIX fit".
 
 What this demonstrates
@@ -44,17 +45,19 @@ import Spyctres as sp
 from Spyctres._serialization import atomic_write_json
 
 
-EXAMPLE_UVB = (
+EXAMPLE_BENCHMARK = (
     Path(__file__).resolve().parent
     / "data"
-    / "TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits"
+    / "gaia_benchmark"
+    / "HIP79672_HARPS_1_R42KNorm.txt.gz"
 )
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Example 1 quickstart: read a bundled spectrum, plot/inspect it, "
+            "Example 1 quickstart: read a clean bundled benchmark spectrum, "
+            "plot/inspect it, "
             "review a FitSetup, and optionally run the reviewed PHOENIX fit."
         ),
         epilog=(
@@ -73,14 +76,15 @@ def build_parser():
     parser.add_argument(
         "spectrum",
         nargs="?",
-        default=str(EXAMPLE_UVB),
-        help="Spectrum file. Defaults to the bundled X-SHOOTER UVB example.",
+        default=str(EXAMPLE_BENCHMARK),
+        help="Spectrum file. Defaults to the bundled 18 Sco benchmark spectrum.",
     )
     parser.add_argument(
-        "--instrument",
-        default="xshooter",
-        help="Registered Spyctres reader. Default: xshooter.",
+        "--reader",
+        default="gbs_v3_ascii",
+        help="Registered Spyctres reader. Default: gbs_v3_ascii.",
     )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
         "--defaults-mode",
@@ -129,9 +133,13 @@ def _progress(event):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "gbs_v3_ascii":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
 
     print("Reading spectrum...", flush=True)
-    spec = sp.read_spectrum(args.spectrum, instrument=args.instrument)
+    spec = sp.read_spectrum(args.spectrum, reader=args.reader)
 
     # First-look plot: this shows what was loaded, before any fit is attempted.
     print("Plotting/inspecting loaded spectrum...", flush=True)
@@ -153,7 +161,7 @@ def main(argv=None):
     payload = {
         "example": "example1_quickstart",
         "spectrum": str(args.spectrum),
-        "instrument": str(args.instrument),
+        "reader": str(args.reader),
         "setup": setup.to_dict(),
     }
 

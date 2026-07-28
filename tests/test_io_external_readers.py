@@ -108,10 +108,10 @@ def test_uves_pop_metadata_records_unknown_frames_and_nominal_resolution(tmp_pat
     segment = read_uves_pop_ascii(path)
 
     assert segment.wave_medium == "unknown"
-    assert segment.observer_frame == "heliocentric"
+    assert segment.observer_frame == "unknown"
     assert segment.stellar_rest_status == "unknown"
     assert segment.meta["wave_medium"] == "unknown"
-    assert segment.meta["observer_frame"] == "heliocentric"
+    assert segment.meta["observer_frame"] == "unknown"
     assert segment.meta["stellar_rest_status"] == "unknown"
     assert segment.resolution.quantity == "R"
     assert segment.resolution.value == pytest.approx(80000.0)
@@ -274,12 +274,12 @@ def test_read_spectrum_external_reader_aliases(tmp_path):
         and_mask=[0, 0],
     )
 
-    for alias in ("uves_pop", "uves-pop", "uvespop"):
-        segment = read_spectrum(uves_path, instrument=alias, warn_unknown=False)
+    for alias in ("uves_pop_ascii", "uves_pop", "uves-pop", "uvespop"):
+        segment = read_spectrum(uves_path, reader=alias, warn_unknown=False)
         assert np.allclose(segment.wave, [5000.0, 5001.0])
         assert segment.meta["ingestion"][-1]["source"] == "reader:{0}".format(alias)
 
-    for alias in ("sdss", "sdss_spec", "segue"):
-        segment = read_spectrum(sdss_path, instrument=alias, warn_unknown=False)
+    for alias in ("sdss_spec", "sdss", "segue"):
+        segment = read_spectrum(sdss_path, reader=alias, warn_unknown=False)
         assert np.allclose(segment.wave, [4100.0, 4101.0])
         assert segment.meta["ingestion"][-1]["source"] == "reader:{0}".format(alias)

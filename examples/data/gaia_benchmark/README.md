@@ -9,7 +9,7 @@ Use the dedicated reader:
 
 ```bash
 python scripts/io_smoketest.py \
-  --instrument gaia_benchmark \
+  --reader gbs_v3_ascii \
   examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz \
   --no-show \
   --plot-dir /tmp/spyctres_io_plots

@@ -30,7 +30,7 @@ Example
 -------
 python examples/simple_phoenix_fit.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --instrument xshooter \
+  --reader xshooter_merge1d \
   --output-json /tmp/spyctres_result.json \
   --output-report-json /tmp/spyctres_fit_report.json \
   --output-plot /tmp/spyctres_fit.png
@@ -99,7 +99,7 @@ def build_parser():
             "Example:\n"
             "  python examples/simple_phoenix_fit.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter "
+            "--reader xshooter_merge1d "
             "--output-json /tmp/spyctres_result.json "
             "--output-report-json /tmp/spyctres_fit_report.json "
             "--output-plot /tmp/spyctres_fit.png\n\n"
@@ -122,7 +122,8 @@ def build_parser():
     output_group = parser.add_argument_group("plots and outputs")
 
     input_group.add_argument("spectrum", help="Reduced one-dimensional spectrum file.")
-    input_group.add_argument("--instrument", required=True, help="Registered reader name.")
+    input_group.add_argument("--reader", default=None, help="Registered reader name.")
+    input_group.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     reader_group.add_argument(
         "--sdss-mask-policy",
         choices=("auto", "ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
@@ -453,14 +454,14 @@ def _append_exclusion_mask(fit_kwargs, mask_spec):
 
 
 def _reader_kwargs_from_args(args):
-    instrument = str(args.instrument).strip().lower()
+    reader = str(args.reader).strip().lower()
     kwargs = {}
-    if instrument in {"sdss", "sdss_spec", "segue"}:
+    if reader in {"sdss", "sdss_spec", "segue"}:
         policy = args.sdss_mask_policy
         if policy == "auto":
             policy = "stellar_strict"
         kwargs["sdss_mask_policy"] = policy
-    if instrument in {"uves_pop", "uves-pop", "uvespop"}:
+    if reader in {"uves_pop_ascii", "uves_pop", "uves-pop", "uvespop"}:
         err_column = getattr(args, "uves_err_column", None)
         if err_column is not None:
             kwargs["err_column"] = int(err_column)
@@ -920,6 +921,12 @@ def _build_line_diagnostic_plots(args, spectrum, result):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.reader is not None and args.instrument is not None:
+        raise ValueError("Pass --reader or --instrument, not both.")
+    if args.instrument is not None:
+        args.reader = args.instrument
+    if args.reader is None:
+        raise ValueError("A spectrum reader is required; pass --reader xshooter_merge1d.")
     print("Reading spectrum...", flush=True)
     reader_kwargs = _reader_kwargs_from_args(args)
     if reader_kwargs:
@@ -931,7 +938,7 @@ def main(argv=None):
         )
     spectrum = read_spectrum(
         args.spectrum,
-        instrument=args.instrument,
+        reader=args.reader,
         warn_unknown=(args.wave_medium == "keep"),
         **reader_kwargs,
     )

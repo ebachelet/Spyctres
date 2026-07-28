@@ -65,7 +65,7 @@ def _extract_fits_header_provenance(headers, keys):
 
 
 @dataclass(frozen=True)
-class InstrumentInfo:
+class ReaderInfo:
     """Structured metadata for a registered spectrum reader.
 
     The registry is intentionally descriptive rather than corrective: it tells
@@ -97,9 +97,9 @@ class InstrumentInfo:
             dict.fromkeys(_normalize_instrument_key(alias) for alias in self.aliases)
         )
         if not canonical:
-            raise ValueError("InstrumentInfo.canonical_name must be non-empty.")
+            raise ValueError("ReaderInfo.canonical_name must be non-empty.")
         if not aliases:
-            raise ValueError("InstrumentInfo.aliases must be non-empty.")
+            raise ValueError("ReaderInfo.aliases must be non-empty.")
         if canonical not in aliases:
             aliases = (canonical,) + aliases
         object.__setattr__(self, "canonical_name", canonical)
@@ -119,6 +119,7 @@ class InstrumentInfo:
         """Return a JSON-safe dictionary representation."""
         return {
             "canonical_name": self.canonical_name,
+            "canonical_reader": self.canonical_name,
             "aliases": list(self.aliases),
             "reader_function": getattr(self.reader, "__name__", str(self.reader)),
             "expected_file_type": self.expected_file_type,
@@ -136,6 +137,9 @@ class InstrumentInfo:
             "required_optional_dependencies": list(self.required_optional_dependencies),
             "notes": self.notes,
         }
+
+
+InstrumentInfo = ReaderInfo
 
 
 @dataclass(frozen=True)
@@ -2157,8 +2161,8 @@ def read_uves_pop_ascii(
         "fit_readiness_role": readiness_role,
         "wave_unit_input": unit_input,
         "wave_medium": "unknown",
-        "wave_frame": "heliocentric",
-        "observer_frame": "heliocentric",
+        "wave_frame": "unknown",
+        "observer_frame": "unknown",
         "stellar_rest_status": "unknown",
         "resolution_R": 80000.0,
         "resolution_note": (
@@ -2193,9 +2197,9 @@ def read_uves_pop_ascii(
         mask=mask,
         meta=meta,
         wave_medium="unknown",
-        wave_frame="heliocentric",
+        wave_frame="unknown",
         name=name or os.path.basename(path),
-        observer_frame="heliocentric",
+        observer_frame="unknown",
         stellar_rest_status="unknown",
         resolution=ResolutionDescriptor(
             quantity="R",
@@ -2688,8 +2692,10 @@ def read_sdss_spec(
     
 
 READERS = {}
-INSTRUMENT_REGISTRY = {}
-_ALIAS_TO_INSTRUMENT = {}
+READER_REGISTRY = {}
+INSTRUMENT_REGISTRY = READER_REGISTRY
+_ALIAS_TO_READER = {}
+_ALIAS_TO_INSTRUMENT = _ALIAS_TO_READER
 
 
 def _normalize_instrument_key(name):
@@ -2697,10 +2703,10 @@ def _normalize_instrument_key(name):
 
 
 def register_reader(names, func, **metadata):
-    """Register one reader function under one or more instrument aliases.
+    """Register one spectrum reader under one or more aliases.
 
     This populates both the legacy ``READERS`` alias map and the structured
-    ``INSTRUMENT_REGISTRY`` used by discoverability helpers.
+    ``READER_REGISTRY`` used by discoverability helpers.
     """
     if isinstance(names, str):
         names = [names]
@@ -2714,66 +2720,90 @@ def register_reader(names, func, **metadata):
     canonical_name = _normalize_instrument_key(
         metadata.pop("canonical_name", aliases[0])
     )
-    info = InstrumentInfo(
+    info = ReaderInfo(
         canonical_name=canonical_name,
         aliases=aliases,
         reader=func,
         **metadata,
     )
-    if canonical_name in INSTRUMENT_REGISTRY:
-        raise ValueError("Instrument {0!r} is already registered.".format(canonical_name))
-    INSTRUMENT_REGISTRY[canonical_name] = info
+    if canonical_name in READER_REGISTRY:
+        raise ValueError("Reader {0!r} is already registered.".format(canonical_name))
+    READER_REGISTRY[canonical_name] = info
     for alias in info.aliases:
         if alias in READERS:
-            raise ValueError("Instrument alias {0!r} is already registered.".format(alias))
+            raise ValueError("Reader alias {0!r} is already registered.".format(alias))
         READERS[alias] = func
-        _ALIAS_TO_INSTRUMENT[alias] = canonical_name
+        _ALIAS_TO_READER[alias] = canonical_name
 
 
-def list_instruments(include_aliases=False):
-    """Return registered instrument names.
+def list_readers(include_aliases=False):
+    """Return registered reader names.
 
     Parameters
     ----------
     include_aliases : bool, optional
-        If ``False`` (default), return canonical instrument names. If ``True``,
+        If ``False`` (default), return canonical reader names. If ``True``,
         return all accepted aliases understood by ``read_spectrum``.
     """
     if include_aliases:
         return sorted(READERS)
-    return sorted(INSTRUMENT_REGISTRY)
+    return sorted(READER_REGISTRY)
 
 
-def get_instrument_info(instrument):
-    """Return structured metadata for a registered instrument or alias."""
-    key = _normalize_instrument_key(instrument)
-    canonical = _ALIAS_TO_INSTRUMENT.get(key, key)
-    info = INSTRUMENT_REGISTRY.get(canonical)
+def get_reader_info(reader):
+    """Return structured metadata for a registered reader or alias."""
+    key = _normalize_instrument_key(reader)
+    canonical = _ALIAS_TO_READER.get(key, key)
+    info = READER_REGISTRY.get(canonical)
     if info is None:
         raise ValueError(
-            "Unknown instrument '{0}'. Supported instruments: {1}. "
+            "Unknown reader '{0}'. Supported readers: {1}. "
             "Accepted aliases: {2}.".format(
-                instrument,
-                ", ".join(list_instruments()),
-                ", ".join(list_instruments(include_aliases=True)),
+                reader,
+                ", ".join(list_readers()),
+                ", ".join(list_readers(include_aliases=True)),
             )
         )
     return info
 
 
-def _supported_instrument_message():
+def list_instruments(include_aliases=False):
+    """Deprecated alias for :func:`list_readers`."""
+    warnings.warn(
+        "list_instruments() is deprecated; use list_readers().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return list_readers(include_aliases=include_aliases)
+
+
+def get_instrument_info(instrument):
+    """Deprecated alias for :func:`get_reader_info`."""
+    warnings.warn(
+        "get_instrument_info() is deprecated; use get_reader_info().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return get_reader_info(instrument)
+
+
+def _supported_reader_message():
     return (
-        "Supported instruments: {0}. Accepted aliases: {1}.".format(
-            ", ".join(list_instruments()),
-            ", ".join(list_instruments(include_aliases=True)),
+        "Supported readers: {0}. Accepted aliases: {1}.".format(
+            ", ".join(list_readers()),
+            ", ".join(list_readers(include_aliases=True)),
         )
     )
+
+
+def _supported_instrument_message():
+    return _supported_reader_message()
 
 
 register_reader(
     ["pepsi", "pepsi_nor", "pepsi-1d", "pepsi1d"],
     read_pepsi_nor,
-    canonical_name="pepsi",
+    canonical_name="pepsi_nor",
     expected_file_type="PEPSI .nor FITS binary table",
     wavelength_location="Arg table column",
     flux_column="Fun",
@@ -2793,7 +2823,7 @@ register_reader(
 register_reader(
     ["xsl", "xsl_dr3", "xsl-dr3"],
     read_xsl_dr3,
-    canonical_name="xsl",
+    canonical_name="xsl_dr3",
     expected_file_type="X-shooter Spectral Library DR3 merged FITS table",
     wavelength_location="WAVE table column",
     flux_column="FLUX or corrected flux variant",
@@ -2810,7 +2840,7 @@ register_reader(
 register_reader(
     ["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"],
     read_xshooter_1d,
-    canonical_name="xshooter",
+    canonical_name="xshooter_merge1d",
     expected_file_type="merged 1D X-SHOOTER FITS image product",
     wavelength_location="linear FITS WCS from CRVAL1/CDELT1/CRPIX1",
     flux_column="selected image HDU",
@@ -2827,7 +2857,7 @@ register_reader(
 register_reader(
     ["floyds", "floyds_csv", "lco_floyds"],
     read_floyds_csv,
-    canonical_name="floyds",
+    canonical_name="floyds_csv",
     expected_file_type="reduced FLOYDS ASCII/CSV spectrum",
     wavelength_location="wavelength-like named column",
     flux_column="flux-like named column",
@@ -2843,7 +2873,7 @@ register_reader(
 register_reader(
     ["gemini", "gmos", "gemini_gmos", "gmos_ascii", "gemini_ascii"],
     read_gemini_gmos_ascii,
-    canonical_name="gemini",
+    canonical_name="gemini_ascii",
     expected_file_type="Gemini/GMOS IRAF wspectext-like ASCII spectrum",
     wavelength_location="first numeric column",
     flux_column="second numeric column",
@@ -2859,14 +2889,14 @@ register_reader(
 register_reader(
     ["uves_pop", "uves-pop", "uvespop"],
     read_uves_pop_ascii,
-    canonical_name="uves_pop",
+    canonical_name="uves_pop_ascii",
     expected_file_type="UVES-POP two-column or optional-error ASCII spectrum",
     wavelength_location="column 0",
     flux_column="column 1",
     uncertainty_column="only when err_column is explicitly supplied",
     wavelength_unit="auto: nm if max(wave)<2000, otherwise Angstrom",
     default_wave_medium="unknown",
-    default_observer_frame="heliocentric",
+    default_observer_frame="unknown",
     default_stellar_rest_status="unknown",
     flux_state="UVES-POP atlas flux/normalized product; verify file provenance",
     segment_structure="single segment",
@@ -2883,7 +2913,7 @@ register_reader(
         "gaia_fgk_benchmark",
     ],
     read_gaia_benchmark_ascii,
-    canonical_name="gaia_benchmark",
+    canonical_name="gbs_v3_ascii",
     expected_file_type="Gaia FGK Benchmark Stars R=42,000 normalized ASCII spectrum",
     wavelength_location="column 0 / waveobs",
     flux_column="column 1 / flux",
@@ -2905,7 +2935,7 @@ register_reader(
 register_reader(
     ["sdss", "sdss_spec", "segue"],
     read_sdss_spec,
-    canonical_name="sdss",
+    canonical_name="sdss_spec",
     expected_file_type="SDSS/SEGUE spec FITS table",
     wavelength_location="loglam table column",
     flux_column="flux",
@@ -2931,6 +2961,7 @@ register_reader(
   
 def read_spectrum(
     path=None,
+    reader=None,
     instrument=None,
     warn_unknown=True,
     **kwargs
@@ -2942,8 +2973,11 @@ def read_spectrum(
     ----------
     path : str
         Input file path.
+    reader : str
+        Reader alias such as "pepsi_nor", "xshooter_merge1d",
+        "floyds_csv", or "gemini_ascii".
     instrument : str
-        Reader alias such as "pepsi", "xshooter", "floyds", or "gemini".
+        Deprecated compatibility alias for ``reader``.
     **kwargs
         Additional reader-specific keyword arguments.
 
@@ -2954,21 +2988,30 @@ def read_spectrum(
     """
     if path is None:
         raise ValueError(missing_call_error("read_spectrum"))
-    if instrument is None:
+    if reader is not None and instrument is not None:
+        raise ValueError("Pass reader or instrument, not both.")
+    if instrument is not None:
+        warnings.warn(
+            "read_spectrum(..., instrument=...) is deprecated; use reader=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        reader = instrument
+    if reader is None:
         raise ValueError(
             missing_call_error(
                 "read_spectrum",
-                "No instrument reader was specified.",
+                "No spectrum reader was specified.",
             )
         )
-    inst = _normalize_instrument_key(instrument)
-    func = READERS.get(inst, None)
+    reader_key = _normalize_instrument_key(reader)
+    func = READERS.get(reader_key, None)
 
     if func is None:
         raise ValueError(
-            "Unknown instrument '{0}'. {1}".format(
-                instrument,
-                _supported_instrument_message(),
+            "Unknown reader '{0}'. {1}".format(
+                reader,
+                _supported_reader_message(),
             )
         )
 
@@ -2977,5 +3020,5 @@ def read_spectrum(
         spectrum,
         wave_unit="angstrom",
         warn_unknown=warn_unknown,
-        source="reader:{0}".format(inst),
+        source="reader:{0}".format(reader_key),
     )

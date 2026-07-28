@@ -154,6 +154,34 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert "delta_teff" in summary_csv.read_text().splitlines()[0]
 
 
+def test_publication_exploratory_override_requires_reason_and_records_blockers():
+    module = _load_publication_example_module()
+    blocked = {"publication_ready": False, "blockers": ["artifact_review_required"]}
+
+    args = module.build_parser().parse_args(["--allow-exploratory-fit"])
+    try:
+        module._exploratory_override_payload(args, blocked)
+    except ValueError as exc:
+        assert "non-empty --override-reason" in str(exc)
+    else:
+        raise AssertionError("Expected missing override reason to fail.")
+
+    args = module.build_parser().parse_args(
+        [
+            "--allow-exploratory-fit",
+            "--override-reason",
+            "reviewing residual morphology only",
+        ]
+    )
+    override = module._exploratory_override_payload(args, blocked)
+
+    assert override["effective_interpretation"] == "exploratory_not_publication_valid"
+    assert override["override_reason"] == "reviewing residual morphology only"
+    assert override["original_blockers"] == ["artifact_review_required"]
+    assert override["overridden_blockers"] == ["artifact_review_required"]
+    assert override["created_utc"].endswith("Z")
+
+
 def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path):
     module = _load_publication_example_module()
     line_diagnostics = {

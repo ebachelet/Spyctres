@@ -15,13 +15,15 @@ import sys
 
 import numpy as np
 
+from ._version import __version__ as PACKAGE_VERSION
 from .io import (
     SpectrumCollection,
     SpectrumSegment,
-    get_instrument_info,
-    list_instruments,
+    get_reader_info,
+    list_readers,
     read_spectrum,
 )
+from . import setup_check
 
 
 class _RawDefaultsHelpFormatter(
@@ -44,6 +46,8 @@ def _print_json(payload):
 
 
 def _package_version():
+    if PACKAGE_VERSION:
+        return str(PACKAGE_VERSION)
     try:
         return importlib_metadata.version("Spyctres")
     except importlib_metadata.PackageNotFoundError:
@@ -74,7 +78,7 @@ def _segment_summary(segment):
     }
 
 
-def _spectrum_summary(spectrum, path, instrument):
+def _spectrum_summary(spectrum, path, reader):
     if isinstance(spectrum, SpectrumSegment):
         segments = [spectrum]
         kind = "SpectrumSegment"
@@ -86,28 +90,32 @@ def _spectrum_summary(spectrum, path, instrument):
 
     return {
         "path": str(path),
-        "instrument": str(instrument),
+        "reader": str(reader),
+        "instrument": str(reader),
         "kind": kind,
         "n_segments": int(len(segments)),
         "segments": [_segment_summary(segment) for segment in segments],
     }
 
 
-def cmd_instruments(args):
-    names = list_instruments(include_aliases=args.aliases)
+def cmd_readers(args):
+    names = list_readers(include_aliases=args.aliases)
     if args.json:
-        _print_json({"instruments": names, "include_aliases": bool(args.aliases)})
+        _print_json({"readers": names, "instruments": names, "include_aliases": bool(args.aliases)})
         return 0
 
-    label = "Accepted aliases" if args.aliases else "Supported instruments"
+    label = "Accepted aliases" if args.aliases else "Supported readers"
     print(label + ":")
     for name in names:
         print("  " + name)
     return 0
 
 
-def cmd_instrument_info(args):
-    info = get_instrument_info(args.instrument).to_metadata()
+def cmd_reader_info(args):
+    reader = getattr(args, "reader", None)
+    if reader is None:
+        reader = getattr(args, "instrument", None)
+    info = get_reader_info(reader).to_metadata()
     if args.json:
         _print_json(info)
         return 0
@@ -131,12 +139,15 @@ def cmd_instrument_info(args):
 
 
 def cmd_inspect_spectrum(args):
+    reader = args.reader if args.reader is not None else args.instrument
+    if reader is None:
+        raise ValueError("inspect-spectrum requires --reader.")
     spectrum = read_spectrum(
         args.path,
-        instrument=args.instrument,
+        reader=reader,
         warn_unknown=not args.no_warn_unknown,
     )
-    payload = _spectrum_summary(spectrum, args.path, args.instrument)
+    payload = _spectrum_summary(spectrum, args.path, reader)
     if args.json:
         _print_json(payload)
         return 0
@@ -157,17 +168,40 @@ def cmd_inspect_spectrum(args):
     return 0
 
 
+def cmd_doctor(args):
+    forwarded = []
+    if args.phoenix_dir:
+        forwarded.extend(["--phoenix-dir", args.phoenix_dir])
+    if args.require_phoenix:
+        forwarded.append("--require-phoenix")
+    if args.skip_phoenix:
+        forwarded.append("--skip-phoenix")
+    if args.skip_phoenix_scan:
+        forwarded.append("--skip-phoenix-scan")
+    if args.spectrum:
+        forwarded.extend(["--spectrum", args.spectrum])
+    if args.reader:
+        forwarded.extend(["--reader", args.reader])
+    if args.debug:
+        forwarded.append("--debug")
+    return setup_check.main(
+        forwarded,
+        prog="spyctres {0}".format(args.command),
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="spyctres",
         description="Read-only Spyctres discovery and spectrum-inspection helpers.",
         epilog=(
             "Examples:\n"
-            "  spyctres instruments\n"
-            "  spyctres instrument-info xshooter\n"
+            "  spyctres doctor --skip-phoenix\n"
+            "  spyctres readers\n"
+            "  spyctres reader-info xshooter_merge1d\n"
             "  spyctres inspect-spectrum "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
-            "--instrument xshooter\n\n"
+            "--reader xshooter_merge1d\n\n"
             "This CLI is read-only. Use the Python API or examples/ scripts for fitting."
         ),
         formatter_class=_RawDefaultsHelpFormatter,
@@ -180,31 +214,33 @@ def build_parser():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    instruments = subparsers.add_parser(
-        "instruments",
+    readers = subparsers.add_parser(
+        "readers",
+        aliases=["instruments"],
         help="List registered spectrum readers.",
         description="List registered Spyctres spectrum readers.",
         formatter_class=_RawDefaultsHelpFormatter,
         allow_abbrev=False,
     )
-    instruments.add_argument(
+    readers.add_argument(
         "--aliases",
         action="store_true",
         help="List all accepted aliases instead of canonical names.",
     )
-    instruments.add_argument("--json", action="store_true", help="Emit JSON.")
-    instruments.set_defaults(func=cmd_instruments)
+    readers.add_argument("--json", action="store_true", help="Emit JSON.")
+    readers.set_defaults(func=cmd_readers)
 
-    instrument_info = subparsers.add_parser(
-        "instrument-info",
+    reader_info = subparsers.add_parser(
+        "reader-info",
+        aliases=["instrument-info"],
         help="Show metadata for one registered reader.",
         description="Show read-only metadata for one registered spectrum reader.",
         formatter_class=_RawDefaultsHelpFormatter,
         allow_abbrev=False,
     )
-    instrument_info.add_argument("instrument", help="Canonical name or alias.")
-    instrument_info.add_argument("--json", action="store_true", help="Emit JSON.")
-    instrument_info.set_defaults(func=cmd_instrument_info)
+    reader_info.add_argument("reader", help="Canonical reader name or alias.")
+    reader_info.add_argument("--json", action="store_true", help="Emit JSON.")
+    reader_info.set_defaults(func=cmd_reader_info)
 
     inspect = subparsers.add_parser(
         "inspect-spectrum",
@@ -216,18 +252,19 @@ def build_parser():
         ),
         epilog=(
             "Minimal call:\n"
-            "  spyctres inspect-spectrum my_spectrum.fits --instrument xshooter\n\n"
-            "Tip: run 'spyctres instruments --aliases' to see accepted reader names."
+            "  spyctres inspect-spectrum my_spectrum.fits --reader xshooter_merge1d\n\n"
+            "Tip: run 'spyctres readers --aliases' to see accepted reader names."
         ),
         formatter_class=_RawDefaultsHelpFormatter,
         allow_abbrev=False,
     )
     inspect.add_argument("path", help="Spectrum file to inspect.")
     inspect.add_argument(
-        "--instrument",
-        required=True,
+        "--reader",
+        default=None,
         help="Registered reader name or alias.",
     )
+    inspect.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     inspect.add_argument(
         "--no-warn-unknown",
         action="store_true",
@@ -235,6 +272,39 @@ def build_parser():
     )
     inspect.add_argument("--json", action="store_true", help="Emit JSON.")
     inspect.set_defaults(func=cmd_inspect_spectrum)
+
+    doctor = subparsers.add_parser(
+        "doctor",
+        aliases=["check-setup"],
+        help="Check the installed Spyctres environment without fitting.",
+        description="Run read-only setup diagnostics for Spyctres and PHOENIX.",
+        formatter_class=_RawDefaultsHelpFormatter,
+        allow_abbrev=False,
+    )
+    doctor.add_argument("--phoenix-dir", default=None, help="Explicit PHOENIX root.")
+    doctor.add_argument(
+        "--require-phoenix",
+        action="store_true",
+        help="Fail if no PHOENIX directory is configured.",
+    )
+    doctor.add_argument(
+        "--skip-phoenix",
+        action="store_true",
+        help="Skip all PHOENIX path/library checks.",
+    )
+    doctor.add_argument(
+        "--skip-phoenix-scan",
+        action="store_true",
+        help="Initialize PHOENIX but skip the template-file scan.",
+    )
+    doctor.add_argument("--spectrum", default=None, help="Optional example spectrum file.")
+    doctor.add_argument("--reader", default=None, help="Reader alias for --spectrum.")
+    doctor.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print tracebacks for unexpected checker failures.",
+    )
+    doctor.set_defaults(func=cmd_doctor)
 
     return parser
 

@@ -19,12 +19,18 @@ looks sensible before a fit is attempted.
 
 - `check_spyctres_setup.py` checks the local Python environment, optional
   dependencies, PHOENIX path configuration, and available data/cache paths.
+  The installed CLI exposes the same package-level diagnostic as
+  `spyctres doctor`.
 - `io_smoketest.py` reads reduced 1D spectra through the Spyctres I/O layer and
   prints normalized `SpectrumSegment` metadata. Use it to diagnose reader,
   wavelength-medium, frame, resolution, and mask metadata issues.
 - `throughput_summary.py` reads a batch quickscan/refine JSON checkpoint and
   reports median/mean quick, refine, and total runtime, with a simple projection
   for larger batches. It does not run fits.
+- `benchmark_phoenix_runtime.py` writes a lightweight runtime/memory benchmark
+  JSON/CSV for the public read/setup workflow, and optionally for an explicit
+  PHOENIX fit with `--run-fit`. Use it before deciding whether acceleration
+  work such as compression is actually warranted.
 
 ## Developer/regression smoke tests
 
@@ -73,7 +79,7 @@ scientific than smoke tests.
   script deliberately does not repair calibration, run PHOENIX fits, or
   introduce fitting presets for those archives.
 - Bundled Gaia FGK Benchmark Stars spectra can be inspected with
-  `io_smoketest.py --instrument gaia_benchmark`. For the actual benchmark
+  `io_smoketest.py --reader gbs_v3_ascii`. For the actual benchmark
   validation path, `gaia_benchmark_validation.py` writes audit-only JSON/CSV
   and summary plots by default; expensive PHOENIX recovery fits are opt-in with
   `--run-fits`. Literature parameters are recorded only for post-fit deltas,

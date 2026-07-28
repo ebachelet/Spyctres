@@ -75,7 +75,8 @@ def build_parser():
         default=None,
         help="Optional spectrum path; omitted means use the bundled UVB example.",
     )
-    parser.add_argument("--instrument", default=None)
+    parser.add_argument("--reader", default=None)
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
         "--run-baseline-fit",
@@ -105,8 +106,11 @@ def main(argv=None):
     delegated = ["--output-json", str(args.output_json)]
     if args.spectrum:
         delegated.append(str(args.spectrum))
-    if args.instrument:
-        delegated.extend(["--instrument", str(args.instrument)])
+    if args.reader and args.instrument:
+        raise ValueError("Pass --reader or --instrument, not both.")
+    reader = args.reader or args.instrument
+    if reader:
+        delegated.extend(["--reader", str(reader)])
     if args.phoenix_dir:
         delegated.extend(["--phoenix-dir", str(args.phoenix_dir)])
     if args.run_baseline_fit:

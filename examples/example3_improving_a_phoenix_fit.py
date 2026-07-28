@@ -70,7 +70,8 @@ def build_parser():
         allow_abbrev=False,
     )
     parser.add_argument("spectrum", nargs="?", default=str(EXAMPLE_UVB))
-    parser.add_argument("--instrument", default="xshooter")
+    parser.add_argument("--reader", default="xshooter_merge1d")
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument("--R", type=float, default=None, dest="resolution_R")
     parser.add_argument("--run-fits", action="store_true")
@@ -87,9 +88,13 @@ def _progress(event):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
 
     print("Reading spectrum...", flush=True)
-    spec = sp.read_spectrum(args.spectrum, instrument=args.instrument)
+    spec = sp.read_spectrum(args.spectrum, reader=args.reader)
 
     print("Reviewing quicklook setup...", flush=True)
     quick_setup = sp.suggest_fit_setup(

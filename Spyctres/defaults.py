@@ -14,6 +14,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -110,6 +111,25 @@ class FitSetup(Mapping):
         """Return a compact JSON-safe user-facing setup summary."""
         readiness = self.payload.get("readiness") or {}
         window = self.payload.get("recommended_window") or {}
+        provenance = self.payload.get("provenance") or {}
+        coverage = (provenance.get("defaults") or {}).get("coverage") or {}
+        fit_kwargs = self.payload.get("fit_kwargs") or {}
+        if fit_kwargs.get("R") is not None:
+            resolution_summary = "assumed constant R={0:g}".format(
+                float(fit_kwargs["R"])
+            )
+        elif fit_kwargs.get("fwhm_kms") is not None:
+            resolution_summary = "assumed constant FWHM={0:g} km/s".format(
+                float(fit_kwargs["fwhm_kms"])
+            )
+        elif coverage.get("all_have_resolution"):
+            resolution_summary = "from segment metadata"
+        else:
+            resolution_summary = "missing or partial; review line-width interpretation"
+        if coverage.get("all_have_errors"):
+            uncertainty_summary = "formal 1-sigma errors available"
+        else:
+            uncertainty_summary = "fallback errors may be estimated"
         actions = list(readiness.get("actions_for_intent") or ())[: int(max_actions)]
         warnings = list(readiness.get("warnings_for_intent") or ())[: int(max_actions)]
         return _jsonable(
@@ -119,6 +139,19 @@ class FitSetup(Mapping):
                 "model": self.payload.get("model"),
                 "mode": self.payload.get("mode"),
                 "science_case": self.payload.get("science_case"),
+                "reader": ", ".join(coverage.get("readers") or [])
+                or "unknown/already-loaded",
+                "n_segments": coverage.get("n_segments"),
+                "wavelength_range_A": (
+                    None
+                    if coverage.get("wave_min") is None
+                    else [coverage.get("wave_min"), coverage.get("wave_max")]
+                ),
+                "wave_mediums": coverage.get("wave_media") or [],
+                "observer_frames": coverage.get("observer_frames") or [],
+                "stellar_rest_status": coverage.get("stellar_rest_status") or [],
+                "resolution_summary": resolution_summary,
+                "uncertainty_summary": uncertainty_summary,
                 "recommended_window_label": window.get("label"),
                 "recommended_regions_A": window.get("regions"),
                 "recommended_branch_id": self.payload.get("recommended_branch_id"),
@@ -144,7 +177,16 @@ class FitSetup(Mapping):
                 summary.get("model"),
                 summary.get("mode"),
             ),
+            "  reader: {0}; segments={1}".format(
+                summary.get("reader"),
+                summary.get("n_segments"),
+            ),
         ]
+        if summary.get("wavelength_range_A"):
+            lo, hi = summary["wavelength_range_A"]
+            lines.append("  coverage: {0:.1f}-{1:.1f} A".format(float(lo), float(hi)))
+        lines.append("  resolution: {0}".format(summary.get("resolution_summary")))
+        lines.append("  uncertainties: {0}".format(summary.get("uncertainty_summary")))
         if summary.get("recommended_window_label"):
             lines.append(
                 "  window: {0} {1}".format(
@@ -178,6 +220,50 @@ class FitSetup(Mapping):
             lines.append("  top actions:")
             lines.extend("    - {0}".format(item) for item in actions)
         return "\n".join(lines)
+
+    def __repr__(self):
+        summary = self.summary(max_actions=0)
+        return (
+            "FitSetup(model={model!r}, mode={mode!r}, ready={ready!r}, "
+            "reader={reader!r}, window={window!r}, hash={hash!r})"
+        ).format(
+            model=summary.get("model"),
+            mode=summary.get("mode"),
+            ready=summary.get("ready_for_intent"),
+            reader=summary.get("reader"),
+            window=summary.get("recommended_window_label"),
+            hash=str(summary.get("setup_hash"))[:12],
+        )
+
+    def allow_exploratory(self, reason, *, effective_interpretation=None):
+        """Return a copied setup with an explicit exploratory override.
+
+        This does not make a blocked setup publication-ready.  It records why
+        an expert chose to run a diagnostic fit despite readiness blockers, so
+        downstream reports can label the result as exploratory rather than
+        scientifically approved.
+        """
+        reason = "" if reason is None else str(reason).strip()
+        if not reason:
+            raise ValueError("allow_exploratory() requires a non-empty reason.")
+        payload = dict(self.payload)
+        readiness = dict(payload.get("readiness") or {})
+        blockers = list(readiness.get("blockers_for_intent") or [])
+        payload["exploratory_override"] = {
+            "schema_version": 1,
+            "created_utc": datetime.now(timezone.utc).replace(
+                microsecond=0
+            ).isoformat().replace("+00:00", "Z"),
+            "requested_intent": readiness.get("intent"),
+            "effective_interpretation": effective_interpretation
+            or "exploratory_not_publication_valid",
+            "override_reason": reason,
+            "original_blockers": blockers,
+            "overridden_blockers": blockers,
+        }
+        payload.pop("setup_hash", None)
+        payload.pop("configuration_hash", None)
+        return FitSetup(payload)
 
     def to_dict(self):
         return _jsonable(self.payload)
@@ -346,17 +432,23 @@ def _segment_valid_wave(segment):
 def _coverage_summary(segments):
     ranges = []
     instruments = []
+    readers = []
     arms = []
     media = []
     observer_frames = []
     stellar_rest = []
     has_errors = []
     has_resolution = []
+    resolution_records = []
     for segment in segments:
         wave = _segment_valid_wave(segment)
         if wave.size:
             ranges.append((float(np.min(wave)), float(np.max(wave))))
         meta = getattr(segment, "meta", {}) or {}
+        for item in meta.get("ingestion", []) or []:
+            source = str(item.get("source", ""))
+            if source.startswith("reader:"):
+                readers.append(source.split(":", 1)[1])
         instrument = meta.get("instrument", None)
         if instrument is not None:
             instruments.append(str(instrument))
@@ -369,7 +461,10 @@ def _coverage_summary(segments):
             str(getattr(segment, "stellar_rest_status", "unknown")).lower()
         )
         has_errors.append(segment.err is not None)
-        has_resolution.append(getattr(segment, "resolution", None) is not None)
+        resolution = getattr(segment, "resolution", None)
+        has_resolution.append(resolution is not None)
+        if resolution is not None:
+            resolution_records.append(resolution.to_metadata())
     if not ranges:
         raise ValueError("No valid wavelengths are available for default selection.")
     return {
@@ -377,12 +472,15 @@ def _coverage_summary(segments):
         "wave_min": float(min(lo for lo, _hi in ranges)),
         "wave_max": float(max(hi for _lo, hi in ranges)),
         "instruments": sorted(set(instruments)),
+        "readers": sorted(set(readers)),
         "arms": sorted(set(arms)),
         "wave_media": sorted(set(media)),
         "observer_frames": sorted(set(observer_frames)),
         "stellar_rest_status": sorted(set(stellar_rest)),
         "all_have_errors": bool(all(has_errors)),
         "all_have_resolution": bool(all(has_resolution)),
+        "resolution_records": resolution_records,
+        "n_segments": int(len(segments)),
     }
 
 
