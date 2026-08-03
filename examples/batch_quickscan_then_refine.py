@@ -6,7 +6,8 @@ This is the practical workflow to show someone who needs to fit many spectra:
 2. run a cheap, conservative PHOENIX quicklook fit;
 3. use that result to define a narrower local parameter box;
 4. rerun a more focused fit inside that box;
-5. checkpoint results after every spectrum so interrupted batches can resume.
+5. checkpoint results after every spectrum so interrupted batches can resume;
+6. optionally save a few representative fit plots for human inspection.
 
 The default example uses the bundled X-SHOOTER UVB spectrum because it is fast
 and line-rich enough to demonstrate the idea. Multi-arm X-SHOOTER fitting is
@@ -18,7 +19,9 @@ Example
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   --reader xshooter_merge1d \
-  --output /tmp/spyctres_batch_xshooter_uvb.json \
+  --output-json /tmp/spyctres_batch_xshooter_uvb.json \
+  --plot-dir /tmp/spyctres_batch_plots \
+  --max-plots 2 \
   --resume
 
 For a multi-file demonstration, pass bundled spectra explicitly:
@@ -26,10 +29,11 @@ For a multi-file demonstration, pass bundled spectra explicitly:
 python examples/batch_quickscan_then_refine.py \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
   examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_VIS_TELL_CORR.fits \
-  --reader xshooter_merge1d --output /tmp/spyctres_batch.json --resume
+  --reader xshooter_merge1d --output-json /tmp/spyctres_batch.json --resume
 
 For heterogeneous batches, use --manifest with a CSV containing at least a
-path column and optional target_id, reader/instrument, and R/resolution_R columns.
+path column and optional target_id, reader, and R/resolution_R columns.
+The older instrument column name is still accepted as a compatibility alias.
 """
 
 from __future__ import annotations
@@ -68,6 +72,7 @@ from Spyctres._workflow_helpers import (
 from Spyctres.config import resolve_phoenix_dir
 from Spyctres.io import read_spectrum
 from Spyctres.phoenix import PhoenixLibrary
+from Spyctres.plotting import plot_model_line_windows
 from Spyctres.preprocessing import audit_spectrum_for_fit
 
 
@@ -93,14 +98,16 @@ def build_parser():
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
             "--reader xshooter_merge1d "
             "--output-json /tmp/spyctres_batch_xshooter_uvb.json "
-            "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv --resume\n\n"
+            "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv "
+            "--plot-dir /tmp/spyctres_batch_plots --max-plots 2 --resume\n\n"
             "Manifest example after saving a CSV with examples/data paths:\n"
             "  python examples/batch_quickscan_then_refine.py "
             "--manifest examples/my_batch_manifest.csv "
             "--refine-quality-policy skip-risky "
             "--output-json /tmp/spyctres_batch_manifest.json --resume\n\n"
             "Manifest columns: path or spectrum; optional target_id, "
-            "reader/instrument, R/resolution_R."
+            "reader, R/resolution_R. The older instrument column is still "
+            "accepted as a compatibility alias."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -118,8 +125,9 @@ def build_parser():
         default=None,
         help=(
             "Optional CSV manifest for heterogeneous batches. Required column: "
-            "path or spectrum. Optional columns: target_id, instrument, R or "
-            "resolution_R. Relative paths are resolved beside the manifest."
+            "path or spectrum. Optional columns: target_id, reader, R or "
+            "resolution_R. The older instrument column is still accepted. "
+            "Relative paths are resolved beside the manifest."
         ),
     )
     parser.add_argument(
@@ -245,6 +253,24 @@ def build_parser():
         help=(
             "Reconstruct final models. Off by default because this example is "
             "about throughput and tabular batch results rather than plotting."
+        ),
+    )
+    parser.add_argument(
+        "--plot-dir",
+        default=None,
+        help=(
+            "Optional directory for a small number of representative "
+            "line-window fit plots. Supplying this reconstructs plotted models "
+            "even though compact JSON still omits model arrays."
+        ),
+    )
+    parser.add_argument(
+        "--max-plots",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of representative fit plots to write when "
+            "--plot-dir is supplied. Default: 3."
         ),
     )
     parser.add_argument(
@@ -449,6 +475,7 @@ def _load_manifest_records(path, default_instrument="xshooter"):
                 "target_id": _manifest_value(row, "target_id", "id", default=None),
                 "instrument": _manifest_value(
                     row,
+                    "reader",
                     "instrument",
                     default=default_instrument,
                 ),
@@ -538,6 +565,76 @@ def _brief_result(result):
         "rv_kms": payload.get("rv_kms"),
         "chi2_red": payload.get("chi2_red"),
         "quality_flags": list(payload.get("quality_flags") or []),
+    }
+
+
+def _safe_plot_token(value):
+    text = str(value or "target")
+    chars = []
+    for char in text:
+        if char.isalnum() or char in {".", "-", "_"}:
+            chars.append(char)
+        else:
+            chars.append("_")
+    token = "".join(chars).strip("._")
+    return (token or "target")[-80:]
+
+
+def _maybe_write_representative_plot(result, windows, record, args, *, stage):
+    """Write a line-window plot for a small representative batch subset."""
+    plot_dir = getattr(args, "plot_dir", None)
+    if not plot_dir:
+        return None
+    max_plots = int(getattr(args, "max_plots", 0) or 0)
+    if max_plots <= 0:
+        return None
+    written = int(getattr(args, "_plots_written", 0) or 0)
+    if written >= max_plots:
+        return None
+
+    outdir = Path(plot_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    target = _safe_plot_token(record.get("target_id") or record.get("path"))
+    savepath = outdir / "{0:02d}_{1}_{2}.png".format(written + 1, target, stage)
+
+    try:
+        fig, _axes = plot_model_line_windows(
+            result,
+            windows=windows,
+            title="{0}: representative {1} fit".format(
+                Path(_record_path(record)).name,
+                stage,
+            ),
+            show_residuals=True,
+            residual_kind="auto",
+            ncols=2,
+            figsize_per_panel=(7.2, 4.4),
+            footer=(
+                "Representative batch plot only. Inspect flagged spectra before "
+                "treating a batch result as science-ready."
+            ),
+            savepath=str(savepath),
+        )
+    except Exception as exc:
+        return {
+            "stage": stage,
+            "status": "plot_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+    try:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+    except Exception:
+        pass
+    args._plots_written = written + 1
+    return {
+        "stage": stage,
+        "status": "written",
+        "path": str(savepath),
+        "purpose": "representative_batch_fit_inspection",
     }
 
 
@@ -653,6 +750,8 @@ def _run_configuration(args, records):
         "refine_multistart": int(args.refine_multistart),
         "quick_only": bool(args.quick_only),
         "reconstruct_final": bool(args.reconstruct_final),
+        "plot_dir": args.plot_dir,
+        "max_plots": int(args.max_plots),
         "resolution_assumption": _resolution_override_payload(args),
         "focus_margins": {
             "teff": float(args.teff_margin),
@@ -833,7 +932,7 @@ def _fit_one(record, args, phoenix_lib):
         model="phoenix",
         phoenix_lib=phoenix_lib,
         auto_defaults=False,
-        reconstruct=False,
+        reconstruct=bool(local_args.plot_dir and args.quick_only),
         progress_callback=_progress_callback(local_args.verbose, "quick"),
         **quick_fit_kwargs,
     )
@@ -875,6 +974,27 @@ def _fit_one(record, args, phoenix_lib):
     )
 
     if args.quick_only:
+        plot_record = _maybe_write_representative_plot(
+            quick_result,
+            quick_fit_kwargs.get("regions") or (),
+            record,
+            args,
+            stage="quick",
+        )
+        if plot_record is not None:
+            record.setdefault("representative_plots", []).append(plot_record)
+            if plot_record.get("status") == "written":
+                print(
+                    "  Representative quick plot: {0}".format(plot_record["path"]),
+                    flush=True,
+                )
+            else:
+                print(
+                    "  Representative quick plot not written: {0}".format(
+                        plot_record.get("error", "unknown plotting error")
+                    ),
+                    flush=True,
+                )
         # Useful when surveying a directory before deciding which spectra merit
         # a more expensive second pass.
         record["total_seconds"] = float(time.perf_counter() - started)
@@ -921,7 +1041,7 @@ def _fit_one(record, args, phoenix_lib):
         model="phoenix",
         phoenix_lib=phoenix_lib,
         auto_defaults=False,
-        reconstruct=bool(local_args.reconstruct_final),
+        reconstruct=bool(local_args.reconstruct_final or local_args.plot_dir),
         progress_callback=_progress_callback(local_args.verbose, "refine"),
         **refine_fit_kwargs,
     )
@@ -945,6 +1065,27 @@ def _fit_one(record, args, phoenix_lib):
         ),
         flush=True,
     )
+    plot_record = _maybe_write_representative_plot(
+        refined_result,
+        refine_fit_kwargs.get("regions") or (),
+        record,
+        args,
+        stage="refined",
+    )
+    if plot_record is not None:
+        record.setdefault("representative_plots", []).append(plot_record)
+        if plot_record.get("status") == "written":
+            print(
+                "  Representative refined plot: {0}".format(plot_record["path"]),
+                flush=True,
+            )
+        else:
+            print(
+                "  Representative refined plot not written: {0}".format(
+                    plot_record.get("error", "unknown plotting error")
+                ),
+                flush=True,
+            )
     return record
 
 
@@ -955,6 +1096,7 @@ def main(argv=None):
             raise ValueError("Pass --reader or --instrument, not both.")
         args.reader = args.instrument
     args.instrument = args.reader
+    args._plots_written = 0
     records = _input_records(args)
     run_configuration = _run_configuration(args, records)
     if _resolution_override_payload(args) is not None:

@@ -62,6 +62,12 @@ COMMON_LINES = {
 }
 
 
+DIAGNOSTIC_WINDOW_COLOR = "tab:orange"
+DIAGNOSTIC_WINDOW_ALPHA = 0.16
+WARNING_REGION_COLOR = "tab:purple"
+WARNING_REGION_ALPHA = 0.12
+
+
 def plot_line_fit(result, figsize=(7.0, 5.0)):
     """Plot a ``LineFitResult`` and residuals without calling ``show``."""
     wave = np.asarray(result.wave, dtype=float)
@@ -86,6 +92,156 @@ def plot_line_fit(result, figsize=(7.0, 5.0)):
     axes[1].plot(wave, residuals, color="black", lw=0.9)
     axes[1].set_ylabel("Residual")
     axes[1].set_xlabel("Wavelength [Angstrom]")
+    return fig, axes
+
+
+def _line_fit_rows_for_plot(results, labels=None):
+    """Return JSON-like rows from LineFitResult objects or a comparison object."""
+    if isinstance(results, dict) and "rows" in results:
+        rows = [dict(row) for row in results.get("rows", ())]
+        if labels is not None:
+            labels = [str(label) for label in labels]
+            if len(labels) != len(rows):
+                raise ValueError("labels length must match line-fit rows length.")
+            for row, label in zip(rows, labels):
+                row["label"] = label
+        return rows
+    if isinstance(results, dict):
+        if labels is None:
+            labels = list(results.keys())
+        results = list(results.values())
+    else:
+        results = list(results or ())
+    if labels is None:
+        labels = [
+            getattr(result, "line_name", "line {0}".format(index + 1))
+            for index, result in enumerate(results)
+        ]
+    labels = [str(label) for label in labels]
+    if len(labels) != len(results):
+        raise ValueError("labels length must match line-fit results length.")
+    rows = []
+    for label, result in zip(labels, results):
+        row = result.summary() if hasattr(result, "summary") else dict(result)
+        row["label"] = label
+        rows.append(row)
+    return rows
+
+
+def _row_float(row, key):
+    value = row.get(key)
+    if value is None:
+        return np.nan
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return value if np.isfinite(value) else np.nan
+
+
+def plot_line_fit_comparison(
+    results,
+    *,
+    labels=None,
+    title="Spyctres local line-fit comparison",
+    savepath=None,
+    figsize=(10.5, 7.0),
+):
+    """Plot compact metrics for several local line-fit diagnostic results.
+
+    The plot compares the quantities that are usually useful from
+    :func:`Spyctres.fit_line` / :func:`Spyctres.fit_lines`: relative RV,
+    equivalent width, fitted FWHM, reduced chi-square, and the retained-pixel
+    fraction.  It intentionally does not combine these local Gaussian fits into
+    atmospheric parameters; broad-line failures remain visible as diagnostic
+    evidence that a richer forward model is required.
+    """
+    rows = _line_fit_rows_for_plot(results, labels=labels)
+    if not rows:
+        raise ValueError("plot_line_fit_comparison() requires at least one result.")
+
+    labels = [
+        str(row.get("label") or row.get("line_name") or "line {0}".format(index + 1))
+        for index, row in enumerate(rows)
+    ]
+    x = np.arange(len(rows), dtype=float)
+    rv = np.asarray([_row_float(row, "rv_kms") for row in rows], dtype=float)
+    ew = np.asarray([_row_float(row, "equivalent_width_A") for row in rows], dtype=float)
+    fwhm = np.asarray([_row_float(row, "fwhm_A") for row in rows], dtype=float)
+    chi2 = np.asarray([_row_float(row, "chi2_red") for row in rows], dtype=float)
+    mask_fraction = np.asarray(
+        [_row_float(row, "mask_fraction") for row in rows],
+        dtype=float,
+    )
+    valid_fraction = 1.0 - mask_fraction
+
+    colors = []
+    for row in rows:
+        flags = set(row.get("flags") or ())
+        if not row.get("success", True):
+            colors.append("tab:red")
+        elif flags and flags != {"ok"}:
+            colors.append("tab:orange")
+        else:
+            colors.append("tab:green")
+
+    fig, axes = plt.subplots(
+        4,
+        1,
+        sharex=True,
+        figsize=figsize,
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [1.0, 1.0, 1.0, 1.15]},
+    )
+    if title:
+        fig.suptitle(str(title), fontsize=12)
+
+    axes[0].scatter(x, rv, c=colors, s=42, zorder=3)
+    finite_rv = rv[np.isfinite(rv)]
+    if finite_rv.size:
+        axes[0].axhline(float(np.nanmedian(finite_rv)), color="0.45", lw=0.8, ls="--")
+    axes[0].set_ylabel("RV [km/s]")
+    axes[0].grid(alpha=0.18, lw=0.5)
+
+    axes[1].scatter(x, ew, c=colors, s=42, zorder=3, label="EW")
+    axes[1].set_ylabel("EW [Å]")
+    axes[1].grid(alpha=0.18, lw=0.5)
+
+    axes[2].scatter(x, fwhm, c=colors, s=42, zorder=3, label="FWHM")
+    axes[2].set_ylabel("FWHM [Å]")
+    axes[2].grid(alpha=0.18, lw=0.5)
+
+    axes[3].scatter(x, chi2, c=colors, s=42, zorder=3, label="χ²ν")
+    positive_chi2 = chi2[np.isfinite(chi2) & (chi2 > 0)]
+    if positive_chi2.size and np.nanmax(positive_chi2) / np.nanmin(positive_chi2) > 20:
+        axes[3].set_yscale("log")
+    axes[3].set_ylabel("χ²ν")
+    axes[3].grid(alpha=0.18, lw=0.5)
+    valid_ax = axes[3].twinx()
+    valid_ax.plot(
+        x,
+        valid_fraction,
+        color="0.35",
+        marker="s",
+        ms=4,
+        lw=0.9,
+        alpha=0.75,
+        label="valid fraction",
+    )
+    valid_ax.set_ylim(-0.05, 1.05)
+    valid_ax.set_ylabel("valid fraction")
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(labels, rotation=25, ha="right")
+    axes[-1].set_xlabel("Local diagnostic feature")
+
+    footer_lines = [
+        "Green = ok, orange = review flag, red = failed local fit.",
+        "Local Gaussian line fits diagnose alignment, EW/width, masks, and continuum; they are not full atmospheric fits.",
+    ]
+    _add_figure_footer(fig, " ".join(footer_lines), fontsize=8)
+    if savepath is not None:
+        save_figure(fig, savepath, artifact_key="line_fit_comparison_plot", dpi=160)
     return fig, axes
 
 
@@ -381,6 +537,7 @@ def plot_spectrum_audit(
     local_continuum_percentile=85.0,
     include_metadata_warning_regions=True,
     figsize=(14.0, 9.0),
+    savepath=None,
 ):
     """Plot generic audit diagnostics for any calibrated 1-D spectrum.
 
@@ -390,10 +547,12 @@ def plot_spectrum_audit(
     Spyctres' convention: ``True`` means usable. The local continuum estimate is
     plotting-only; it is not applied to the data and is not used for fitting.
 
-    Green spans show optional diagnostic windows, orange spans show generic
+    Orange spans show optional diagnostic windows, purple spans show generic
     warning/bad regions supplied by metadata or ``warning_regions``, and red
     spans show near-zero blocks detected from the plotted flux. These overlays
     are visual/provenance aids only and are not silently applied as masks.
+    If ``savepath`` is supplied, the parent directory is created and the figure
+    is saved with Spyctres' normal plot-artifact provenance hook.
     """
     segments = _plot_audit_segments(spectrum)
     fig, axes = plt.subplots(
@@ -530,8 +689,8 @@ def plot_spectrum_audit(
                 ax.axvspan(
                     wmin,
                     wmax,
-                    color="tab:orange",
-                    alpha=0.12,
+                    color=WARNING_REGION_COLOR,
+                    alpha=WARNING_REGION_ALPHA,
                     lw=0,
                     label=(
                         "metadata warning region"
@@ -550,8 +709,8 @@ def plot_spectrum_audit(
                 ax.axvspan(
                     wmin,
                     wmax,
-                    color="tab:green",
-                    alpha=0.08,
+                    color=DIAGNOSTIC_WINDOW_COLOR,
+                    alpha=DIAGNOSTIC_WINDOW_ALPHA,
                     lw=0,
                     label=(
                         "suggested diagnostic window"
@@ -569,7 +728,7 @@ def plot_spectrum_audit(
                 va="top",
                 fontsize=7,
                 rotation=30,
-                color="tab:green",
+                color=DIAGNOSTIC_WINDOW_COLOR,
                 alpha=0.9,
             )
             window_label_used = True
@@ -594,7 +753,7 @@ def plot_spectrum_audit(
     mask_ax.text(
         0.01,
         0.04,
-        "Green = suggested diagnostic windows; orange = metadata warning regions; "
+        "Orange = suggested diagnostic windows; purple = metadata warning regions; "
         "red = near-zero blocks. Overlays are diagnostic only and are not "
         "silently applied.",
         transform=mask_ax.transAxes,
@@ -604,6 +763,8 @@ def plot_spectrum_audit(
     )
     if title:
         fig.suptitle(title)
+    if savepath is not None:
+        save_figure(fig, savepath, artifact_key="spectrum_audit_plot")
     return fig, axes
 
 
@@ -622,12 +783,15 @@ def plot_spectrum(
     title=None,
     max_plot_points=8000,
     figsize=(12.0, 4.5),
+    savepath=None,
 ):
     """Plot a reduced spectrum with beginner-friendly optional overlays.
 
     ``plot_spectrum(spec)`` is the one-panel first-look plot intended for
     notebooks.  Set ``show_masks=True`` to switch to the existing three-panel
     audit view, where mask polarity and diagnostic overlays are clearer.
+    If ``savepath`` is supplied, the parent directory is created and the figure
+    is saved with Spyctres' normal plot-artifact provenance hook.
     """
     warning_regions = _plot_warning_regions(
         mask=mask,
@@ -644,6 +808,7 @@ def plot_spectrum(
             warning_regions=warning_regions,
             max_plot_points=max_plot_points,
             figsize=(max(figsize[0], 12.0), 9.0),
+            savepath=savepath,
         )
 
     segments = _plot_audit_segments(spectrum)
@@ -722,8 +887,8 @@ def plot_spectrum(
                 ax.axvspan(
                     wmin,
                     wmax,
-                    color="tab:green",
-                    alpha=0.08,
+                    color=DIAGNOSTIC_WINDOW_COLOR,
+                    alpha=DIAGNOSTIC_WINDOW_ALPHA,
                     lw=0,
                     label=(
                         "suggested diagnostic window"
@@ -747,8 +912,8 @@ def plot_spectrum(
         ax.axvspan(
             wmin,
             wmax,
-            color="tab:orange",
-            alpha=0.09,
+            color=WARNING_REGION_COLOR,
+            alpha=WARNING_REGION_ALPHA,
             lw=0,
             label="warning region" if not warning_label_used else None,
         )
@@ -764,6 +929,8 @@ def plot_spectrum(
     handles, labels = ax.get_legend_handles_labels()
     if labels:
         ax.legend(frameon=False, loc="best", fontsize=8)
+    if savepath is not None:
+        save_figure(fig, savepath, artifact_key="spectrum_plot")
     return fig, ax
 
 
@@ -1572,7 +1739,7 @@ def plot_fit_referee(
         excluded line cores should remain visible.
     show_raw_model : bool, optional
         If True, draw the unconstrained PHOENIX+LSF model before the fitted
-        multiplicative continuum correction. For local line-window publication
+        multiplicative continuum correction. For local line-window reviewed-analysis
         plots this can be visually misleading when the raw template units are
         far from the observed flux scale, so callers may set it False and show
         only the observed flux plus continuum-adjusted model.
@@ -1958,14 +2125,20 @@ def _normalize_line_window_spec(window):
             raise ValueError("Line-window mappings require limits_A/region_A.")
         label = window.get("label") or window.get("name") or window.get("id")
         markers = window.get("markers_A") or window.get("markers") or ()
+        feature_family = window.get("feature_family") or ()
+        window_id = window.get("id")
     elif len(window) == 3:
         label, wmin, wmax = window
         limits = (wmin, wmax)
         markers = ()
+        feature_family = ()
+        window_id = None
     elif len(window) == 2:
         limits = window
         label = None
         markers = ()
+        feature_family = ()
+        window_id = None
     else:
         raise ValueError(
             "Each window must be a mapping, (label, wmin, wmax), or (wmin, wmax)."
@@ -1976,10 +2149,42 @@ def _normalize_line_window_spec(window):
         raise ValueError("Line-window limits must be finite and increasing.")
     return {
         "label": None if label is None else str(label),
+        "id": None if window_id is None else str(window_id),
         "wmin": wmin,
         "wmax": wmax,
         "markers": [float(marker) for marker in markers],
+        "feature_family": [str(item) for item in feature_family],
+        "display_kind": _line_window_display_kind(
+            label=label,
+            window_id=window_id,
+            feature_family=feature_family,
+        ),
     }
+
+
+def _line_window_display_kind(*, label=None, window_id=None, feature_family=()):
+    """Return a lightweight display class for a line-window panel."""
+    family = {str(item).strip().lower() for item in (feature_family or ())}
+    label_text = " ".join(
+        str(item).lower()
+        for item in (label, window_id)
+        if item is not None
+    )
+    molecular_tokens = (
+        "molecular",
+        "tio",
+        "vo",
+        "co_",
+        "co ",
+        "cah",
+        "feh",
+        "ch ",
+        "g band",
+        "bandhead",
+    )
+    if "molecular" in family or any(token in label_text for token in molecular_tokens):
+        return "molecular_band"
+    return "line_window"
 
 
 def _plot_contiguous_masked_line(ax, wave, values, mask, *, label=None, **kwargs):
@@ -1998,6 +2203,42 @@ def _plot_contiguous_masked_line(ax, wave, values, mask, *, label=None, **kwargs
         )
         first = False
     return True
+
+
+def _line_window_residual_values(flux, model_flux, err, used_mask, residual_kind):
+    """Return residual values and labels for line-window diagnostic panels."""
+    flux = _as_float_array(flux)
+    model_flux = _as_float_array(model_flux)
+    residual = flux - model_flux
+    used_mask = _as_bool_array(used_mask, n_expected=flux.size)
+    requested = str(residual_kind).strip().lower()
+    resolved = requested
+    if requested == "auto":
+        if err is not None:
+            err_arr = _as_float_array(err)
+            good_err = used_mask & np.isfinite(err_arr) & (err_arr > 0.0)
+            resolved = "pull" if np.count_nonzero(good_err) else "fractional"
+        else:
+            resolved = "fractional"
+
+    values = np.full_like(flux, np.nan, dtype=float)
+    if resolved == "pull":
+        if err is None:
+            raise ValueError("residual_kind='pull' requires err.")
+        err_arr = _as_float_array(err)
+        good = np.isfinite(err_arr) & (err_arr > 0.0)
+        values[good] = residual[good] / err_arr[good]
+        ylabel = "(D-M)/σ"
+    elif resolved == "fractional":
+        scale = np.maximum(np.abs(model_flux), 1e-30)
+        values = residual / scale
+        ylabel = "(D-M)/M"
+    elif resolved == "raw":
+        values = residual
+        ylabel = "D-M"
+    else:  # pragma: no cover - caller validates this before plotting.
+        raise ValueError("Unknown residual kind: {0}".format(residual_kind))
+    return values, ylabel, resolved
 
 
 def _window_plot_ylim(wave, flux, window_mask, models=()):
@@ -2021,21 +2262,217 @@ def _window_plot_ylim(wave, flux, window_mask, models=()):
     return ylo, yhi
 
 
+def _normalize_annotation_regions(annotation_regions):
+    if annotation_regions is None:
+        return []
+    normalized = []
+    for index, region in enumerate(annotation_regions):
+        if isinstance(region, dict):
+            limits = (
+                region.get("region_A")
+                or region.get("limits_A")
+                or region.get("window_A")
+                or region.get("region")
+            )
+            label = (
+                region.get("label")
+                or region.get("name")
+                or region.get("id")
+                or "annotation"
+            )
+            color = region.get("color", "tab:orange")
+            alpha = float(region.get("alpha", 0.13))
+            marker = region.get("center_A")
+        else:
+            limits = region
+            label = "annotation {0}".format(index + 1)
+            color = "tab:orange"
+            alpha = 0.13
+            marker = None
+        if limits is None or len(limits) != 2:
+            raise ValueError("Annotation regions require region_A/limits_A.")
+        wmin, wmax = map(float, limits)
+        if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+            raise ValueError("Annotation-region limits must be finite and increasing.")
+        normalized.append(
+            {
+                "wmin": wmin,
+                "wmax": wmax,
+                "label": str(label),
+                "color": color,
+                "alpha": alpha,
+                "marker": None if marker is None else float(marker),
+            }
+        )
+    return normalized
+
+
+def _plot_annotation_regions(ax, window, annotation_regions, *, label_prefix="candidate"):
+    label_used = False
+    for region in annotation_regions:
+        wmin = max(window["wmin"], region["wmin"])
+        wmax = min(window["wmax"], region["wmax"])
+        if wmax <= wmin:
+            continue
+        label = (
+            "{0}: {1}".format(label_prefix, region["label"])
+            if not label_used
+            else None
+        )
+        ax.axvspan(
+            wmin,
+            wmax,
+            color=region["color"],
+            alpha=region["alpha"],
+            lw=0,
+            label=label,
+        )
+        label_used = True
+        marker = region.get("marker")
+        if marker is not None and window["wmin"] <= marker <= window["wmax"]:
+            ax.axvline(
+                marker,
+                color=region["color"],
+                lw=0.9,
+                ls="--",
+                alpha=min(0.95, region["alpha"] * 4.5),
+            )
+
+
+def _add_figure_footer(fig, footer, *, fontsize=8):
+    """Add a footer while reserving layout space below subplot x labels."""
+    if not footer:
+        return
+    footer = str(footer)
+    n_lines = max(1, footer.count("\n") + 1)
+    bottom = min(0.22, 0.075 + 0.025 * (n_lines - 1))
+    engine = fig.get_layout_engine()
+    if engine is not None and hasattr(engine, "set"):
+        try:
+            engine.set(rect=(0.0, bottom, 1.0, 1.0 - bottom))
+        except TypeError:  # pragma: no cover - older Matplotlib fallback.
+            fig.subplots_adjust(bottom=max(0.11, bottom))
+    else:
+        fig.subplots_adjust(bottom=max(0.11, bottom))
+    fig.text(
+        0.01,
+        max(0.008, min(0.018, bottom * 0.22)),
+        footer,
+        ha="left",
+        va="bottom",
+        fontsize=fontsize,
+        color="0.25",
+        wrap=True,
+    )
+
+
+def _fit_result_line_window_arrays(result, *, segment=None, context="plot"):
+    """Return concatenated plotting arrays from a structured fit result."""
+    source = segment if segment is not None else getattr(result, "input_spectrum", None)
+    if source is None:
+        raise ValueError(
+            "{0}(result, ...) requires result.input_spectrum or an explicit "
+            "segment= argument.".format(context)
+        )
+    segments = list(source.segments) if hasattr(source, "segments") else [source]
+    if not getattr(result, "models", None):
+        raise ValueError("The fit result does not contain model arrays to plot.")
+    if len(result.models) < len(segments):
+        raise ValueError(
+            "The fit result does not contain one reconstructed model per segment."
+        )
+
+    wave_parts = []
+    flux_parts = []
+    err_parts = []
+    model_parts = []
+    used_parts = []
+    excluded_parts = []
+    all_errors_available = True
+    result_used_masks = getattr(result, "used_masks", None) or ()
+    result_excluded_masks = getattr(result, "excluded_masks", None) or ()
+
+    for index, seg in enumerate(segments):
+        seg_wave = np.asarray(seg.wave, dtype=float)
+        seg_flux = np.asarray(seg.flux, dtype=float)
+        if seg_wave.shape != seg_flux.shape:
+            raise ValueError("Input segment wave and flux arrays must match.")
+        seg_model = np.asarray(result.models[index], dtype=float)
+        if seg_model.shape != seg_wave.shape:
+            raise ValueError(
+                "Fit-result model array {0} does not match its segment.".format(index)
+            )
+
+        seg_err = getattr(seg, "err", None)
+        if seg_err is None:
+            all_errors_available = False
+        else:
+            seg_err = np.asarray(seg_err, dtype=float)
+            if seg_err.shape != seg_wave.shape:
+                raise ValueError("Input segment error arrays must match wave shape.")
+            err_parts.append(seg_err)
+
+        if index < len(result_used_masks):
+            seg_used = np.asarray(result_used_masks[index], dtype=bool)
+        else:
+            seg_used = np.asarray(seg.mask, dtype=bool)
+        if seg_used.shape != seg_wave.shape:
+            raise ValueError("Fit-result used mask does not match its segment.")
+
+        if index < len(result_excluded_masks):
+            seg_excluded = np.asarray(result_excluded_masks[index], dtype=bool)
+        else:
+            seg_excluded = ~np.asarray(seg.mask, dtype=bool)
+        if seg_excluded.shape != seg_wave.shape:
+            raise ValueError("Fit-result excluded mask does not match its segment.")
+
+        wave_parts.append(seg_wave)
+        flux_parts.append(seg_flux)
+        model_parts.append(seg_model)
+        used_parts.append(seg_used)
+        excluded_parts.append(seg_excluded)
+
+    wave = np.concatenate(wave_parts)
+    flux = np.concatenate(flux_parts)
+    err = np.concatenate(err_parts) if all_errors_available and err_parts else None
+    model_flux = np.concatenate(model_parts)
+    used_mask = np.concatenate(used_parts)
+    excluded_mask = np.concatenate(excluded_parts)
+    order = np.argsort(wave)
+    out = {
+        "source": source,
+        "segments": segments,
+        "wave": wave[order],
+        "flux": flux[order],
+        "err": None if err is None else err[order],
+        "model_flux": model_flux[order],
+        "used_mask": used_mask[order],
+        "excluded_mask": excluded_mask[order],
+    }
+    return out
+
+
 def plot_model_line_windows(
     wave,
-    flux,
-    windows,
+    flux=None,
+    windows=None,
     *,
-    models,
+    err=None,
+    models=None,
+    segment=None,
     used_mask=None,
     model_used_masks=None,
     excluded_mask=None,
+    annotation_regions=None,
     line_groups=None,
     savepath=None,
     title=None,
     footer=None,
     ncols=2,
     figsize_per_panel=(7.2, 3.2),
+    show_residuals=False,
+    residual_kind="auto",
+    residual_ylim=None,
     observed_label="observed",
     unused_label="not fitted",
 ):
@@ -2049,14 +2486,72 @@ def plot_model_line_windows(
     diagnostics where the user needs to see what was fitted without hiding
     excluded cores or artifact regions.
 
-    ``excluded_mask`` and ``line_groups`` are plotting annotations only. They
-    do not change which pixels are treated as fitted; use ``used_mask`` or
-    ``model_used_masks`` for that.
+    ``excluded_mask``, ``annotation_regions``, and ``line_groups`` are plotting
+    annotations only. They do not change which pixels are treated as fitted;
+    use ``used_mask`` or ``model_used_masks`` for that.  ``annotation_regions``
+    is useful for candidate DIB/telluric/catalog overlaps that should be shown
+    to the user without implying they were masked or corrected.
+
+    Set ``show_residuals=True`` to add a residual panel below each window.
+    ``residual_kind="pull"`` shows ``(data-model)/err`` and requires usable
+    uncertainties; ``"fractional"`` shows ``(data-model)/model``; ``"raw"``
+    shows flux residuals.  ``"auto"`` uses pulls when errors are available and
+    fractional residuals otherwise.
+
+    A structured ``PhoenixFitResult`` may be supplied as the first argument:
+    ``plot_model_line_windows(result, windows=[...])``. In that mode Spyctres
+    uses the result's recorded input spectrum, model arrays, and fitted-pixel
+    masks, avoiding notebook-side model reconstruction.
     """
+    if hasattr(wave, "models") and hasattr(wave, "used_masks"):
+        result = wave
+        if windows is None and flux is not None:
+            windows = flux
+        if models is not None:
+            raise ValueError(
+                "Do not pass models= when the first argument is a fit result."
+            )
+        extracted = _fit_result_line_window_arrays(
+            result,
+            segment=segment,
+            context="plot_model_line_windows",
+        )
+        if windows is None:
+            from .diagnostic_windows import select_diagnostic_windows
+
+            windows = select_diagnostic_windows(
+                extracted["source"],
+                max_windows=6,
+            ).selected
+        wave = extracted["wave"]
+        flux = extracted["flux"]
+        err = extracted["err"]
+        used_mask = extracted["used_mask"]
+        excluded_mask = extracted["excluded_mask"]
+        model_flux = extracted["model_flux"]
+        model_used_masks = [used_mask]
+        models = [
+            {
+                "flux": model_flux,
+                "label": "continuum-adjusted model",
+                "color": "tab:red",
+                "masked_label": "model outside fitted pixels",
+            }
+        ]
+
+    if flux is None:
+        raise TypeError("plot_model_line_windows() requires flux for array input.")
+    if windows is None:
+        raise TypeError("plot_model_line_windows() requires windows.")
+
     wave = _as_float_array(wave)
     flux = _as_float_array(flux)
     if wave.shape != flux.shape:
         raise ValueError("wave and flux must have the same shape.")
+    if err is not None:
+        err = _as_float_array(err)
+        if err.shape != wave.shape:
+            raise ValueError("err must match wave shape when supplied.")
     n = wave.size
     if used_mask is None:
         used_mask = np.isfinite(wave) & np.isfinite(flux)
@@ -2064,6 +2559,7 @@ def plot_model_line_windows(
         used_mask = _as_bool_array(used_mask, n_expected=n)
     if excluded_mask is not None:
         excluded_mask = _as_bool_array(excluded_mask, n_expected=n)
+    annotation_regions = _normalize_annotation_regions(annotation_regions)
 
     normalized_windows = [_normalize_line_window_spec(window) for window in windows]
     normalized_windows = [
@@ -2107,9 +2603,6 @@ def plot_model_line_windows(
                 "masked_label": masked_label,
             }
         )
-    if not model_specs:
-        raise ValueError("At least one model must be supplied.")
-
     if model_used_masks is None:
         per_model_used = [used_mask for _item in model_specs]
     else:
@@ -2119,22 +2612,48 @@ def plot_model_line_windows(
         if len(per_model_used) != len(model_specs):
             raise ValueError("model_used_masks length must match models length.")
 
+    residual_kind = str(residual_kind).strip().lower()
+    if residual_kind not in {"auto", "pull", "fractional", "raw"}:
+        raise ValueError("residual_kind must be auto, pull, fractional, or raw.")
+    if residual_kind == "pull" and err is None:
+        raise ValueError("residual_kind='pull' requires err or a fit-result input.")
+    show_residuals = bool(show_residuals)
+
     nwin = len(normalized_windows)
-    ncols = max(1, int(ncols))
+    ncols = min(max(1, int(ncols)), nwin)
     nrows = int(np.ceil(nwin / ncols))
+    plot_rows = nrows * (2 if show_residuals else 1)
+    gridspec_kw = None
+    if show_residuals:
+        gridspec_kw = {"height_ratios": [3.0, 1.1] * nrows}
     fig, axes = plt.subplots(
-        nrows,
+        plot_rows,
         ncols,
         figsize=(figsize_per_panel[0] * ncols, figsize_per_panel[1] * nrows),
         squeeze=False,
         constrained_layout=True,
+        gridspec_kw=gridspec_kw,
     )
     if title:
         fig.suptitle(str(title), fontsize=12)
 
     finite_obs = np.isfinite(wave) & np.isfinite(flux)
-    for ax, window in zip(axes.ravel(), normalized_windows):
+    for window_index, window in enumerate(normalized_windows):
+        row = window_index // ncols
+        col = window_index % ncols
+        ax = axes[2 * row, col] if show_residuals else axes[row, col]
+        residual_ax = axes[2 * row + 1, col] if show_residuals else None
         window_mask = finite_obs & (wave >= window["wmin"]) & (wave <= window["wmax"])
+        if window.get("display_kind") == "molecular_band":
+            ax.axvspan(
+                window["wmin"],
+                window["wmax"],
+                color="tab:green",
+                alpha=0.055,
+                lw=0,
+                label="molecular-band window",
+                zorder=0,
+            )
         ax.plot(
             wave[window_mask],
             flux[window_mask],
@@ -2162,6 +2681,7 @@ def plot_model_line_windows(
                     alpha=0.10,
                     lw=0,
                 )
+        _plot_annotation_regions(ax, window, annotation_regions)
 
         any_model_fit_in_window = False
         for model_spec, model_used in zip(model_specs, per_model_used):
@@ -2201,8 +2721,53 @@ def plot_model_line_windows(
                     lw=1.0,
                     label=model_spec["masked_label"],
                 )
+            if residual_ax is not None:
+                residual_values, ylabel, resolved_kind = _line_window_residual_values(
+                    flux,
+                    model_flux,
+                    err,
+                    model_fit,
+                    residual_kind,
+                )
+                residual_good = model_fit & np.isfinite(residual_values)
+                _plot_contiguous_masked_line(
+                    residual_ax,
+                    wave,
+                    residual_values,
+                    residual_good,
+                    color=model_spec["color"],
+                    ls="-",
+                    lw=0.85,
+                    alpha=0.9,
+                    label="{0} residual".format(model_spec["label"]),
+                )
+                masked_residual = (
+                    span
+                    & ~model_used
+                    & finite_model
+                    & finite_obs
+                    & np.isfinite(residual_values)
+                )
+                if np.any(masked_residual):
+                    residual_ax.scatter(
+                        wave[masked_residual],
+                        residual_values[masked_residual],
+                        s=5,
+                        color="0.65",
+                        alpha=0.35,
+                        label="residual outside fitted pixels",
+                        zorder=2,
+                    )
+                residual_ax.axhline(0.0, color="0.45", lw=0.7, alpha=0.75)
+                residual_ax.set_ylabel(ylabel)
+                if residual_ylim is not None:
+                    residual_ax.set_ylim(*residual_ylim)
+                elif resolved_kind == "pull":
+                    residual_ax.set_ylim(-6.0, 6.0)
+                residual_ax.grid(alpha=0.16, lw=0.5)
+                residual_ax.set_xlim(window["wmin"], window["wmax"])
 
-        if not any_model_fit_in_window:
+        if model_specs and not any_model_fit_in_window:
             ax.text(
                 0.04,
                 0.08,
@@ -2233,6 +2798,270 @@ def plot_model_line_windows(
         if ylim is not None:
             ax.set_ylim(*ylim)
         if window["label"]:
+            title_label = window["label"]
+            if window.get("display_kind") == "molecular_band":
+                title_label = "molecular band: {0}".format(title_label)
+            ax.set_title(title_label)
+        if residual_ax is None:
+            ax.set_xlabel("Wavelength [Å]")
+        else:
+            ax.tick_params(labelbottom=False)
+            residual_ax.set_xlabel("Wavelength [Å]")
+        ax.set_ylabel("Flux")
+        ax.grid(alpha=0.16, lw=0.5)
+
+    if show_residuals:
+        for window_index in range(nwin, nrows * ncols):
+            row = window_index // ncols
+            col = window_index % ncols
+            axes[2 * row, col].set_axis_off()
+            axes[2 * row + 1, col].set_axis_off()
+    else:
+        for ax in axes.ravel()[nwin:]:
+            ax.set_axis_off()
+
+    handles_by_label = {}
+    for ax in axes.ravel():
+        handles, labels = ax.get_legend_handles_labels()
+        for handle, label in zip(handles, labels):
+            if label and label not in handles_by_label:
+                handles_by_label[label] = handle
+    if handles_by_label:
+        fig.legend(
+            list(handles_by_label.values()),
+            list(handles_by_label.keys()),
+            loc="upper right",
+            fontsize=8,
+        )
+    _add_figure_footer(fig, footer, fontsize=8)
+    if savepath is not None:
+        save_figure(fig, savepath, artifact_key="line_window_plot", dpi=160)
+    return fig, axes
+
+
+def plot_fit_comparison_line_windows(
+    results,
+    *,
+    labels=None,
+    windows=None,
+    savepath=None,
+    title=None,
+    footer=None,
+    ncols=2,
+    figsize_per_panel=(7.2, 3.4),
+    line_groups=None,
+    annotation_regions=None,
+    show_masked_model=True,
+    observed_label="observed",
+    unused_label="not fitted",
+):
+    """Overlay several structured fit results in the same line-window panels.
+
+    This is the comparison companion to :func:`plot_model_line_windows`.  It is
+    designed for reviewed-analysis diagnostics such as a joint Balmer fit versus
+    separate Hδ/Hγ/Hβ fits.  The observed spectrum is drawn once in each window;
+    every result that actually fitted pixels in that window is overplotted.  If
+    ``show_masked_model`` is true, model values inside a result's plotted span
+    but outside its fitted pixels are shown as dashed lines, so masked cores or
+    rejected artifact pixels remain visible without pretending they constrained
+    the fit.
+    """
+    if isinstance(results, dict):
+        if labels is None:
+            labels = list(results.keys())
+        results = list(results.values())
+    else:
+        results = list(results or ())
+    if not results:
+        raise ValueError("plot_fit_comparison_line_windows() requires results.")
+    if labels is None:
+        labels = ["fit {0}".format(index + 1) for index in range(len(results))]
+    labels = [str(label) for label in labels]
+    if len(labels) != len(results):
+        raise ValueError("labels length must match results length.")
+
+    records = []
+    for result, label in zip(results, labels):
+        record = _fit_result_line_window_arrays(
+            result,
+            context="plot_fit_comparison_line_windows",
+        )
+        record["label"] = label
+        records.append(record)
+
+    if windows is None:
+        from .diagnostic_windows import select_diagnostic_windows
+
+        windows = select_diagnostic_windows(records[0]["source"], max_windows=6).selected
+    normalized_windows = [_normalize_line_window_spec(window) for window in windows]
+    normalized_windows = [
+        window
+        for window in normalized_windows
+        if any(
+            np.count_nonzero(
+                np.isfinite(record["wave"])
+                & (record["wave"] >= window["wmin"])
+                & (record["wave"] <= window["wmax"])
+            )
+            >= 3
+            for record in records
+        )
+    ]
+    if not normalized_windows:
+        raise ValueError("No line windows overlap the supplied fit results.")
+    annotation_regions = _normalize_annotation_regions(annotation_regions)
+
+    nwin = len(normalized_windows)
+    ncols = min(max(1, int(ncols)), nwin)
+    nrows = int(np.ceil(nwin / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(figsize_per_panel[0] * ncols, figsize_per_panel[1] * nrows),
+        squeeze=False,
+        constrained_layout=True,
+    )
+    if title:
+        fig.suptitle(str(title), fontsize=12)
+
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["tab:red"])
+    fit_colors = {
+        record["label"]: default_colors[index % len(default_colors)]
+        for index, record in enumerate(records)
+    }
+
+    for window_index, window in enumerate(normalized_windows):
+        row = window_index // ncols
+        col = window_index % ncols
+        ax = axes[row, col]
+
+        obs_record = None
+        obs_mask = None
+        for record in records:
+            candidate = (
+                np.isfinite(record["wave"])
+                & np.isfinite(record["flux"])
+                & (record["wave"] >= window["wmin"])
+                & (record["wave"] <= window["wmax"])
+            )
+            if np.count_nonzero(candidate) >= 3:
+                obs_record = record
+                obs_mask = candidate
+                break
+        if obs_record is None:  # pragma: no cover - filtered above.
+            continue
+
+        ax.plot(
+            obs_record["wave"][obs_mask],
+            obs_record["flux"][obs_mask],
+            color="0.15",
+            lw=0.8,
+            label=observed_label,
+        )
+        unused = obs_mask & ~obs_record["used_mask"]
+        if np.any(unused):
+            ax.scatter(
+                obs_record["wave"][unused],
+                obs_record["flux"][unused],
+                s=6,
+                color="0.65",
+                alpha=0.45,
+                label=unused_label,
+                zorder=2,
+            )
+        excluded = obs_mask & obs_record["excluded_mask"]
+        if np.any(excluded):
+            for swmin, swmax in _mask_to_spans(obs_record["wave"], excluded):
+                ax.axvspan(swmin, swmax, color="tab:purple", alpha=0.10, lw=0)
+        _plot_annotation_regions(ax, window, annotation_regions)
+
+        y_values = [obs_record["flux"][obs_mask]]
+        any_model_fit_in_window = False
+        for record in records:
+            wave_arr = record["wave"]
+            model_flux = record["model_flux"]
+            finite_model = np.isfinite(wave_arr) & np.isfinite(model_flux)
+            window_model = (
+                finite_model
+                & (wave_arr >= window["wmin"])
+                & (wave_arr <= window["wmax"])
+            )
+            model_fit = window_model & record["used_mask"]
+            if not np.any(model_fit):
+                continue
+            any_model_fit_in_window = True
+            y_values.append(model_flux[model_fit])
+            fit_wave = wave_arr[model_fit]
+            span = (
+                window_model
+                & (wave_arr >= float(np.nanmin(fit_wave)))
+                & (wave_arr <= float(np.nanmax(fit_wave)))
+            )
+            color = fit_colors[record["label"]]
+            _plot_contiguous_masked_line(
+                ax,
+                wave_arr,
+                model_flux,
+                model_fit,
+                color=color,
+                ls="-",
+                lw=1.15,
+                label=record["label"],
+            )
+            masked_span = span & ~record["used_mask"]
+            if show_masked_model and np.any(masked_span):
+                _plot_contiguous_masked_line(
+                    ax,
+                    wave_arr,
+                    model_flux,
+                    masked_span,
+                    color=color,
+                    ls="--",
+                    alpha=0.65,
+                    lw=1.0,
+                    label=None,
+                )
+                y_values.append(model_flux[masked_span])
+
+        if not any_model_fit_in_window:
+            ax.text(
+                0.04,
+                0.08,
+                "no model trace in fitted pixels",
+                transform=ax.transAxes,
+                fontsize=8,
+                color="0.35",
+            )
+
+        for marker in window["markers"]:
+            if window["wmin"] <= marker <= window["wmax"]:
+                ax.axvline(marker, color="0.75", lw=0.8, ls=":")
+        if line_groups is not None:
+            for group in line_groups:
+                mark_lines(
+                    ax,
+                    _resolve_line_group(group),
+                    xlim=(window["wmin"], window["wmax"]),
+                    ymax=0.98,
+                )
+        finite_y = [
+            np.asarray(values, dtype=float)[np.isfinite(values)]
+            for values in y_values
+            if np.asarray(values, dtype=float).size
+        ]
+        finite_y = [values for values in finite_y if values.size]
+        if finite_y:
+            sample = np.concatenate(finite_y)
+            ylo, yhi = _compute_robust_ylim(
+                sample,
+                lower=0.2,
+                upper=99.8,
+                pad_frac=0.10,
+            )
+            ylo, yhi = _expand_ylim_to_include(ylo, yhi, sample, pad_frac=0.02)
+            ax.set_ylim(ylo, yhi)
+        ax.set_xlim(window["wmin"], window["wmax"])
+        if window["label"]:
             ax.set_title(window["label"])
         ax.set_xlabel("Wavelength [Å]")
         ax.set_ylabel("Flux")
@@ -2241,22 +3070,69 @@ def plot_model_line_windows(
     for ax in axes.ravel()[nwin:]:
         ax.set_axis_off()
 
-    handles, labels = axes.ravel()[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="upper right", fontsize=8)
-    if footer:
-        fig.text(
-            0.01,
-            0.01,
-            str(footer),
-            ha="left",
-            va="bottom",
+    handles_by_label = {}
+    for ax in axes.ravel():
+        handles, legend_labels = ax.get_legend_handles_labels()
+        for handle, legend_label in zip(handles, legend_labels):
+            if legend_label and legend_label not in handles_by_label:
+                handles_by_label[legend_label] = handle
+    if handles_by_label:
+        fig.legend(
+            list(handles_by_label.values()),
+            list(handles_by_label.keys()),
+            loc="upper right",
             fontsize=8,
-            color="0.25",
         )
+    _add_figure_footer(fig, footer, fontsize=8)
     if savepath is not None:
-        save_figure(fig, savepath, artifact_key="line_window_plot", dpi=160)
+        save_figure(
+            fig,
+            savepath,
+            artifact_key="fit_comparison_line_window_plot",
+            dpi=160,
+        )
     return fig, axes
+
+
+def plot_spectrum_line_windows(
+    wave,
+    flux,
+    windows,
+    *,
+    valid_mask=None,
+    excluded_mask=None,
+    line_groups=None,
+    savepath=None,
+    title="Observed diagnostic line windows",
+    footer=None,
+    ncols=2,
+    figsize_per_panel=(7.2, 3.2),
+    observed_label="observed",
+    unused_label="not used",
+):
+    """Plot observed spectrum-only zoom panels for diagnostic windows.
+
+    This is the no-model companion to :func:`plot_model_line_windows`.  It is
+    useful for first inspection, tutorials, GUI previews, and cases where a
+    user wants to decide which regions look scientifically useful before
+    launching an expensive PHOENIX fit.  ``valid_mask=True`` means usable.
+    """
+    return plot_model_line_windows(
+        wave,
+        flux,
+        windows,
+        models=(),
+        used_mask=valid_mask,
+        excluded_mask=excluded_mask,
+        line_groups=line_groups,
+        savepath=savepath,
+        title=title,
+        footer=footer,
+        ncols=ncols,
+        figsize_per_panel=figsize_per_panel,
+        observed_label=observed_label,
+        unused_label=unused_label,
+    )
 
 
 def plot_spectrum_quicklook(

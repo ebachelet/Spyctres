@@ -224,6 +224,15 @@ def _coerce_resolution_descriptor(value):
     raise TypeError("resolution must be a ResolutionDescriptor, mapping, scalar R, or None.")
 
 
+def _segment_reader_name(segment):
+    meta = getattr(segment, "meta", {}) or {}
+    for item in meta.get("ingestion", []) or []:
+        source = str(item.get("source", ""))
+        if source.startswith("reader:"):
+            return source.split(":", 1)[1]
+    return meta.get("reader") or meta.get("instrument")
+
+
 class SpectrumSegment(object):
     """
     Minimal internal spectrum container.
@@ -523,6 +532,67 @@ class SpectrumSegment(object):
             name=out_name,
         )
 
+    def summary(self):
+        """Return a compact JSON-safe description of this spectrum segment."""
+        wave = np.asarray(self.wave, dtype=float)
+        flux = np.asarray(self.flux, dtype=float)
+        valid = (
+            np.asarray(self.mask, dtype=bool)
+            & np.isfinite(wave)
+            & np.isfinite(flux)
+        )
+        if self.err is not None:
+            err = np.asarray(self.err, dtype=float)
+            valid &= np.isfinite(err) & (err > 0.0)
+        finite_wave = wave[np.isfinite(wave)]
+        if finite_wave.size:
+            wavelength_range = [float(np.nanmin(finite_wave)), float(np.nanmax(finite_wave))]
+        else:
+            wavelength_range = None
+        resolution = None if self.resolution is None else self.resolution.to_metadata()
+        return {
+            "schema_version": 1,
+            "type": "SpectrumSegment",
+            "name": self.name,
+            "n_pixels": int(wave.size),
+            "n_valid_pixels": int(np.count_nonzero(valid)),
+            "valid_fraction": float(
+                np.count_nonzero(valid) / max(1, int(wave.size))
+            ),
+            "wavelength_range_A": wavelength_range,
+            "wave_medium": self.wave_medium,
+            "observer_frame": self.observer_frame,
+            "stellar_rest_status": self.stellar_rest_status,
+            "has_uncertainty": bool(self.err is not None),
+            "uncertainty_kind": "sigma" if self.err is not None else None,
+            "resolution": resolution,
+            "reader": _segment_reader_name(self),
+        }
+
+    def provenance_summary(self):
+        """Return compact ingestion/convention provenance for display."""
+        meta = dict(self.meta or {})
+        return {
+            "schema_version": 1,
+            "type": "SpectrumSegmentProvenance",
+            "name": self.name,
+            "reader": _segment_reader_name(self),
+            "wave_medium": self.wave_medium,
+            "wave_frame": self.wave_frame,
+            "observer_frame": self.observer_frame,
+            "stellar_rest_status": self.stellar_rest_status,
+            "stellar_rv_applied_kms": self.stellar_rv_applied_kms,
+            "resolution": None
+            if self.resolution is None
+            else self.resolution.to_metadata(),
+            "instrument": meta.get("instrument"),
+            "arm": meta.get("arm"),
+            "product_profile": meta.get("product_profile")
+            or meta.get("archive_product_profile"),
+            "ingestion": list(meta.get("ingestion") or []),
+            "warnings": list(meta.get("warnings") or []),
+        }
+
 
 class SpectrumCollection(object):
     """
@@ -594,6 +664,58 @@ class SpectrumCollection(object):
     @property
     def names(self):
         return [seg.name for seg in self.segments]
+
+    def summary(self):
+        """Return a compact JSON-safe description of the collection."""
+        segment_summaries = [seg.summary() for seg in self.segments]
+        ranges = [
+            item["wavelength_range_A"]
+            for item in segment_summaries
+            if item.get("wavelength_range_A") is not None
+        ]
+        if ranges:
+            wavelength_range = [
+                float(min(item[0] for item in ranges)),
+                float(max(item[1] for item in ranges)),
+            ]
+        else:
+            wavelength_range = None
+        n_pixels = int(sum(item["n_pixels"] for item in segment_summaries))
+        n_valid = int(sum(item["n_valid_pixels"] for item in segment_summaries))
+        return {
+            "schema_version": 1,
+            "type": "SpectrumCollection",
+            "name": self.name,
+            "n_segments": int(len(self.segments)),
+            "segment_names": self.names,
+            "n_pixels": n_pixels,
+            "n_valid_pixels": n_valid,
+            "valid_fraction": float(n_valid / max(1, n_pixels)),
+            "wavelength_range_A": wavelength_range,
+            "readers": sorted(
+                {
+                    str(item.get("reader"))
+                    for item in segment_summaries
+                    if item.get("reader")
+                }
+            ),
+            "wave_mediums": sorted({seg.wave_medium for seg in self.segments}),
+            "observer_frames": sorted({seg.observer_frame for seg in self.segments}),
+            "stellar_rest_status": sorted(
+                {seg.stellar_rest_status for seg in self.segments}
+            ),
+            "segments": segment_summaries,
+        }
+
+    def provenance_summary(self):
+        """Return compact ingestion/convention provenance for all segments."""
+        return {
+            "schema_version": 1,
+            "type": "SpectrumCollectionProvenance",
+            "name": self.name,
+            "n_segments": int(len(self.segments)),
+            "segments": [seg.provenance_summary() for seg in self.segments],
+        }
 
 
 _VALID_WAVE_MEDIA = {"air", "vacuum", "unknown"}

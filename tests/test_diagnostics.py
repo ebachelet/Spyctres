@@ -129,3 +129,34 @@ def test_diagnose_known_residual_windows_is_json_safe_and_conservative():
     assert flagged["residual_detection"]["cross_line_consistency_checked"] is False
     assert "dib_candidate_detected" in result.quality_flags
     json.dumps(payload, allow_nan=False)
+
+
+def test_diagnose_known_residual_windows_flags_dib_4428_hgamma_overlap():
+    wave = np.linspace(4380.0, 4460.0, 300)
+    model = np.ones_like(wave)
+    flux = np.ones_like(wave)
+    flux[(wave >= 4416.8) & (wave <= 4440.8)] -= 3.0
+    segment = SpectrumSegment(wave, flux, err=np.ones_like(wave), name="Hgamma")
+    result = SimpleNamespace(
+        summary={},
+        models=(model,),
+        used_masks=(np.ones_like(wave, dtype=bool),),
+        quality_flags=(),
+    )
+
+    payload = diagnose_known_residual_windows(
+        segment,
+        result,
+        enabled=True,
+        threshold_sigma=2.5,
+    )
+
+    flagged = [
+        item
+        for item in payload["flagged_windows"]
+        if item["linked_feature"] == "dib_4428"
+    ]
+    assert flagged
+    assert flagged[0]["diagnostic_line"] == "Hgamma"
+    assert flagged[0]["absorption_like"] is True
+    assert "dib_candidate_detected" in result.quality_flags

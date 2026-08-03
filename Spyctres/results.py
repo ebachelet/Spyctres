@@ -399,6 +399,73 @@ def _residual_window_names_from_payload(payload):
     }
 
 
+def _payload_quality_summary(payload):
+    report = payload.get("quality_report") or {}
+    if isinstance(report, Mapping):
+        summary = report.get("quality_flag_summary")
+        if isinstance(summary, Mapping):
+            return dict(summary)
+    return summarize_quality_flags(_flag_set(payload))
+
+
+def _payload_result_status(payload):
+    compact = None
+    if hasattr(payload, "compact_summary"):
+        compact = payload.compact_summary()
+    if compact is None and isinstance(payload, Mapping):
+        compact = payload.get("compact_summary")
+    if isinstance(compact, Mapping) and compact.get("interpretation_status"):
+        return str(compact["interpretation_status"])
+    fit_setup = payload.get("fit_setup") if isinstance(payload, Mapping) else {}
+    if isinstance(fit_setup, Mapping) and fit_setup.get("exploratory_override"):
+        return "exploratory_review_only"
+    summary = _payload_quality_summary(payload)
+    return str(summary.get("headline_status") or "unknown")
+
+
+def _payload_boundary_flags(payload):
+    flags = {
+        flag
+        for flag in _flag_set(payload)
+        if flag == "fit_bound_hit" or flag.startswith("grid_edge_")
+    }
+    diagnostics = payload.get("diagnostics") if isinstance(payload, Mapping) else {}
+    if isinstance(diagnostics, Mapping):
+        edge_flags = diagnostics.get("grid_edge_flags") or {}
+        if isinstance(edge_flags, Mapping):
+            for key, value in edge_flags.items():
+                if not value:
+                    continue
+                key = str(key)
+                if key == "fit_bound_hit":
+                    flags.add("fit_bound_hit")
+                else:
+                    flags.add("grid_edge_{0}".format(key))
+    return sorted(flags)
+
+
+def _payload_comparison_summary(payload, label):
+    flags = sorted(_flag_set(payload))
+    quality_summary = _payload_quality_summary(payload)
+    return _jsonable(
+        {
+            "label": str(label),
+            "success": bool(payload.get("success", False)),
+            "teff": _extract_result_value(payload, "teff"),
+            "feh": _extract_result_value(payload, "feh"),
+            "logg": _extract_result_value(payload, "logg"),
+            "rv_kms": _extract_result_value(payload, "rv_kms"),
+            "chi2_red": _extract_result_value(payload, "chi2_red"),
+            "n_points": _extract_result_value(payload, "n_points"),
+            "quality_flags": flags,
+            "quality_flag_summary": quality_summary,
+            "quality_status": quality_summary.get("headline_status"),
+            "interpretation_status": _payload_result_status(payload),
+            "boundary_flags": _payload_boundary_flags(payload),
+        }
+    )
+
+
 def compare_fit_results(
     reference,
     comparison,
@@ -461,6 +528,10 @@ def compare_fit_results(
     out = {
         "schema_version": 1,
         "labels": [label_ref, label_cmp],
+        "result_summaries": {
+            "reference": _payload_comparison_summary(ref_payload, label_ref),
+            "comparison": _payload_comparison_summary(cmp_payload, label_cmp),
+        },
         "parameters": parameters,
         "metrics": metrics,
         "quality_flags": {
@@ -553,6 +624,168 @@ def compare_fits(
             ),
         }
     )
+
+
+def _format_delta(value, digits=4):
+    if value is None:
+        return "—"
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not np.isfinite(value):
+        return "—"
+    return "{0:+.{1}g}".format(value, int(digits))
+
+
+def _format_table_value(value, digits=5):
+    if value is None:
+        return "—"
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not np.isfinite(value):
+        return "—"
+    return "{0:.{1}g}".format(value, int(digits))
+
+
+def _comparison_delta(payload, section, key):
+    entry = (payload.get(section) or {}).get(key) or {}
+    return entry.get("delta")
+
+
+def _comparison_value(payload, key):
+    summaries = payload.get("result_summaries") or {}
+    comparison = summaries.get("comparison")
+    if isinstance(comparison, Mapping):
+        return comparison.get(key)
+    entry = (payload.get("parameters") or {}).get(key)
+    if isinstance(entry, Mapping) and entry.get("comparison") is not None:
+        return entry.get("comparison")
+    entry = (payload.get("metrics") or {}).get(key)
+    if isinstance(entry, Mapping):
+        return entry.get("comparison")
+    return None
+
+
+def _comparison_status(payload):
+    summaries = payload.get("result_summaries") or {}
+    comparison = summaries.get("comparison")
+    if isinstance(comparison, Mapping):
+        return str(
+            comparison.get("interpretation_status")
+            or comparison.get("quality_status")
+            or "unknown"
+        )
+    return "unknown"
+
+
+def _comparison_boundary_text(payload):
+    summaries = payload.get("result_summaries") or {}
+    comparison = summaries.get("comparison")
+    flags = []
+    if isinstance(comparison, Mapping):
+        flags = list(comparison.get("boundary_flags") or [])
+    if not flags:
+        return "none"
+    return ",".join(str(flag).replace("grid_edge_", "edge:") for flag in flags)
+
+
+def format_fit_comparison_table(comparison, *, max_flags=3):
+    """Return a compact plain-text table from ``compare_fits`` output.
+
+    The helper is intentionally display-only. It does not decide which fit is
+    scientifically preferred; it simply makes parameter/metric deltas easier to
+    inspect in notebooks, scripts, GUI logs, and reviewer handoffs.
+    """
+    comparison = dict(comparison or {})
+    rows = []
+    if comparison.get("operation") == "compare_fits":
+        baseline = str(comparison.get("baseline_label", "baseline"))
+        for item in comparison.get("comparisons") or []:
+            payload = dict(item.get("comparison") or {})
+            rows.append(
+                {
+                    "label": str(item.get("label", "comparison")),
+                    "relative_to": baseline,
+                    "payload": payload,
+                }
+            )
+    elif "parameters" in comparison and "metrics" in comparison:
+        labels = comparison.get("labels") or ["reference", "comparison"]
+        rows.append(
+            {
+                "label": str(labels[1] if len(labels) > 1 else "comparison"),
+                "relative_to": str(labels[0] if labels else "reference"),
+                "payload": comparison,
+            }
+        )
+    else:
+        raise ValueError(
+            "format_fit_comparison_table() expects output from compare_fits() "
+            "or compare_fit_results()."
+        )
+
+    header = (
+        "label                 relative_to      Teff[K]  ΔTeff  logg  Δlogg "
+        "[Fe/H]  ΔFe  RV[km/s]   ΔRV  χ²ν   Δχ²ν  status       grid/bounds  flags"
+    )
+    lines = [
+        "Spyctres fit-comparison table",
+        header,
+        "-" * len(header),
+    ]
+    max_flags = int(max_flags)
+    for row in rows:
+        payload = row["payload"]
+        flags = payload.get("quality_flags") or {}
+        changed = []
+        for key in flags:
+            if key.startswith("only_"):
+                values = flags.get(key) or []
+                changed.extend(str(value) for value in values)
+        changed = sorted(set(changed))
+        changed_non_ok = [
+            flag for flag in changed if str(flag).strip().lower() != "ok"
+        ]
+        if changed_non_ok:
+            changed = changed_non_ok
+        if not changed:
+            flag_text = "unchanged"
+        else:
+            shown = changed[:max_flags]
+            flag_text = ", ".join(shown)
+            if len(changed) > len(shown):
+                flag_text += ", ...+{0}".format(len(changed) - len(shown))
+
+        lines.append(
+            "{label:<21} {relative:<14} {teff:>7} {dteff:>6} "
+            "{logg:>5} {dlogg:>6} {feh:>6} {dfeh:>5} "
+            "{rv:>8} {drv:>6} {chi2:>5} {dchi2:>6} "
+            "{status:<12} {grid:<18} {flags}".format(
+                label=str(row["label"])[:21],
+                relative=str(row["relative_to"])[:14],
+                teff=_format_table_value(_comparison_value(payload, "teff"), digits=5),
+                dteff=_format_delta(_comparison_delta(payload, "parameters", "teff")),
+                logg=_format_table_value(_comparison_value(payload, "logg"), digits=4),
+                dlogg=_format_delta(_comparison_delta(payload, "parameters", "logg")),
+                feh=_format_table_value(_comparison_value(payload, "feh"), digits=4),
+                dfeh=_format_delta(_comparison_delta(payload, "parameters", "feh")),
+                rv=_format_table_value(_comparison_value(payload, "rv_kms"), digits=5),
+                drv=_format_delta(_comparison_delta(payload, "parameters", "rv_kms")),
+                chi2=_format_table_value(_comparison_value(payload, "chi2_red"), digits=4),
+                dchi2=_format_delta(_comparison_delta(payload, "metrics", "chi2_red")),
+                status=_comparison_status(payload)[:12],
+                grid=_comparison_boundary_text(payload)[:18],
+                flags=flag_text,
+            )
+        )
+    lines.append(
+        "Interpretation: small deltas indicate stability against the tested "
+        "analysis choice; this table is not an uncertainty model."
+    )
+    return "\n".join(lines)
 
 
 QUALITY_FLAG_DESCRIPTIONS = {
@@ -745,6 +978,379 @@ QUALITY_FLAG_DESCRIPTIONS = {
 }
 
 
+QUALITY_FLAG_SEVERITY_ORDER = ("blocker", "review", "advisory", "info")
+QUALITY_FLAG_SEVERITY_RANK = {
+    severity: index for index, severity in enumerate(QUALITY_FLAG_SEVERITY_ORDER)
+}
+
+
+QUALITY_FLAG_CLASSIFICATION = {
+    "ok": {
+        "severity": "info",
+        "category": "success",
+        "action": "No action required beyond ordinary plot/residual inspection.",
+    },
+    "optimizer_local_minimum_suspected": {
+        "severity": "blocker",
+        "category": "optimizer",
+        "action": (
+            "Inspect local starts and residuals; rerun with broader bounds or "
+            "additional starts before interpreting parameters."
+        ),
+    },
+    "high_chi2": {
+        "severity": "review",
+        "category": "fit_quality",
+        "action": (
+            "Inspect residual plots and the error model; test continuum, LSF, "
+            "mask, abundance, activity, and model-domain assumptions."
+        ),
+    },
+    "structured_residuals": {
+        "severity": "review",
+        "category": "fit_quality",
+        "action": (
+            "Inspect line-window residuals and compare controlled variants; do "
+            "not tune stellar parameters to absorb coherent non-stellar or "
+            "reduction residuals."
+        ),
+    },
+    "residual_slope": {
+        "severity": "review",
+        "category": "continuum",
+        "action": (
+            "Review continuum normalization, segment scaling, and flux "
+            "calibration; compare a controlled continuum-degree variant."
+        ),
+    },
+    "fit_bound_hit": {
+        "severity": "review",
+        "category": "model_grid",
+        "action": (
+            "Check which parameter hit a bound and rerun with a wider or more "
+            "appropriate grid if the model domain supports it."
+        ),
+    },
+    "resolution_missing": {
+        "severity": "review",
+        "category": "lsf",
+        "action": (
+            "Provide or validate resolution/LSF metadata before interpreting "
+            "line widths or gravity-sensitive profiles."
+        ),
+    },
+    "gaussian_lsf_assumed": {
+        "severity": "advisory",
+        "category": "lsf",
+        "action": (
+            "Record that a Gaussian LSF was used; verify this is adequate for "
+            "precision line-profile work."
+        ),
+    },
+    "constant_lsf_assumed": {
+        "severity": "advisory",
+        "category": "lsf",
+        "action": (
+            "Treat line-width results as constant-LSF approximations; compare "
+            "wavelength-dependent LSF support when it becomes available."
+        ),
+    },
+    "low_sampling_warning": {
+        "severity": "review",
+        "category": "lsf",
+        "action": (
+            "Avoid precision line-width interpretation; use coarser windows or "
+            "validated higher-resolution data/LSF assumptions."
+        ),
+    },
+    "tabulated_lsf_present_but_not_supported_by_fitter": {
+        "severity": "review",
+        "category": "lsf",
+        "action": (
+            "Keep tabulated LSF as provenance for now; use an explicit constant "
+            "R only for quicklook fits until wavelength-dependent LSF fitting "
+            "is validated."
+        ),
+    },
+    "wavelength_frame_ambiguous": {
+        "severity": "review",
+        "category": "wavelength_frame",
+        "action": (
+            "Verify observer-frame and rest-frame semantics before interpreting "
+            "RV or comparing line centres."
+        ),
+    },
+    "unknown_wave_medium_used_in_fit": {
+        "severity": "review",
+        "category": "wavelength_medium",
+        "action": "Confirm air/vacuum convention and rerun if line centres matter.",
+    },
+    "unknown_observer_frame_used_in_fit": {
+        "severity": "review",
+        "category": "wavelength_frame",
+        "action": (
+            "Confirm whether wavelengths are topocentric, heliocentric, or "
+            "barycentric before treating RV as physical."
+        ),
+    },
+    "stellar_rest_status_unknown": {
+        "severity": "review",
+        "category": "wavelength_frame",
+        "action": (
+            "Confirm whether the spectrum is already stellar-rest corrected "
+            "before applying or interpreting stellar RV shifts."
+        ),
+    },
+    "rv_interpretation_ambiguous": {
+        "severity": "review",
+        "category": "velocity",
+        "action": (
+            "Treat RV as a model-alignment parameter until wavelength-frame, "
+            "stellar-rest, and barycentric semantics are verified."
+        ),
+    },
+    "barycentric_correction_recorded_not_applied": {
+        "severity": "advisory",
+        "category": "velocity",
+        "action": (
+            "Check product documentation/header comments before applying any "
+            "barycentric correction manually."
+        ),
+    },
+    "possible_double_barycentric_or_rest_correction": {
+        "severity": "blocker",
+        "category": "velocity",
+        "action": (
+            "Stop and verify product frame semantics; remove the extra velocity "
+            "term if the wavelength array is already corrected."
+        ),
+    },
+    "metadata_incomplete": {
+        "severity": "review",
+        "category": "metadata",
+        "action": (
+            "Fill or explicitly acknowledge missing wavelength, frame, "
+            "uncertainty, or resolution metadata before quantitative use."
+        ),
+    },
+    "mask_fraction_high": {
+        "severity": "review",
+        "category": "mask",
+        "action": (
+            "Inspect mask provenance and fit windows; reduce unnecessary "
+            "exclusions or choose windows with enough retained pixels."
+        ),
+    },
+    "segment_no_fit_pixels": {
+        "severity": "blocker",
+        "category": "mask",
+        "action": (
+            "Inspect dropped segments; choose overlapping windows or fix masks "
+            "before claiming a multi-segment fit."
+        ),
+    },
+    "too_few_fit_pixels": {
+        "severity": "blocker",
+        "category": "mask",
+        "action": (
+            "Use broader/cleaner windows or reduce model complexity; there are "
+            "too few fitted pixels for a stable interpretation."
+        ),
+    },
+    "segment_mask_fraction_high": {
+        "severity": "review",
+        "category": "mask",
+        "action": (
+            "Inspect per-segment mask split; most masked pixels may be outside "
+            "the window, but high in-window rejection needs review."
+        ),
+    },
+    "explicit_exclusion_dominates": {
+        "severity": "review",
+        "category": "mask",
+        "action": (
+            "Check whether explicit exclusions are too broad; compare a "
+            "controlled narrower-mask variant."
+        ),
+    },
+    "nonfinite_mask_output": {
+        "severity": "blocker",
+        "category": "mask",
+        "action": (
+            "Fix the mask callable so it returns finite values that can be "
+            "converted cleanly to boolean mask semantics."
+        ),
+    },
+    "robust_loss_active": {
+        "severity": "advisory",
+        "category": "optimizer",
+        "action": (
+            "Report robust-loss use and compare raw/effective chi-square rather "
+            "than interpreting optimizer cost as a Gaussian likelihood."
+        ),
+    },
+    "error_floor_applied": {
+        "severity": "advisory",
+        "category": "uncertainty",
+        "action": (
+            "Record the adopted uncertainty floor and compare raw/effective "
+            "diagnostics when judging fit quality."
+        ),
+    },
+    "fallback_errors_used": {
+        "severity": "review",
+        "category": "uncertainty",
+        "action": (
+            "Avoid calibrated chi-square/uncertainty claims until formal "
+            "per-pixel errors are supplied or externally validated."
+        ),
+    },
+    "chi2_effective_not_calibrated": {
+        "severity": "advisory",
+        "category": "uncertainty",
+        "action": (
+            "Use chi-square as a relative diagnostic only; do not quote it as a "
+            "calibrated goodness-of-fit probability."
+        ),
+    },
+    "parameter_errors_local_linearized": {
+        "severity": "info",
+        "category": "uncertainty",
+        "action": (
+            "Report parameter errors as local optimizer diagnostics, not global "
+            "posterior intervals."
+        ),
+    },
+    "parameter_errors_ignore_model_systematics": {
+        "severity": "advisory",
+        "category": "uncertainty",
+        "action": (
+            "Add external/systematic uncertainty terms before quoting final "
+            "stellar-parameter uncertainties."
+        ),
+    },
+    "parameter_errors_unreliable_if_high_chi2": {
+        "severity": "review",
+        "category": "uncertainty",
+        "action": "Do not rely on local covariance errors until high chi-square is understood.",
+    },
+    "parameter_errors_unreliable_if_robust_loss": {
+        "severity": "advisory",
+        "category": "uncertainty",
+        "action": "Treat covariance errors from robust-loss fits as approximate diagnostics.",
+    },
+    "parameter_errors_unreliable_if_error_floor": {
+        "severity": "advisory",
+        "category": "uncertainty",
+        "action": "State the adopted error floor when reporting parameter errors.",
+    },
+    "parameter_errors_unreliable_if_fallback_errors": {
+        "severity": "review",
+        "category": "uncertainty",
+        "action": "Supply formal errors before treating parameter uncertainties as calibrated.",
+    },
+    "parameter_errors_unreliable_if_segment_weights": {
+        "severity": "advisory",
+        "category": "uncertainty",
+        "action": "State segment weights and test sensitivity to them.",
+    },
+    "nonstellar_feature_overlap": {
+        "severity": "review",
+        "category": "nonstellar_feature",
+        "action": (
+            "Annotate and inspect the overlapping feature; run a named-mask "
+            "sensitivity fit only if the residuals support it."
+        ),
+    },
+    "known_line_region_residual": {
+        "severity": "review",
+        "category": "residual_window",
+        "action": (
+            "Inspect the flagged residual window and compare other diagnostics "
+            "before assigning a physical cause."
+        ),
+    },
+    "diagnostic_line_contaminated": {
+        "severity": "review",
+        "category": "nonstellar_feature",
+        "action": (
+            "Compare fits with and without an explicit named mask, and check "
+            "other diagnostic lines before interpreting the affected line."
+        ),
+    },
+    "dib_overlap_balmer_wing": {
+        "severity": "review",
+        "category": "nonstellar_feature",
+        "action": (
+            "Treat the DIB as a candidate contaminant; inspect/mask explicitly "
+            "rather than letting the stellar model absorb it."
+        ),
+    },
+    "dib_candidate_detected": {
+        "severity": "advisory",
+        "category": "nonstellar_feature",
+        "action": (
+            "Report as a candidate DIB residual only; confirmation requires "
+            "independent checks and line-of-sight context."
+        ),
+    },
+    "nonstellar_feature_frame_ambiguous": {
+        "severity": "review",
+        "category": "nonstellar_feature",
+        "action": (
+            "Verify the spectrum frame or assumed ISM velocity before applying "
+            "a fixed feature mask."
+        ),
+    },
+    "nonstellar_mask_applied": {
+        "severity": "advisory",
+        "category": "mask",
+        "action": (
+            "Record which named non-stellar masks were applied and compare with "
+            "the unmasked baseline."
+        ),
+    },
+    "telluric_mask_frame_ambiguous": {
+        "severity": "review",
+        "category": "telluric",
+        "action": (
+            "Verify the mask frame against the spectrum frame; topocentric "
+            "telluric masks can be wrong on shifted wavelength grids."
+        ),
+    },
+    "coarse_telluric_mask_applied": {
+        "severity": "advisory",
+        "category": "telluric",
+        "action": (
+            "Prefer a validated transmission-threshold mask for quantitative "
+            "fits; broad catalog masks are quicklook fallbacks."
+        ),
+    },
+}
+
+
+QUALITY_FLAG_BLOCKING_FLAGS = tuple(
+    flag
+    for flag, record in QUALITY_FLAG_CLASSIFICATION.items()
+    if record["severity"] == "blocker"
+)
+QUALITY_FLAG_REVIEW_FLAGS = tuple(
+    flag
+    for flag, record in QUALITY_FLAG_CLASSIFICATION.items()
+    if record["severity"] == "review"
+)
+QUALITY_FLAG_ADVISORY_FLAGS = tuple(
+    flag
+    for flag, record in QUALITY_FLAG_CLASSIFICATION.items()
+    if record["severity"] == "advisory"
+)
+QUALITY_FLAG_INFO_FLAGS = tuple(
+    flag
+    for flag, record in QUALITY_FLAG_CLASSIFICATION.items()
+    if record["severity"] == "info"
+)
+
+
 def _describe_dynamic_quality_flag(flag):
     flag = str(flag)
     if flag.startswith("grid_edge_"):
@@ -761,6 +1367,155 @@ def _describe_dynamic_quality_flag(flag):
                 "available model grid.".format(parts[0], parts[1])
             )
     return "No description is registered for this quality flag yet."
+
+
+def _dynamic_quality_flag_classification(flag):
+    flag = str(flag)
+    if flag.startswith("grid_edge_"):
+        return {
+            "severity": "review",
+            "category": "model_grid",
+            "action": (
+                "Inspect the fitted parameter against the available grid and "
+                "rerun with a more appropriate bounded range if needed."
+            ),
+        }
+    if flag.endswith("_high_chi2_proxy"):
+        return {
+            "severity": "review",
+            "category": "comparison_proxy",
+            "action": (
+                "Inspect the corresponding comparison residuals; proxy "
+                "chi-square is a diagnostic, not a likelihood ranking."
+            ),
+        }
+    if flag.endswith("_large_median_abs_sigma") or flag.endswith(
+        "_large_fractional_rms"
+    ):
+        return {
+            "severity": "review",
+            "category": "comparison_proxy",
+            "action": (
+                "Inspect the held-out/common-window residuals before treating "
+                "this window set as stable."
+            ),
+        }
+    if flag.endswith("_warning"):
+        return {
+            "severity": "review",
+            "category": "warning",
+            "action": "Inspect this warning before interpreting the affected result.",
+        }
+    return {
+        "severity": "review",
+        "category": "unclassified",
+        "action": (
+            "Inspect this unclassified quality flag in the full report before "
+            "using the fitted parameters."
+        ),
+    }
+
+
+def classify_quality_flag(flag):
+    """Return severity/category/action metadata for one quality flag.
+
+    The returned mapping is JSON-safe and intentionally user-facing.  Static
+    flags are covered by ``QUALITY_FLAG_CLASSIFICATION``; dynamic families such
+    as ``grid_edge_teff_high`` and comparison-proxy flags are classified by
+    pattern.
+    """
+    flag = str(flag)
+    metadata = dict(
+        QUALITY_FLAG_CLASSIFICATION.get(
+            flag,
+            _dynamic_quality_flag_classification(flag),
+        )
+    )
+    severity = str(metadata.get("severity", "review")).lower()
+    if severity not in QUALITY_FLAG_SEVERITY_RANK:
+        severity = "review"
+    metadata["flag"] = flag
+    metadata["severity"] = severity
+    metadata.setdefault("category", "unclassified")
+    metadata.setdefault("action", "Inspect this flag before interpreting the result.")
+    metadata["description"] = QUALITY_FLAG_DESCRIPTIONS.get(
+        flag,
+        _describe_dynamic_quality_flag(flag),
+    )
+    metadata["blocks_interpretation"] = bool(severity == "blocker")
+    metadata["needs_review"] = bool(severity in {"blocker", "review"})
+    metadata["priority"] = int(
+        metadata.get("priority", QUALITY_FLAG_SEVERITY_RANK[severity])
+    )
+    return _jsonable(metadata)
+
+
+def quality_flag_actions(flags, *, max_actions=None, include_ok=False):
+    """Return sorted user actions for quality flags.
+
+    ``ok`` is omitted when other flags are present unless ``include_ok`` is
+    True.  This keeps notebook output focused on the few things a user should
+    actually do next.
+    """
+    unique_flags = sorted({str(flag) for flag in (flags or [])})
+    if not include_ok and len(unique_flags) > 1:
+        unique_flags = [flag for flag in unique_flags if flag.lower() != "ok"]
+    actions = [classify_quality_flag(flag) for flag in unique_flags]
+    actions.sort(
+        key=lambda item: (
+            QUALITY_FLAG_SEVERITY_RANK.get(item["severity"], 99),
+            int(item.get("priority", 99)),
+            str(item.get("flag")),
+        )
+    )
+    if max_actions is not None:
+        max_actions = int(max_actions)
+        if max_actions < 0:
+            raise ValueError("max_actions must be >= 0 when supplied.")
+        actions = actions[:max_actions]
+    return _jsonable(actions)
+
+
+def summarize_quality_flags(flags, *, max_actions=3):
+    """Return a compact severity/action summary for quality flags."""
+    actions = quality_flag_actions(flags, include_ok=True)
+    counts = {severity: 0 for severity in QUALITY_FLAG_SEVERITY_ORDER}
+    for action in actions:
+        severity = action.get("severity", "review")
+        counts[severity] = counts.get(severity, 0) + 1
+    if counts.get("blocker", 0):
+        headline = "blocked_for_interpretation"
+    elif counts.get("review", 0):
+        headline = "needs_review"
+    elif counts.get("advisory", 0):
+        headline = "usable_with_caveats"
+    else:
+        headline = "ok"
+    return _jsonable(
+        {
+            "schema_version": 1,
+            "headline_status": headline,
+            "counts_by_severity": counts,
+            "n_flags": len(actions),
+            "blocking_flags": [
+                item["flag"] for item in actions if item["severity"] == "blocker"
+            ],
+            "review_flags": [
+                item["flag"] for item in actions if item["severity"] == "review"
+            ],
+            "advisory_flags": [
+                item["flag"] for item in actions if item["severity"] == "advisory"
+            ],
+            "info_flags": [
+                item["flag"] for item in actions if item["severity"] == "info"
+            ],
+            "top_actions": quality_flag_actions(
+                flags,
+                max_actions=max_actions,
+                include_ok=False,
+            ),
+        }
+    )
 
 
 def describe_quality_flags(flags):
@@ -801,6 +1556,7 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
     if quality_flags is None:
         quality_flags = summary.get("quality_flags", ())
     flags = list(quality_flags or ())
+    flag_summary = summarize_quality_flags(flags)
 
     chi2_red = summary.get("chi2_red", diagnostics.get("reduced_chi2"))
     segments = []
@@ -846,6 +1602,8 @@ def build_fit_quality_report(summary, diagnostics=None, quality_flags=None):
         "success": summary.get("success"),
         "quality_flags": flags,
         "quality_flag_descriptions": describe_quality_flags(flags),
+        "quality_flag_actions": flag_summary["top_actions"],
+        "quality_flag_summary": flag_summary,
         "reduced_chi2": chi2_red,
         "effective_chi2": summary.get(
             "effective_chi2", diagnostics.get("effective_chi2")
@@ -932,6 +1690,31 @@ def format_fit_quality_report(result_or_report):
     lines = ["Quality report:"]
     flags = report.get("quality_flags") or ["unknown"]
     lines.append("  flags: {0}".format(", ".join(str(flag) for flag in flags)))
+    flag_summary = report.get("quality_flag_summary")
+    if not isinstance(flag_summary, Mapping):
+        flag_summary = summarize_quality_flags(flags)
+    status = flag_summary.get("headline_status")
+    counts = flag_summary.get("counts_by_severity") or {}
+    if status and status != "ok":
+        lines.append(
+            "  flag status: {0} (blockers={1}, review={2}, advisory={3})".format(
+                status,
+                int(counts.get("blocker", 0) or 0),
+                int(counts.get("review", 0) or 0),
+                int(counts.get("advisory", 0) or 0),
+            )
+        )
+    top_actions = list(flag_summary.get("top_actions") or [])
+    if top_actions:
+        lines.append("  top actions:")
+        for item in top_actions[:3]:
+            lines.append(
+                "    - {0} [{1}]: {2}".format(
+                    item.get("flag"),
+                    item.get("severity"),
+                    item.get("action"),
+                )
+            )
     if report.get("reduced_chi2") is not None:
         lines.append("  chi2_red: {0:.4g}".format(float(report["reduced_chi2"])))
     if report.get("optimizer_loss") and report.get("optimizer_loss") != "linear":
@@ -1242,6 +2025,9 @@ class PhoenixFitResult(Mapping):
         )
         quality = self.quality_report()
         flags = list(quality.get("quality_flags") or [])
+        flag_summary = quality.get("quality_flag_summary")
+        if not isinstance(flag_summary, Mapping):
+            flag_summary = summarize_quality_flags(flags)
         review_flags = [
             str(flag) for flag in flags if str(flag).lower() not in {"ok", "none"}
         ]
@@ -1254,16 +2040,22 @@ class PhoenixFitResult(Mapping):
             uncertainty_status = str(uncertainty)
 
         if exploratory:
-            interpretation = "exploratory_not_publication_valid"
+            interpretation = "exploratory_review_only"
             sentence = (
                 "Fit completed under an explicit exploratory override; use it "
-                "for diagnosis, not publication inference."
+                "for diagnosis and review, not as a final analysis result."
             )
         elif readiness.get("ready_for_intent") is False:
             interpretation = "computed_but_interpretation_blocked"
             sentence = (
                 "Fit completed, but setup/readiness blockers must be reviewed "
                 "before interpreting the parameters."
+            )
+        elif flag_summary.get("headline_status") == "blocked_for_interpretation":
+            interpretation = "quality_blocked"
+            sentence = (
+                "Fit completed, but quality blockers prevent quantitative "
+                "interpretation until they are resolved."
             )
         elif review_flags:
             interpretation = "review_quality_flags"
@@ -1297,13 +2089,23 @@ class PhoenixFitResult(Mapping):
                 "assumed_resolution_R": provenance_summary.get("assumed_resolution_R"),
                 "fitted_pixels": quality.get("n_points"),
                 "quality_flags": flags,
+                "quality_flag_summary": flag_summary,
                 "setup_hash": provenance_summary.get("fit_setup_hash"),
             }
         )
 
-    def summary_text(self):
+    def summary_text(self, *, include_hash=True, max_flags=None, include_notes=True):
         """Return a compact plain-language result summary for notebooks."""
         summary = self.compact_summary()
+        quality_flags = list(summary.get("quality_flags") or ["none"])
+        if max_flags is not None:
+            max_flags = int(max_flags)
+            if max_flags < 0:
+                raise ValueError("max_flags must be >= 0 when supplied.")
+            n_extra = max(0, len(quality_flags) - max_flags)
+            quality_flags = quality_flags[:max_flags]
+            if n_extra:
+                quality_flags.append("...plus {0} more".format(n_extra))
         pieces = [
             "Spyctres PHOENIX fit",
             "  Teff={0} K, logg={1}, [Fe/H]={2}, RV={3} km/s".format(
@@ -1321,28 +2123,58 @@ class PhoenixFitResult(Mapping):
                 summary.get("interpretation_status"),
             )
         )
-        pieces.append(
-            "  reader={0}; resolution_source={1}".format(
-                summary.get("reader") or "unknown",
-                summary.get("resolution_source") or "unknown",
+        reader = summary.get("reader") or "unknown"
+        resolution_source = summary.get("resolution_source") or "unknown"
+        if reader != "unknown" or resolution_source != "unknown":
+            pieces.append(
+                "  reader={0}; resolution_source={1}".format(
+                    reader,
+                    resolution_source,
+                )
             )
-        )
         if summary.get("assumed_resolution_R") is not None:
             pieces.append(
                 "  assumed R={0}".format(
                     _format_optional(summary.get("assumed_resolution_R"))
                 )
             )
+        flag_summary = summary.get("quality_flag_summary") or {}
+        if isinstance(flag_summary, Mapping) and flag_summary.get("headline_status"):
+            counts = flag_summary.get("counts_by_severity") or {}
+            pieces.append(
+                "  quality_status={0}; blockers={1}; review={2}; advisory={3}".format(
+                    flag_summary.get("headline_status"),
+                    int(counts.get("blocker", 0) or 0),
+                    int(counts.get("review", 0) or 0),
+                    int(counts.get("advisory", 0) or 0),
+                )
+            )
         pieces.append(
             "  fitted_pixels={0}; uncertainty={1}; flags={2}".format(
                 summary.get("fitted_pixels"),
                 summary.get("uncertainty_status"),
-                ", ".join(summary.get("quality_flags") or ["none"]),
+                ", ".join(quality_flags),
             )
         )
-        if summary.get("setup_hash"):
+        if include_hash and summary.get("setup_hash"):
             pieces.append("  setup_hash={0}".format(str(summary["setup_hash"])[:12]))
         pieces.append("  {0}".format(summary.get("interpretation")))
+        if isinstance(flag_summary, Mapping):
+            top_actions = list(flag_summary.get("top_actions") or [])
+            if top_actions:
+                item = top_actions[0]
+                pieces.append(
+                    "  top action: {0} [{1}] — {2}".format(
+                        item.get("flag"),
+                        item.get("severity"),
+                        item.get("action"),
+                    )
+                )
+        if include_notes and "high_chi2" in (summary.get("quality_flags") or []):
+            pieces.append(
+                "  note: high chi2 can reflect small formal errors plus model, "
+                "continuum, LSF, abundance, activity, or missing-physics systematics."
+            )
         return "\n".join(pieces)
 
     def __repr__(self):

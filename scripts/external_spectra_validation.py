@@ -186,6 +186,16 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--min-fit-pixels",
+        type=int,
+        default=20,
+        help=(
+            "Minimum usable pixels required inside the chosen validation fit "
+            "window before an external-validation target is considered ready. "
+            "This is a script-level QC guardrail, not a global reader default."
+        ),
+    )
+    parser.add_argument(
         "--sdss-mask-policy",
         default="and_mask_conservative",
         choices=("ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
@@ -732,6 +742,76 @@ def _fit_setup_recommendation(spectrum, args, assumed_resolution):
         }
 
 
+def _apply_external_min_fit_pixels(readiness, min_fit_pixels):
+    """Apply the external-validation minimum-pixel QC guardrail.
+
+    The core readiness audit is intentionally permissive for generic quicklook
+    use. This script is different: it is used to validate external reader/test
+    sets, so a tiny fit window should be flagged even when nonzero pixels remain.
+    """
+    out = dict(readiness or {})
+    if min_fit_pixels is None:
+        return out
+    min_fit_pixels = int(min_fit_pixels)
+    if min_fit_pixels < 1:
+        return out
+
+    settings = dict(out.get("settings") or {})
+    settings["external_validation_min_fit_pixels"] = min_fit_pixels
+    out["settings"] = settings
+
+    n_fit = int(out.get("n_fit_candidate") or 0)
+    if n_fit >= min_fit_pixels:
+        return out
+
+    blocker_flags = {"too_few_fitted_pixels"}
+    rejected_fraction = float(out.get("rejected_inside_fit_window_fraction") or 0.0)
+    if rejected_fraction > 0.0:
+        blocker_flags.add("artifact_review_required")
+
+    flags = set(out.get("interpretation_flags") or ())
+    flags.update(blocker_flags)
+    out["interpretation_flags"] = sorted(flags)
+
+    blockers = set(out.get("blockers_for_intent") or ())
+    blockers.update(blocker_flags)
+    out["blockers_for_intent"] = sorted(blockers)
+    out["ready_for_intent"] = False
+    out["fit_ready"] = False
+    out["quicklook_only"] = bool(n_fit > 0)
+
+    invalid = set(out.get("invalid_interpretations_for_intent") or ())
+    invalid.add("first_pass_classification")
+    out["invalid_interpretations_for_intent"] = sorted(invalid)
+
+    actions = list(out.get("actions_for_intent") or ())
+    actions.append(
+        {
+            "flag": "too_few_fitted_pixels",
+            "severity": "blocker",
+            "intent_severity": "blocker",
+            "action": (
+                "Use a wider validated fit window, choose a different diagnostic "
+                "region, or lower --min-fit-pixels only for an explicit QC check."
+            ),
+        }
+    )
+    if "artifact_review_required" in blocker_flags:
+        actions.append(
+            {
+                "flag": "artifact_review_required",
+                "severity": "blocker",
+                "intent_severity": "blocker",
+                "action": (
+                    "Inspect the validation window, masks, and flagged pixels; "
+                    "do not treat this target as clean reader-validation evidence."
+                ),
+            }
+        )
+    out["actions_for_intent"] = actions
+    return out
+
+
 def _role_expectation_assessment(role, readiness):
     role = str(role or "unknown").strip().lower()
     fit_ready = bool((readiness or {}).get("ready_for_intent"))
@@ -798,6 +878,10 @@ def validate_target(target, args):
             assumed_resolution=assumed_resolution,
             intended_use="external_reader_validation",
             intent=args.readiness_intent,
+        )
+        readiness = _apply_external_min_fit_pixels(
+            readiness,
+            args.min_fit_pixels,
         )
         coverage = _coverage_summary(spectrum)
         segments = [_segment_summary(segment) for segment in _iter_segments(spectrum)]

@@ -5,6 +5,11 @@ Spyctres is a Python package for stellar spectral fitting and spectral typing fr
 Developers: Etienne Bachelet and Yiannis Tsapras
 
 Spyctres is still under active development. It includes core fitting utilities, instrument I/O helpers, plotting tools, and example workflows. Recent additions include PHOENIX template-based fitting and a clearer separation between generic fitting code, workflow recipes, examples, and smoke tests.
+The current beginner path focuses on PHOENIX-backed spectral classification
+from reduced spectra. Historical microlensing-source SED functionality, where
+physical fluxes and photometry can constrain `theta_s`, extinction, and
+magnification-related terms, is being preserved as a separate expert workflow
+rather than used as a hidden fallback for normalized spectra.
 
 ## Features
 
@@ -190,6 +195,8 @@ Use this checklist for a first local run from a source checkout.
      --quicklook \
      --output-json /tmp/spyctres_batch_quick.json \
      --summary-csv /tmp/spyctres_batch_quick.csv \
+     --plot-dir /tmp/spyctres_batch_plots \
+     --max-plots 2 \
      --resume
    ```
 
@@ -205,14 +212,14 @@ Use this checklist for a first local run from a source checkout.
    ```
 
    For heterogeneous folders, use a CSV manifest instead of relying on one
-   global instrument/resolution assumption. This example uses only spectra
+   global reader/resolution assumption. This example uses only spectra
    bundled under `examples/data/`; replace the paths only when you intentionally
    supply your own external spectra:
 
    ```csv
-   target_id,path,instrument,R
-   xshooter_uvb,examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits,xshooter,
-   floyds_blue,examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv,floyds,500
+   target_id,path,reader,R
+   xshooter_uvb,examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits,xshooter_merge1d,
+   floyds_blue,examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv,floyds_csv,500
    ```
 
    Save that CSV, for example as `examples/my_batch_manifest.csv`, then run:
@@ -236,6 +243,17 @@ Use this checklist for a first local run from a source checkout.
 
 Recommended example order:
 
+| If you want to... | Start with |
+| --- | --- |
+| Get one clean first success | Example 1 |
+| Understand windows, masks, and local line checks | Example 2 |
+| See how fit assumptions change a PHOENIX result | Example 3 |
+| Move from exploratory fitting toward reviewed analysis | Examples 4A and 4B |
+| Fit many spectra without blindly searching the whole grid | Example 5 |
+| Combine UVB/VIS/NIR evidence without hidden arm rescaling | Advanced Example 6 |
+
+The numbered examples are the maintained learning path:
+
 1. `examples/example1_quickstart.py` /
    `examples/example1_quickstart.ipynb` for reading, plotting, setup review,
    and one optional PHOENIX fit.
@@ -245,20 +263,29 @@ Recommended example order:
 3. `examples/example3_improving_a_phoenix_fit.py` /
    `examples/example3_improving_a_phoenix_fit.ipynb` for comparing quicklook
    and stronger reviewed setup choices.
-4. `examples/example4_publication_quality_fitting.py` /
-   `examples/example4_publication_quality_fitting.ipynb` for the conservative
-   publication-oriented scaffold.
+4A. `examples/example4_reviewed_balmer_analysis.py` /
+   `examples/example4_reviewed_balmer_analysis.ipynb` for reviewed-analysis
+   UVB/Balmer preparation, baseline fitting, residual checks, and
+   optional individual-line consistency on the complex Gaia21ccu UVB spectrum.
+4B. `examples/example4b_balmer_stability_checks.py` /
+   `examples/example4b_balmer_stability_checks.ipynb` for the bounded
+   follow-up checks recommended at the end of Example 4A: continuum degree,
+   Balmer-core mask width, line selection, and resolution/LSF sensitivity on
+   the same spectrum.
 5. `examples/example5_batch_fitting.py` /
    `examples/example5_batch_fitting.ipynb` for the quickscan-then-refine batch
-   pattern.
-6. Advanced/validation examples after that: `simple_phoenix_fit.py`,
+   pattern, including representative fit-inspection plots for sample targets.
+6. `examples/example6_multiarm_classification.py` /
+   `examples/example6_multiarm_classification.ipynb` for multi-arm X-SHOOTER
+   classification/consistency checks across UVB, VIS, and NIR.
+7. Advanced/validation examples after that: `simple_phoenix_fit.py`,
    `branch_quickscan.py`, `batch_quickscan_then_refine.py`,
    `diagnostic_window_comparison.py`,
    `high_resolution_sideband_normalization.py`,
    `full_spectrum_classification.ipynb`,
    `xshooter_multiarm_classification.ipynb`,
    `xsl_figure1_validation.ipynb`,
-   `publication_quality_xshooter_uvb.py`, and
+   `reviewed_xshooter_uvb_analysis.py`, and
    `pepsi_legacy_linefit_validation.ipynb`.
 
 The same beginner workflow is available from one Python import:
@@ -278,8 +305,10 @@ audit = sp.audit_spectrum_for_fit(spec)
 windows = sp.select_diagnostic_windows(spec)
 sp.plot_diagnostic_windows(spec, windows)
 
-line = sp.fit_line(spec, "Hgamma")
-sp.plot_line_fit(line)
+line_results = sp.fit_lines(spec, ["Hgamma", "Mg II 4481"])
+line_summary = sp.compare_line_fits(line_results)
+sp.plot_line_fit_comparison(line_summary)
+sp.plot_line_fit(line_results[0])
 
 result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 sp.plot_fit_referee(result)
@@ -299,6 +328,11 @@ wavelength medium, observer frame, stellar-rest status, uncertainty source,
 resolution assumptions, or mask policy; those remain in audit output, fit
 provenance, quality flags, and plots.
 
+The numbered path intentionally uses both clean and difficult spectra. Example
+1 uses a bundled benchmark-star spectrum for a cleaner first success. Examples
+4A/4B continue with Gaia21ccu because a complex real spectrum is better for
+teaching reviewed-analysis blockers, exploratory overrides, and stability checks.
+
 If you are unsure which public call to use, ask Spyctres for the curated API
 guide rather than browsing internal modules:
 
@@ -315,16 +349,19 @@ alpha, but the recommended beginner route is the grouped one-import path above.
 classification; it should not be read as a formal MK-classification engine or
 as a substitute for reviewed atmospheric-parameter fitting.
 
-`quick_example.py` is retained only as a compatibility pointer to these
-maintained workflows; smoke tests live under `scripts/`. See
+Older unnumbered examples are retained only as advanced, validation, or
+compatibility material; smoke tests live under `scripts/`. See
 `examples/README.md` for data paths, PHOENIX configuration, caveats, and the
 same recommended order with more detail.
 
 The maintained project roadmap is in
 [`docs/development_plan.md`](docs/development_plan.md). In particular,
-publication-oriented parameter fitting is tracked as a separate expert workflow:
-quick classification remains lightweight, while publication-quality use must
+reviewed-analysis parameter fitting is tracked as a separate expert workflow:
+quick classification remains lightweight, while reviewed-analysis use must
 pass stricter metadata, uncertainty, mask, LSF, residual, and recovery checks.
+The same roadmap also tracks a planned microlensing-source physical-flux/SED
+layer that will modernize the legacy `k93models`/`stsynphot` `theta_s` workflow
+behind explicit data and provenance requirements.
 
 For batches, start with the X-SHOOTER UVB throughput example:
 
@@ -353,6 +390,8 @@ python examples/batch_quickscan_then_refine.py \
   --quicklook \
   --output-json /tmp/spyctres_batch_quick.json \
   --summary-csv /tmp/spyctres_batch_quick.csv \
+  --plot-dir /tmp/spyctres_batch_plots \
+  --max-plots 2 \
   --resume
 
 python examples/batch_quickscan_then_refine.py \
@@ -374,6 +413,9 @@ python scripts/throughput_summary.py /tmp/spyctres_batch_refined.json --project 
 
 The summary reports quick-scan, focused-refine, and total per-spectrum timing,
 then projects an approximate wall time for the requested number of spectra.
+When `--plot-dir` is supplied, the batch runner also writes a small number of
+representative line-window plots so users can inspect sample fits without
+opening every spectrum in a large batch.
 
 To open the PHOENIX example notebook:
 
@@ -480,7 +522,7 @@ are preferred. For products without such flags, Spyctres also provides an
 explicit same-grid fallback artifact mask, but it is opt-in and recorded as a
 quicklook/product assumption rather than applied silently.
 
-For stricter work, use `publication_readiness_audit()` around the same spectrum
+For stricter work, use `analysis_readiness_audit()` around the same spectrum
 and masks. It deliberately treats some quicklook assumptions as blockers, for
 example assumed-but-unvalidated resolution, missing formal errors, unknown
 wavelength/frame metadata, unapplied archive bad-region overlap, SDSS tabulated
@@ -641,15 +683,15 @@ used by that fit, and it scores every completed fit over the same union of
 planned diagnostic windows. The common-window residual summary is often the
 cleaner cross-comparison view because each fit is judged on the same feature
 set, while the held-out residuals remain a stricter generalization check. Both
-are proxy diagnostics, not calibrated publication likelihoods or automatic
+are proxy diagnostics, not calibrated reviewed-analysis likelihoods or automatic
 model-selection rules.
-For publication-oriented Balmer-window work, Spyctres treats line-core masking
+For reviewed-analysis Balmer-window work, Spyctres treats line-core masking
 as an explicit sensitivity choice rather than a hidden fit parameter. The
-publication scaffold records the retained-pixel fraction and an
+reviewed-analysis scaffold records the retained-pixel fraction and an
 information-loss penalty for each tested core-mask width. This penalty is not
 added to the spectral χ²; it exists to discourage choosing an overly wide mask
 just because discarded Balmer-wing pixels made the apparent fit easier.
-The X-SHOOTER UVB publication scaffold defaults to a 4 A Balmer-core mask,
+The X-SHOOTER UVB reviewed-analysis scaffold defaults to a 4 A Balmer-core mask,
 matching its own conservative information-retention recommendation for the
 bundled example; users should still run mask-width sensitivity checks before
 making scientific claims.
@@ -674,9 +716,9 @@ running expensive variants; they are not calibrated line measurements. When an
 opt-in baseline PHOENIX fit is run, the scaffold adds per-line model-residual
 diagnostics that keep fitted-pixel residuals separate from masked/core overplot
 checks.
-For review handoff, the same publication checkpoint can now be summarized into
-compact Markdown, CSV, and PNG artifacts with `--output-publication-summary-md`,
-`--output-publication-summary-csv`, and `--output-publication-summary-plot`.
+For review handoff, the same reviewed-analysis checkpoint can now be summarized into
+compact Markdown, CSV, and PNG artifacts with `--output-review-summary-md`,
+`--output-review-summary-csv`, and `--output-review-summary-plot`.
 These reports are post-processing only: they compare the baseline, any executed
 systematic variants, and any injection/recovery trials already present in the
 JSON without launching extra PHOENIX fits.
@@ -685,9 +727,9 @@ labels readiness, Balmer-core mask sensitivity, window-set sensitivity, and
 same-model recovery as acceptable, borderline, blocking, or not yet evaluated.
 These labels are triage aids with explicit thresholds, not final calibrated
 uncertainties.
-It also includes a plain-language publication-stability verdict so users can
+It also includes a plain-language reviewed-analysis stability verdict so users can
 tell when the scaffold has produced a diagnostic/exploratory result rather
-than a publication-grade parameter estimate.
+than a reviewed-analysis parameter estimate.
 The Markdown/JSON summary also includes bounded suggested next commands. These
 commands write fresh follow-up checkpoints derived from the current
 `--output-json` path rather than mutating a previously reviewed checkpoint.

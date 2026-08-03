@@ -15,6 +15,7 @@ spectra.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -261,6 +262,659 @@ class DiagnosticWindow:
             "reference_ids": list(self.reference_ids),
             "notes": self.notes,
         }
+
+
+class DiagnosticWindowSelection(dict):
+    """Dict-compatible diagnostic-window selection with display helpers."""
+
+    @property
+    def selected(self):
+        return list(self.get("selected", ()))
+
+    @property
+    def rejected(self):
+        return list(self.get("rejected", ()))
+
+    def select_by_id(self, ids, *, require_all=True, include_rejected=False):
+        """Return selected diagnostic-window records matching ``ids``.
+
+        Parameters
+        ----------
+        ids : str or iterable of str
+            Diagnostic-window id or ids to retrieve.  The returned records
+            preserve the order requested by the caller, which is useful when a
+            reviewed fitting setup should plot exactly the same windows it
+            fitted.
+        require_all : bool, default True
+            If True, raise ``KeyError`` when any requested id is unavailable.
+            If False, silently skip missing ids.
+        include_rejected : bool, default False
+            Also search rejected records.  This is intended for audit displays;
+            ordinary fitting examples should normally use selected windows only.
+        """
+        if isinstance(ids, str):
+            requested = [ids]
+        else:
+            requested = [str(item) for item in ids]
+        pool = list(self.selected)
+        if include_rejected:
+            pool.extend(self.rejected)
+        by_id = {
+            str(item.get("id")): dict(item)
+            for item in pool
+            if item.get("id") is not None
+        }
+        out = []
+        missing = []
+        for item_id in requested:
+            if item_id in by_id:
+                out.append(dict(by_id[item_id]))
+            else:
+                missing.append(item_id)
+        if missing and require_all:
+            available = ", ".join(sorted(by_id)) or "none"
+            raise KeyError(
+                "Diagnostic window id(s) not available: {0}. Available ids: {1}".format(
+                    ", ".join(missing),
+                    available,
+                )
+            )
+        return out
+
+    def to_dict(self):
+        return _json_native(dict(self))
+
+    def summary(self, max_rows=8):
+        """Return a compact JSON-safe summary of selected/rejected windows."""
+        rows = []
+        for item in self.selected[: int(max_rows)]:
+            region = item.get("region_A")
+            rows.append(
+                {
+                    "id": item.get("id"),
+                    "label": item.get("label"),
+                    "region_A": None if region is None else list(region),
+                    "roles": list(item.get("roles") or []),
+                    "usable_fraction": item.get("usable_fraction"),
+                    "resolution_elements": item.get("resolution_elements"),
+                    "score": item.get("score"),
+                    "risk_tags": list(item.get("risk_tags") or []),
+                    "default_fit_policy": item.get("default_fit_policy"),
+                }
+            )
+        rejected_rows = []
+        for item in self.rejected[: int(max_rows)]:
+            rejected_rows.append(
+                {
+                    "id": item.get("id"),
+                    "label": item.get("label"),
+                    "reject_reason": item.get("reject_reason"),
+                }
+            )
+        return _json_native(
+            {
+                "schema_version": 1,
+                "n_selected": len(self.selected),
+                "n_rejected": len(self.rejected),
+                "selected": rows,
+                "rejected_preview": rejected_rows,
+                "selection_policy": self.get("selection_policy"),
+            }
+        )
+
+    def summary_text(self, max_rows=8):
+        """Return a compact plain-text table for notebook/script display."""
+        lines = [
+            "Spyctres diagnostic-window selection",
+            "  selected={0}, rejected={1}".format(
+                len(self.selected),
+                len(self.rejected),
+            ),
+            format_diagnostic_window_table(self, max_rows=max_rows),
+        ]
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class FitCollectionWindowSelection:
+    """Inspectable retained-segment selection for a diagnostic-window fit.
+
+    ``collection`` and ``valid_masks_by_segment`` are aligned and can be passed
+    to the PHOENIX fitter. The decision records explain which visible windows
+    and original segments were retained, and which remain diagnostic-only.
+    """
+
+    collection: object
+    valid_masks_by_segment: tuple
+    regions: tuple
+    regions_by_segment: tuple
+    retained_segment_indices: tuple
+    diagnostic_only_segment_indices: tuple
+    retained_window_ids: tuple
+    diagnostic_only_window_ids: tuple
+    window_decisions: tuple
+    segment_decisions: tuple
+    thresholds: dict
+
+    def to_dict(self):
+        """Return JSON-safe provenance without serializing flux/mask arrays."""
+        return _json_native(
+            {
+                "schema_version": 1,
+                "operation": "build_fit_collection_from_windows",
+                "retained_segment_indices": list(self.retained_segment_indices),
+                "diagnostic_only_segment_indices": list(
+                    self.diagnostic_only_segment_indices
+                ),
+                "retained_window_ids": list(self.retained_window_ids),
+                "diagnostic_only_window_ids": list(self.diagnostic_only_window_ids),
+                "regions": [list(region) for region in self.regions],
+                "regions_by_segment": [
+                    [list(region) for region in regions]
+                    for regions in self.regions_by_segment
+                ],
+                "thresholds": dict(self.thresholds),
+                "window_decisions": list(self.window_decisions),
+                "segment_decisions": list(self.segment_decisions),
+                "n_retained_segments": len(self.retained_segment_indices),
+                "n_diagnostic_only_segments": len(
+                    self.diagnostic_only_segment_indices
+                ),
+                "n_retained_windows": len(self.retained_window_ids),
+                "n_diagnostic_only_windows": len(self.diagnostic_only_window_ids),
+            }
+        )
+
+    def summary_text(self, max_rows=16):
+        """Return a concise notebook/CLI retention summary."""
+        payload = self.to_dict()
+        lines = [
+            "Spyctres retained-window fit selection",
+            "  retained segments: {0}; diagnostic-only segments: {1}".format(
+                payload["n_retained_segments"],
+                payload["n_diagnostic_only_segments"],
+            ),
+            "  retained windows: {0}".format(
+                ", ".join(payload["retained_window_ids"]) or "none"
+            ),
+        ]
+        if payload["diagnostic_only_window_ids"]:
+            lines.append(
+                "  diagnostic-only windows: {0}".format(
+                    ", ".join(payload["diagnostic_only_window_ids"])
+                )
+            )
+        lines.append(
+            "  thresholds: usable>={0:g}, contiguous>={1:g}, edge_margin={2:g} A".format(
+                float(payload["thresholds"]["min_usable_fraction"]),
+                float(payload["thresholds"]["min_contiguous_fraction"]),
+                float(payload["thresholds"]["edge_margin_A"]),
+            )
+        )
+        lines.append("  segment decisions:")
+        for item in payload["segment_decisions"][: int(max_rows)]:
+            lines.append(
+                "    - {0}: {1}; retained_windows={2}; reason={3}".format(
+                    item.get("segment"),
+                    "retained" if item.get("retained") else "diagnostic-only",
+                    ", ".join(item.get("retained_window_ids") or ()) or "none",
+                    item.get("reason"),
+                )
+            )
+        if len(payload["segment_decisions"]) > int(max_rows):
+            lines.append(
+                "    ...plus {0} more segment(s)".format(
+                    len(payload["segment_decisions"]) - int(max_rows)
+                )
+            )
+        lines.append("  window decisions:")
+        for item in payload["window_decisions"][: int(max_rows)]:
+            lines.append(
+                "    - {0}: {1}; usable={2:.2f}; contiguous={3:.2f}; reason={4}".format(
+                    item.get("id"),
+                    "retained" if item.get("retained") else "diagnostic-only",
+                    float(item.get("usable_fraction") or 0.0),
+                    float(item.get("largest_contiguous_usable_fraction") or 0.0),
+                    item.get("reason"),
+                )
+            )
+        if len(payload["window_decisions"]) > int(max_rows):
+            lines.append(
+                "    ...plus {0} more window(s)".format(
+                    len(payload["window_decisions"]) - int(max_rows)
+                )
+            )
+        return "\n".join(lines)
+
+
+def build_fit_collection_from_windows(
+    spectrum,
+    windows,
+    *,
+    window_ids=None,
+    valid_mask=None,
+    valid_masks=None,
+    min_usable_fraction=0.65,
+    min_contiguous_fraction=0.30,
+    edge_margin_A=0.0,
+    name=None,
+    require_any=True,
+):
+    """Return a retained fit collection plus explicit window/segment decisions.
+
+    This helper implements the notebook principle "inspect broadly, fit
+    narrowly." It does not mutate the input spectrum, apply arm scaling, mask
+    extra pixels, or certify the result scientifically. It only retains
+    segments/windows that contain enough usable contiguous pixels for a fit
+    plan and records the rest as diagnostic-only context.
+    """
+    min_usable_fraction = float(min_usable_fraction)
+    min_contiguous_fraction = float(min_contiguous_fraction)
+    edge_margin_A = float(edge_margin_A)
+    if not np.isfinite(min_usable_fraction) or not (
+        0.0 <= min_usable_fraction <= 1.0
+    ):
+        raise ValueError("min_usable_fraction must be finite and in [0, 1].")
+    if not np.isfinite(min_contiguous_fraction) or not (
+        0.0 <= min_contiguous_fraction <= 1.0
+    ):
+        raise ValueError("min_contiguous_fraction must be finite and in [0, 1].")
+    if not np.isfinite(edge_margin_A) or edge_margin_A < 0.0:
+        raise ValueError("edge_margin_A must be finite and >= 0.")
+
+    segments = spectrum_segments(spectrum, tuple_is_collection=True, coerce=False)
+    valid_by_segment = _resolve_valid_masks_for_fit_collection(
+        segments,
+        valid_mask=valid_mask,
+        valid_masks=valid_masks,
+    )
+    records = _fit_window_records(windows, window_ids=window_ids)
+    if not records:
+        raise ValueError("At least one diagnostic window is required.")
+
+    window_decisions = []
+    retained_records = []
+    for record in records:
+        stats = _fit_window_record_stats(
+            record,
+            segments,
+            valid_by_segment,
+            edge_margin_A=edge_margin_A,
+        )
+        retained = bool(
+            stats["n_pixels"] > 0
+            and stats["usable_fraction"] >= min_usable_fraction
+            and stats["largest_contiguous_usable_fraction"]
+            >= min_contiguous_fraction
+            and not stats["near_segment_edge"]
+        )
+        if stats["n_pixels"] <= 0:
+            reason = "no_overlap_with_loaded_segments"
+        elif stats["near_segment_edge"]:
+            reason = "near_segment_edge"
+        elif stats["usable_fraction"] < min_usable_fraction:
+            reason = "low_usable_fraction"
+        elif stats["largest_contiguous_usable_fraction"] < min_contiguous_fraction:
+            reason = "fragmented_usable_pixels"
+        else:
+            reason = "retained"
+        decision = {
+            "id": record.get("id"),
+            "label": record.get("label"),
+            "retained": retained,
+            "reason": reason,
+            "region_A": record.get("region_A"),
+            "usable_fraction": stats["usable_fraction"],
+            "largest_contiguous_usable_fraction": stats[
+                "largest_contiguous_usable_fraction"
+            ],
+            "n_pixels": stats["n_pixels"],
+            "n_usable_pixels": stats["n_usable_pixels"],
+            "near_segment_edge": stats["near_segment_edge"],
+            "risk_tags": list(record.get("risk_tags") or ()),
+            "model_support": record.get("model_support"),
+            "feature_family": list(record.get("feature_family") or ()),
+            "segment_contributions": stats["segment_contributions"],
+        }
+        window_decisions.append(decision)
+        if retained:
+            retained_records.append(record)
+
+    retained_segment_indices = []
+    regions_by_original_segment = [[] for _ in segments]
+    retained_window_ids_by_segment = {index: [] for index in range(len(segments))}
+    for record in retained_records:
+        for contribution in _record_contributions(record, len(segments)):
+            index = int(contribution["segment_index"])
+            wmin, wmax = _contribution_region(contribution, record)
+            wave = np.asarray(segments[index].wave, dtype=float)
+            valid = np.asarray(valid_by_segment[index], dtype=bool)
+            inside = np.isfinite(wave) & (wave >= wmin) & (wave <= wmax)
+            if not np.any(valid & inside):
+                continue
+            if index not in retained_segment_indices:
+                retained_segment_indices.append(index)
+            regions_by_original_segment[index].append((float(wmin), float(wmax)))
+            retained_window_ids_by_segment[index].append(str(record.get("id")))
+
+    retained_segment_indices = tuple(sorted(retained_segment_indices))
+    diagnostic_only_segment_indices = tuple(
+        index for index in range(len(segments)) if index not in retained_segment_indices
+    )
+    if require_any and not retained_segment_indices:
+        raise ValueError(
+            "No segment/window pair passed the retained-window thresholds."
+        )
+
+    from .io import SpectrumCollection
+
+    retained_segments = [segments[index] for index in retained_segment_indices]
+    retained_valid_masks = tuple(
+        valid_by_segment[index] for index in retained_segment_indices
+    )
+    retained_regions_by_segment = tuple(
+        tuple(regions_by_original_segment[index]) for index in retained_segment_indices
+    )
+    flat_regions = tuple(
+        _unique_regions(
+            region
+            for index in retained_segment_indices
+            for region in regions_by_original_segment[index]
+        )
+    )
+    collection_name = (
+        str(name)
+        if name is not None
+        else "{0}_retained_fit_windows".format(
+            getattr(spectrum, "name", None) or "spectrum"
+        )
+    )
+    collection = SpectrumCollection(
+        retained_segments,
+        name=collection_name,
+        meta={
+            "workflow": "build_fit_collection_from_windows",
+            "retained_segment_indices": list(retained_segment_indices),
+            "diagnostic_only_segment_indices": list(diagnostic_only_segment_indices),
+            "selection_note": (
+                "Segments/windows not retained remain diagnostic-only context; "
+                "no masks, arm scaling, or wavelength corrections were applied."
+            ),
+        },
+    )
+
+    retained_ids = tuple(str(record.get("id")) for record in retained_records)
+    diagnostic_only_ids = tuple(
+        str(item.get("id")) for item in window_decisions if not item.get("retained")
+    )
+    segment_decisions = []
+    for index, segment in enumerate(segments):
+        retained = index in retained_segment_indices
+        retained_ids_here = sorted(set(retained_window_ids_by_segment[index]))
+        reason = (
+            "has_usable_pixels_in_retained_windows"
+            if retained
+            else "no_retained_window_pixels"
+        )
+        segment_decisions.append(
+            {
+                "segment_index": index,
+                "segment": getattr(segment, "name", None)
+                or "segment {0}".format(index + 1),
+                "retained": bool(retained),
+                "reason": reason,
+                "retained_window_ids": retained_ids_here,
+                "diagnostic_only": bool(not retained),
+            }
+        )
+
+    return FitCollectionWindowSelection(
+        collection=collection,
+        valid_masks_by_segment=retained_valid_masks,
+        regions=flat_regions,
+        regions_by_segment=retained_regions_by_segment,
+        retained_segment_indices=retained_segment_indices,
+        diagnostic_only_segment_indices=diagnostic_only_segment_indices,
+        retained_window_ids=retained_ids,
+        diagnostic_only_window_ids=diagnostic_only_ids,
+        window_decisions=tuple(window_decisions),
+        segment_decisions=tuple(segment_decisions),
+        thresholds={
+            "min_usable_fraction": min_usable_fraction,
+            "min_contiguous_fraction": min_contiguous_fraction,
+            "edge_margin_A": edge_margin_A,
+        },
+    )
+
+
+def _fit_window_records(windows, *, window_ids=None):
+    if isinstance(windows, DiagnosticWindowSelection):
+        if window_ids is None:
+            return [dict(item) for item in windows.selected]
+        return windows.select_by_id(window_ids, require_all=True, include_rejected=True)
+    if isinstance(windows, Mapping):
+        if "selected" in windows or "rejected" in windows:
+            selection = DiagnosticWindowSelection(dict(windows))
+            if window_ids is None:
+                return [dict(item) for item in selection.selected]
+            return selection.select_by_id(
+                window_ids,
+                require_all=True,
+                include_rejected=True,
+            )
+        if "id" in windows:
+            records = [dict(windows)]
+        else:
+            raise TypeError("windows mapping must be a selection or one window record.")
+    else:
+        records = [dict(item) for item in windows]
+    if window_ids is None:
+        return records
+    requested = [str(item) for item in window_ids]
+    by_id = {str(item.get("id")): dict(item) for item in records}
+    missing = [item for item in requested if item not in by_id]
+    if missing:
+        raise KeyError(
+            "Diagnostic window id(s) not available: {0}. Available ids: {1}".format(
+                ", ".join(missing),
+                ", ".join(sorted(by_id)) or "none",
+            )
+        )
+    return [by_id[item] for item in requested]
+
+
+def _resolve_valid_masks_for_fit_collection(segments, *, valid_mask=None, valid_masks=None):
+    if valid_mask is not None and valid_masks is not None:
+        raise ValueError("Pass either valid_mask or valid_masks, not both.")
+    source = valid_masks if valid_masks is not None else valid_mask
+    if source is None:
+        return tuple(np.asarray(segment.mask, dtype=bool).copy() for segment in segments)
+    if isinstance(source, Mapping):
+        out = []
+        for index, segment in enumerate(segments):
+            value = source.get(index, source.get(getattr(segment, "name", None), None))
+            if value is None:
+                value = segment.mask
+            out.append(_checked_valid_mask(value, segment, index))
+        return tuple(out)
+    if len(segments) == 1:
+        source_arr = np.asarray(source)
+        expected0 = np.asarray(segments[0].mask, dtype=bool).shape
+        if source_arr.shape == expected0 or source_arr.ndim == len(expected0):
+            return (_checked_valid_mask(source, segments[0], 0),)
+    try:
+        n_source = len(source)
+    except TypeError as exc:
+        raise ValueError(
+            "valid_mask/valid_masks must be a boolean mask or a sequence of masks."
+        ) from exc
+    if n_source != len(segments):
+        raise ValueError(
+            "valid masks for a collection must match the number of segments."
+        )
+    return tuple(
+        _checked_valid_mask(value, segment, index)
+        for index, (value, segment) in enumerate(zip(source, segments))
+    )
+
+
+def _checked_valid_mask(value, segment, index):
+    arr = np.asarray(value, dtype=bool)
+    expected = np.asarray(segment.mask, dtype=bool).shape
+    if arr.shape != expected:
+        raise ValueError(
+            "valid mask for segment {0} has shape {1}, expected {2}.".format(
+                index,
+                arr.shape,
+                expected,
+            )
+        )
+    return arr.copy()
+
+
+def _record_contributions(record, n_segments):
+    contributions = record.get("segment_contributions") or ()
+    if contributions:
+        return [dict(item) for item in contributions]
+    return [
+        {
+            "segment_index": index,
+            "operational_region_A": record.get("region_A"),
+        }
+        for index in range(n_segments)
+    ]
+
+
+def _contribution_region(contribution, record):
+    region = (
+        contribution.get("operational_region_A")
+        or contribution.get("region_A")
+        or record.get("region_A")
+    )
+    if region is None or len(region) != 2:
+        raise ValueError("Window records require region_A/operational_region_A.")
+    wmin, wmax = float(region[0]), float(region[1])
+    if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+        raise ValueError("Window region bounds must be finite with wmin < wmax.")
+    return wmin, wmax
+
+
+def _fit_window_record_stats(record, segments, valid_by_segment, *, edge_margin_A):
+    n_pixels = 0
+    n_usable_pixels = 0
+    largest_contiguous_fraction = 0.0
+    near_segment_edge = False
+    rows = []
+    for contribution in _record_contributions(record, len(segments)):
+        index = int(contribution.get("segment_index", -1))
+        if index < 0 or index >= len(segments):
+            continue
+        segment = segments[index]
+        wmin, wmax = _contribution_region(contribution, record)
+        wave = np.asarray(segment.wave, dtype=float)
+        valid = np.asarray(valid_by_segment[index], dtype=bool)
+        inside = np.isfinite(wave) & (wave >= wmin) & (wave <= wmax)
+        usable = inside & valid
+        n_inside = int(np.count_nonzero(inside))
+        n_usable = int(np.count_nonzero(usable))
+        contiguous_fraction = _largest_contiguous_region_fraction(
+            wave,
+            inside,
+            usable,
+            wmin,
+            wmax,
+        )
+        segment_edge = _contribution_near_segment_edge(
+            wave,
+            wmin,
+            wmax,
+            edge_margin_A=edge_margin_A,
+        )
+        near_segment_edge = bool(near_segment_edge or segment_edge)
+        n_pixels += n_inside
+        n_usable_pixels += n_usable
+        largest_contiguous_fraction = max(
+            largest_contiguous_fraction,
+            contiguous_fraction,
+        )
+        rows.append(
+            {
+                "segment_index": index,
+                "segment": getattr(segment, "name", None)
+                or "segment {0}".format(index + 1),
+                "region_A": [float(wmin), float(wmax)],
+                "n_pixels": n_inside,
+                "n_usable_pixels": n_usable,
+                "usable_fraction": 0.0 if n_inside == 0 else n_usable / n_inside,
+                "largest_contiguous_usable_fraction": contiguous_fraction,
+                "near_segment_edge": segment_edge,
+            }
+        )
+    usable_fraction = 0.0 if n_pixels == 0 else n_usable_pixels / n_pixels
+    return {
+        "n_pixels": int(n_pixels),
+        "n_usable_pixels": int(n_usable_pixels),
+        "usable_fraction": float(usable_fraction),
+        "largest_contiguous_usable_fraction": float(largest_contiguous_fraction),
+        "near_segment_edge": bool(near_segment_edge),
+        "segment_contributions": rows,
+    }
+
+
+def _contribution_near_segment_edge(wave, wmin, wmax, *, edge_margin_A):
+    if edge_margin_A <= 0.0:
+        return False
+    finite = np.asarray(wave, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return False
+    lo = float(np.min(finite))
+    hi = float(np.max(finite))
+    return bool(wmin <= lo + edge_margin_A or wmax >= hi - edge_margin_A)
+
+
+def _largest_contiguous_region_fraction(wave, inside, usable, wmin, wmax):
+    inside_indices = np.flatnonzero(inside)
+    if inside_indices.size == 0:
+        return 0.0
+    usable_inside = np.asarray(usable, dtype=bool)[inside_indices]
+    if not np.any(usable_inside):
+        return 0.0
+    wave_inside = np.asarray(wave, dtype=float)[inside_indices]
+    run_starts = []
+    run_ends = []
+    start = None
+    for pos, flag in enumerate(usable_inside):
+        if flag and start is None:
+            start = pos
+        if start is not None and (not flag or pos == usable_inside.size - 1):
+            end = pos - 1 if not flag else pos
+            run_starts.append(start)
+            run_ends.append(end)
+            start = None
+    if not run_starts:
+        return 0.0
+    spacing = np.nanmedian(np.diff(wave_inside)) if wave_inside.size > 1 else 0.0
+    if not np.isfinite(spacing) or spacing < 0.0:
+        spacing = 0.0
+    widths = [
+        max(0.0, float(wave_inside[end] - wave_inside[start] + spacing))
+        for start, end in zip(run_starts, run_ends)
+    ]
+    width = max(widths) if widths else 0.0
+    return float(np.clip(width / max(float(wmax - wmin), 1.0e-12), 0.0, 1.0))
+
+
+def _unique_regions(regions):
+    seen = set()
+    out = []
+    for wmin, wmax in regions:
+        key = (round(float(wmin), 9), round(float(wmax), 9))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((float(wmin), float(wmax)))
+    return out
 
 
 def _tuple_or_default(value, default):
@@ -1056,7 +1710,7 @@ def select_diagnostic_windows(
             rejected.append(item)
         selected = selected[:max_windows]
 
-    return {
+    return DiagnosticWindowSelection({
         "schema_version": 1,
         "operation": "select_diagnostic_windows",
         "catalog_profile": "stellar",
@@ -1094,7 +1748,7 @@ def select_diagnostic_windows(
         "input_coverage": _coverage_metadata(segments),
         "selected": _json_native(selected),
         "rejected": _json_native(rejected),
-    }
+    })
 
 
 def build_diagnostic_window_combinations(

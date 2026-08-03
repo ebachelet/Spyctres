@@ -39,6 +39,31 @@ KNOWN_RESIDUAL_WINDOWS = (
             "appear in other Balmer lines."
         ),
     },
+    {
+        "name": "DIB 4428 / Hγ red wing",
+        "region_A": (4416.8, 4440.8),
+        "kind": "diffuse_interstellar_band_overlap",
+        "linked_feature": "dib_4428",
+        "diagnostic_line": "Hgamma",
+        "description": (
+            "Coherent residuals here can be caused by the broad DIB 4428 "
+            "absorption feature, but continuum placement, hot-star Balmer-wing "
+            "mismatch, or composite spectra can produce similar structure."
+        ),
+        "likely_causes": (
+            "DIB 4428 or another non-stellar broad absorption feature",
+            "intrinsic or composite H-gamma wing structure",
+            "continuum placement across broad H-gamma",
+            "rotation/macroturbulence not fitted by this example",
+            "approximate or missing wavelength-dependent LSF",
+            "PHOENIX LTE/model-domain mismatch for hot or peculiar spectra",
+        ),
+        "recommended_action": (
+            "Inspect Hγ together with the other Balmer lines. A named DIB mask "
+            "rerun can be useful as a sensitivity test, but should not be "
+            "interpreted as a DIB confirmation without independent evidence."
+        ),
+    },
 )
 
 

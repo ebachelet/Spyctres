@@ -18,16 +18,19 @@ from Spyctres.preprocessing import (
     ExclusionMaskSpec,
     apply_fit_mask,
     broad_telluric_catalog_fallback_mask,
+    build_mask,
     combine_exclusion_masks,
     compose_fit_mask,
     convert_mask_polarity,
     dilate_boolean_mask,
     exclusion_mask,
+    find_known_nonstellar_features,
     nonstellar_feature_mask,
     nonstellar_feature_masks,
     nonstellar_feature_regions,
     overlapping_nonstellar_features,
     telluric_transmission_exclusion_mask,
+    wavelength_region_exclusion_mask,
 )
 
 
@@ -64,6 +67,35 @@ def test_segment_valid_and_invalid_mask_aliases_and_constructors():
         valid_mask=[True, False, True],
     )
     assert np.array_equal(valid_segment.mask, segment.mask)
+
+
+def test_segment_and_collection_summaries_are_public_display_helpers():
+    segment = SpectrumSegment(
+        wave=[5000.0, 5001.0, 5002.0],
+        flux=[1.0, 0.9, np.nan],
+        err=[0.1, 0.1, 0.1],
+        mask=[True, False, True],
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=5000.0),
+        meta={"ingestion": [{"source": "reader:test_reader"}]},
+        name="demo",
+    )
+    collection = SpectrumCollection([segment])
+
+    summary = segment.summary()
+    provenance = segment.provenance_summary()
+    collection_summary = collection.summary()
+
+    assert summary["type"] == "SpectrumSegment"
+    assert summary["reader"] == "test_reader"
+    assert summary["n_pixels"] == 3
+    assert summary["n_valid_pixels"] == 1
+    assert summary["resolution"]["quantity"] == "R"
+    assert provenance["reader"] == "test_reader"
+    assert collection_summary["type"] == "SpectrumCollection"
+    assert collection_summary["readers"] == ["test_reader"]
 
 
 def test_float_exclusion_mask_is_thresholded_and_composed():
@@ -133,6 +165,25 @@ def test_named_multiple_exclusion_masks_are_unionized_and_recorded():
     assert result.settings["numeric_mask_reject_if"] == "> threshold"
     assert result.counts["n_rejected_by_explicit_union"] == 2
     assert result.counts["n_rejected_by_multiple_reasons"] == 0
+
+
+def test_build_mask_exposes_single_segment_valid_mask_and_summary():
+    segment = SpectrumSegment(
+        wave=np.linspace(4410.0, 4450.0, 41),
+        flux=np.ones(41),
+        err=np.full(41, 0.02),
+        wave_medium="air",
+    )
+
+    bundle = build_mask(segment, names="dib_4428")
+
+    assert len(bundle) == 1
+    assert bundle.valid_mask.shape == segment.wave.shape
+    assert not np.all(bundle.valid_mask)
+    summary = bundle.summary()
+    assert summary["n_exclusion_masks"] == 1
+    assert summary["has_valid_mask"] is True
+    assert "Spyctres mask bundle" in bundle.summary_text()
 
 
 def test_exclusion_mask_apis_are_mutually_exclusive():
@@ -227,6 +278,28 @@ def test_exclusion_mask_spec_helper_and_duplicate_name_validation():
                 exclusion_mask("central", lambda wave: wave == 4.0),
             ],
         )
+
+
+def test_wavelength_region_exclusion_mask_rejects_intervals_and_records_metadata():
+    segment = SpectrumSegment(
+        wave=[3999.0, 4001.0, 4003.0, 4006.0],
+        flux=[1.0, 1.0, 1.0, 1.0],
+        err=[0.1, 0.1, 0.1, 0.1],
+    )
+
+    mask = wavelength_region_exclusion_mask(
+        "manual_bad_region",
+        [(4000.0, 4004.0)],
+        metadata={"reason": "visual inspection"},
+    )
+    result = compose_fit_mask(segment, exclude_masks=[mask])
+
+    assert np.array_equal(result.effective_mask, [True, False, False, True])
+    assert result.settings["exclude_masks"] == ["manual_bad_region"]
+    metadata = result.settings["exclude_mask_metadata"]["manual_bad_region"]
+    assert metadata["method"] == "wavelength_intervals"
+    assert metadata["regions_A"] == [[4000.0, 4004.0]]
+    assert metadata["reason"] == "visual inspection"
 
 
 def test_nonstellar_feature_mask_rejects_dib_region_and_records_name():
@@ -376,6 +449,23 @@ def test_broad_telluric_catalog_fallback_is_not_preferred_actual_mask():
     assert metadata["use_case"] == "unit_test_quicklook"
     assert "telluric_o2_b_6867" in metadata["fallback_broad_region_ids"]
     assert np.any(~result.effective_mask)
+
+
+def test_find_known_nonstellar_features_searches_user_regions():
+    matches = find_known_nonstellar_features(
+        [
+            {"label": "unknown dip near Hgamma", "region_A": (4415.0, 4445.0)},
+            (4875.0, 4910.0),
+        ]
+    )
+
+    ids = [item["id"] for item in matches]
+    assert "dib_4428" in ids
+    assert "dib_4882" in ids
+    hgamma = next(item for item in matches if item["id"] == "dib_4428")
+    assert hgamma["query_label"] == "unknown dip near Hgamma"
+    assert hgamma["diagnostic_only"] is True
+    assert hgamma["overlap_A"] > 0.0
 
 
 def test_combine_exclusion_masks_preserves_component_metadata():

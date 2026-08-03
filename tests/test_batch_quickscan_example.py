@@ -42,6 +42,10 @@ def test_parser_accepts_quicklook_output_json_and_resolution_aliases():
             "/tmp/out.csv",
             "--R",
             "2000",
+            "--plot-dir",
+            "/tmp/plots",
+            "--max-plots",
+            "2",
         ]
     )
 
@@ -49,6 +53,8 @@ def test_parser_accepts_quicklook_output_json_and_resolution_aliases():
     assert args.output == "/tmp/out.json"
     assert args.summary_csv == "/tmp/out.csv"
     assert args.resolution_R == pytest.approx(2000.0)
+    assert args.plot_dir == "/tmp/plots"
+    assert args.max_plots == 2
     assert args.refine_quality_policy == "skip-risky"
     assert module._resolution_override_payload(args) == {
         "resolution_source": "user_override",
@@ -57,13 +63,50 @@ def test_parser_accepts_quicklook_output_json_and_resolution_aliases():
     }
 
 
-def test_manifest_records_support_per_target_instrument_and_resolution(tmp_path):
+def test_representative_plot_helper_writes_bounded_plot_records(tmp_path, monkeypatch):
+    module = _load_example_module()
+    calls = []
+
+    def fake_plot_model_line_windows(*_args, **kwargs):
+        savepath = Path(kwargs["savepath"])
+        savepath.write_text("plot placeholder", encoding="utf-8")
+        calls.append(savepath)
+        return None, None
+
+    monkeypatch.setattr(module, "plot_model_line_windows", fake_plot_model_line_windows)
+    args = SimpleNamespace(plot_dir=str(tmp_path / "plots"), max_plots=1)
+    record = {"path": "target one.fits", "target_id": "target one"}
+
+    first = module._maybe_write_representative_plot(
+        object(),
+        [(4000.0, 4100.0)],
+        record,
+        args,
+        stage="quick",
+    )
+    second = module._maybe_write_representative_plot(
+        object(),
+        [(4000.0, 4100.0)],
+        record,
+        args,
+        stage="refined",
+    )
+
+    assert first["status"] == "written"
+    assert first["purpose"] == "representative_batch_fit_inspection"
+    assert Path(first["path"]).is_file()
+    assert "target_one" in Path(first["path"]).name
+    assert second is None
+    assert len(calls) == 1
+
+
+def test_manifest_records_support_per_target_reader_and_resolution(tmp_path):
     module = _load_example_module()
     spec_path = tmp_path / "spec.fits"
     spec_path.write_text("placeholder", encoding="utf-8")
     manifest = tmp_path / "batch.csv"
     manifest.write_text(
-        "target_id,path,instrument,R\n"
+        "target_id,path,reader,R\n"
         "star_a,spec.fits,sdss,2000\n",
         encoding="utf-8",
     )
@@ -81,6 +124,28 @@ def test_manifest_records_support_per_target_instrument_and_resolution(tmp_path)
     assert records[0]["resolution_R"] == pytest.approx(2000.0)
     assert local_args.instrument == "sdss"
     assert local_args.resolution_R == pytest.approx(2000.0)
+
+
+def test_manifest_records_keep_instrument_column_as_compatibility_alias(tmp_path):
+    module = _load_example_module()
+    spec_path = tmp_path / "spec.fits"
+    spec_path.write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "batch.csv"
+    manifest.write_text(
+        "target_id,path,instrument,R\n"
+        "star_a,spec.fits,sdss,2000\n",
+        encoding="utf-8",
+    )
+    args = module.build_parser().parse_args(
+        ["--manifest", str(manifest), "--reader", "xshooter_merge1d"]
+    )
+
+    records = module._input_records(args)
+    local_args = module._args_for_record(args, records[0])
+
+    assert records[0]["path"] == str(spec_path.resolve())
+    assert records[0]["instrument"] == "sdss"
+    assert local_args.instrument == "sdss"
 
 
 def test_manifest_record_uses_global_resolution_when_row_is_blank(tmp_path):

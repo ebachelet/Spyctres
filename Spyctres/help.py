@@ -220,7 +220,7 @@ PUBLIC_FUNCTION_HELP = {
                 "description": (
                     "Task-specific readiness policy: inspect, "
                     "quicklook_classification, atmospheric_parameters, "
-                    "radial_velocity, or publication."
+                    "radial_velocity, or reviewed_analysis."
                 ),
             },
             {
@@ -267,7 +267,7 @@ PUBLIC_FUNCTION_HELP = {
                 "default": "quicklook_classification",
                 "description": (
                     "Task-specific policy: inspect, quicklook_classification, "
-                    "atmospheric_parameters, radial_velocity, or publication."
+                    "atmospheric_parameters, radial_velocity, or reviewed_analysis."
                 ),
             },
             {
@@ -317,7 +317,7 @@ PUBLIC_FUNCTION_HELP = {
         "advice": (
             "Use this when the mental model is first-pass classification. Use "
             "fit_stellar_spectrum() plus a reviewed setup when writing auditable "
-            "or publication-oriented code."
+            "or reviewed-analysis code."
         ),
     },
     "plot_spectrum": {
@@ -395,6 +395,58 @@ PUBLIC_FUNCTION_HELP = {
             "they are suggestions, not hidden preprocessing corrections."
         ),
     },
+    "build_fit_collection_from_windows": {
+        "name": "build_fit_collection_from_windows",
+        "purpose": (
+            "Build an aligned fit-only SpectrumCollection from inspected "
+            "diagnostic windows while recording diagnostic-only arms/windows."
+        ),
+        "minimal_call": (
+            "build_fit_collection_from_windows(spec, windows, "
+            "window_ids=['h_beta'])"
+        ),
+        "required": [
+            {
+                "name": "spectrum",
+                "description": (
+                    "Loaded SpectrumSegment or SpectrumCollection whose segments "
+                    "should be evaluated."
+                ),
+            },
+            {
+                "name": "windows",
+                "description": (
+                    "A DiagnosticWindowSelection from select_diagnostic_windows() "
+                    "or compatible window records."
+                ),
+            },
+        ],
+        "optional": [
+            {
+                "name": "window_ids",
+                "default": "all selected windows",
+                "description": "Subset of diagnostic-window ids to consider for fitting.",
+            },
+            {
+                "name": "valid_mask / valid_masks",
+                "default": "segment masks",
+                "description": "valid_mask=True marks pixels that may be used.",
+            },
+            {
+                "name": "min_usable_fraction / min_contiguous_fraction",
+                "default": "0.65 / 0.30",
+                "description": (
+                    "Conservative retention thresholds for deciding which "
+                    "windows and segments are fit-ready."
+                ),
+            },
+        ],
+        "advice": (
+            "Use this for multi-segment workflows: inspect broad context first, "
+            "then pass selection.collection, selection.valid_masks_by_segment, "
+            "and selection.regions to the fitter."
+        ),
+    },
     "build_mask": {
         "name": "build_mask",
         "purpose": "Create an explicit bundle of named masks and warning regions.",
@@ -452,6 +504,30 @@ PUBLIC_FUNCTION_HELP = {
         ],
         "advice": "Use fit_line for local diagnostics and seeding; use fit_stellar_spectrum for atmospheric parameters.",
     },
+    "list_known_lines": {
+        "name": "list_known_lines",
+        "purpose": "List built-in local-line names accepted by fit_line() and fit_lines().",
+        "minimal_call": "list_known_lines()",
+        "required": [],
+        "optional": [
+            {
+                "name": "details",
+                "default": "False",
+                "description": "Return rest wavelength, wavelength medium, default window, and aliases.",
+            },
+            {
+                "name": "wmin / wmax",
+                "default": "None",
+                "description": "Filter known lines by catalog rest wavelength in Angstrom.",
+            },
+            {
+                "name": "include_aliases",
+                "default": "False",
+                "description": "Return accepted alias strings instead of canonical line names.",
+            },
+        ],
+        "advice": "Use known_line_spec('Hgamma') for the full LineSpec of one line, or pass center=... to fit_line for a custom feature.",
+    },
     "plot_line_fit": {
         "name": "plot_line_fit",
         "purpose": "Plot the result of one local line fit.",
@@ -470,6 +546,30 @@ PUBLIC_FUNCTION_HELP = {
             },
         ],
         "advice": "Use line plots to diagnose individual features; do not promote them to global stellar parameters by themselves.",
+    },
+    "plot_line_fit_comparison": {
+        "name": "plot_line_fit_comparison",
+        "purpose": "Plot compact diagnostic metrics for several local line fits.",
+        "minimal_call": "plot_line_fit_comparison(line_results)",
+        "required": [
+            {
+                "name": "line_results",
+                "description": "Sequence, mapping, or compare_line_fits() result built from LineFitResult objects.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "labels",
+                "default": "line names",
+                "description": "Human-readable labels for the plotted diagnostic features.",
+            },
+            {
+                "name": "savepath",
+                "default": "None",
+                "description": "Optional output path; parent directories are created automatically.",
+            },
+        ],
+        "advice": "Use the plot to compare local RV/EW/FWHM and quality flags across lines; it is still diagnostic rather than an atmospheric-parameter fit.",
     },
     "plot_fit_referee": {
         "name": "plot_fit_referee",
@@ -494,6 +594,207 @@ PUBLIC_FUNCTION_HELP = {
             },
         ],
         "advice": "Use this as the first residual check after every fit; quality flags still need to be read.",
+    },
+    "plot_fit_comparison_line_windows": {
+        "name": "plot_fit_comparison_line_windows",
+        "purpose": "Overlay several PHOENIX fit results in matched diagnostic-line windows.",
+        "minimal_call": (
+            'plot_fit_comparison_line_windows([joint, hgamma], '
+            'labels=("joint", "Hgamma"), windows=windows)'
+        ),
+        "required": [
+            {
+                "name": "results",
+                "description": "A sequence or mapping of PhoenixFitResult objects with reconstructed model arrays.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "labels",
+                "default": "fit 1, fit 2, ...",
+                "description": "Human-readable labels for each overplotted fit.",
+            },
+            {
+                "name": "windows",
+                "default": "auto-selected",
+                "description": "Line-window mappings or tuples, usually from a reviewed recipe or diagnostic-window selection.",
+            },
+            {
+                "name": "savepath",
+                "default": "None",
+                "description": "Optional output path; parent directories are created defensively.",
+            },
+        ],
+        "advice": (
+            "Use this after compare_fits() when you need to see which line or "
+            "window is driving parameter differences."
+        ),
+    },
+    "summarize_quality_flags": {
+        "name": "summarize_quality_flags",
+        "purpose": "Summarize fit-quality flags by severity and return the top user actions.",
+        "minimal_call": "summarize_quality_flags(result.quality_flags)",
+        "required": [
+            {
+                "name": "flags",
+                "description": "Iterable of quality flags, normally result.quality_flags.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "max_actions",
+                "default": "3",
+                "description": "Maximum number of headline actions to include.",
+            },
+        ],
+        "advice": (
+            "Use this in notebooks or GUIs when a full quality-report flag list "
+            "would overwhelm a new user."
+        ),
+    },
+    "quality_flag_actions": {
+        "name": "quality_flag_actions",
+        "purpose": "Translate fit-quality flags into sorted plain-language actions.",
+        "minimal_call": 'quality_flag_actions(["high_chi2", "structured_residuals"])',
+        "required": [
+            {
+                "name": "flags",
+                "description": "Iterable of quality flags to explain.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "max_actions",
+                "default": "None",
+                "description": "Limit the number of returned actions.",
+            },
+            {
+                "name": "include_ok",
+                "default": "False",
+                "description": "Include the ok flag even when other flags are present.",
+            },
+        ],
+        "advice": (
+            "Use readiness_flag_actions() for pre-fit audit flags; use this "
+            "helper for post-fit result-quality flags."
+        ),
+    },
+    "classify_quality_flag": {
+        "name": "classify_quality_flag",
+        "purpose": "Return severity/category/action metadata for one fit-quality flag.",
+        "minimal_call": 'classify_quality_flag("high_chi2")',
+        "required": [
+            {
+                "name": "flag",
+                "description": "One fit-quality flag string.",
+            },
+        ],
+        "optional": [],
+        "advice": (
+            "Most users should call summarize_quality_flags(); this is useful "
+            "for custom reports and GUI tooltips."
+        ),
+    },
+    "annotate_nonstellar_features": {
+        "name": "annotate_nonstellar_features",
+        "purpose": "Record known DIB/telluric feature overlaps in a fit result without masking them automatically.",
+        "minimal_call": (
+            'annotate_nonstellar_features(spec, result, '
+            'feature_names=("dib_4428", "dib_4882"))'
+        ),
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "SpectrumSegment or SpectrumCollection on the same grid used for the fit.",
+            },
+            {
+                "name": "result",
+                "description": "PhoenixFitResult to annotate with provenance and quality flags.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "feature_names",
+                "default": "dib_4428, dib_4882",
+                "description": "Known non-stellar feature IDs to check.",
+            },
+            {
+                "name": "policy",
+                "default": "warn",
+                "description": "warn, mask_known, or ignore; this helper records policy but does not change fitted pixels.",
+            },
+        ],
+        "advice": "Use this to flag possible DIB/telluric contamination before deciding whether a controlled named-mask rerun is justified.",
+    },
+    "diagnose_known_residual_windows": {
+        "name": "diagnose_known_residual_windows",
+        "purpose": "Quantify coherent residuals in curated windows linked to known non-stellar features.",
+        "minimal_call": "diagnose_known_residual_windows(spec, result)",
+        "required": [
+            {
+                "name": "spectrum",
+                "description": "SpectrumSegment or SpectrumCollection used for the fit.",
+            },
+            {
+                "name": "result",
+                "description": "PhoenixFitResult containing reconstructed model arrays and fitted-pixel masks.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "threshold_sigma",
+                "default": "2.5",
+                "description": "Residual threshold used to flag a curated window.",
+            },
+        ],
+        "advice": "A flagged window is a prompt for inspection and sensitivity tests, not an automatic physical identification.",
+    },
+    "find_known_nonstellar_features": {
+        "name": "find_known_nonstellar_features",
+        "purpose": "Search Spyctres' known DIB/telluric feature catalog for overlaps with user-noticed wavelength intervals.",
+        "minimal_call": "find_known_nonstellar_features([(4415, 4445), (4875, 4910)])",
+        "required": [
+            {
+                "name": "regions",
+                "description": "One wavelength interval or a list of intervals in Angstrom on the current data grid.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "padding_A",
+                "default": "0.0",
+                "description": "Extra half-width padding applied to catalog feature regions during the search.",
+            },
+            {
+                "name": "names",
+                "default": "all known non-stellar features",
+                "description": "Optional subset of feature IDs to search.",
+            },
+        ],
+        "advice": (
+            "Use this when you see a residual at an approximate wavelength and "
+            "want candidate catalog matches; overlap is diagnostic evidence, "
+            "not a correction."
+        ),
+    },
+    "known_feature_masks": {
+        "name": "known_feature_masks",
+        "purpose": "Build opt-in exclusion-mask objects for named known non-stellar features.",
+        "minimal_call": 'known_feature_masks(["dib_4428", "dib_4882"])',
+        "required": [
+            {
+                "name": "names",
+                "description": "Known feature IDs such as dib_4428, dib_4882, or telluric_o2_a_7605.",
+            },
+        ],
+        "optional": [
+            {
+                "name": "padding_A",
+                "default": "0.0",
+                "description": "Extra half-width padding added to each catalog region.",
+            },
+        ],
+        "advice": "Use these only for explicit sensitivity reruns; Spyctres does not silently mask broad DIB regions by default.",
     },
     "compare_fits": {
         "name": "compare_fits",
@@ -585,6 +886,7 @@ PUBLIC_FUNCTION_GROUPS = {
             "audit_spectrum_for_fit",
             "readiness_flag_actions",
             "select_diagnostic_windows",
+            "build_fit_collection_from_windows",
             "plot_diagnostic_windows",
             "build_mask",
         ),
@@ -596,8 +898,10 @@ PUBLIC_FUNCTION_GROUPS = {
             "quality diagnostics; not replacements for atmospheric fitting."
         ),
         "functions": (
+            "list_known_lines",
             "fit_line",
             "plot_line_fit",
+            "plot_line_fit_comparison",
         ),
     },
     "fit_review": {
@@ -608,6 +912,14 @@ PUBLIC_FUNCTION_GROUPS = {
         ),
         "functions": (
             "plot_fit_referee",
+            "plot_fit_comparison_line_windows",
+            "summarize_quality_flags",
+            "quality_flag_actions",
+            "classify_quality_flag",
+            "find_known_nonstellar_features",
+            "annotate_nonstellar_features",
+            "diagnose_known_residual_windows",
+            "known_feature_masks",
             "compare_fits",
         ),
     },

@@ -1332,7 +1332,7 @@ def _parameter_uncertainty_summary(
         "recommended_validation": (
             "Use systematic-variant fits, injection/recovery checks, and "
             "external benchmark spectra before interpreting uncertainties as "
-            "publication-quality error bars."
+            "reviewed-analysis error bars."
         ),
         "note": (
             "Parameter errors are local linearized diagnostics only; they do "

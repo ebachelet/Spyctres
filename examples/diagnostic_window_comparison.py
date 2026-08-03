@@ -3,7 +3,7 @@
 
 This example uses spectra bundled under ``examples/data/`` by default.  It is
 meant for "which spectral features are driving this answer?" checks, not for
-automatic publication-grade model selection.  The default mode is a dry run
+automatic reviewed-analysis model selection.  The default mode is a dry run
 that selects windows, builds a small comparison plan, and writes JSON/CSV/PNG
 summaries without loading PHOENIX.
 

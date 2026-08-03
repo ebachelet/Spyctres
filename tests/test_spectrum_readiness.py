@@ -8,7 +8,7 @@ from Spyctres.preprocessing import (
     archive_mask_catalog,
     artifact_exclusion_mask_from_segment,
     audit_spectrum_for_fit,
-    publication_readiness_audit,
+    analysis_readiness_audit,
     readiness_flag_actions,
 )
 
@@ -201,6 +201,89 @@ def test_audit_flags_obvious_artifacts_inside_fit_window_only():
     assert "artifact_review_required" in flags
     assert "flat_zero_block_detected" in flags
     assert audit["segments"][0]["artifact_metrics"]["flat_zero_block_count"] == 1
+
+
+def test_audit_does_not_count_already_rejected_pixels_as_unhandled_artifacts():
+    segment = SpectrumSegment(
+        wave=np.linspace(4100.0, 4109.0, 10),
+        flux=[1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        err=np.full(10, 0.1),
+        mask=[True, True, False, False, False, False, True, True, True, True],
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=5400.0),
+    )
+
+    audit = audit_spectrum_for_fit(
+        segment,
+        fit_windows=[(4100.0, 4109.0)],
+        flat_block_min=3,
+    )
+
+    flags = set(audit["interpretation_flags"])
+    metrics = audit["segments"][0]["artifact_metrics"]
+    assert "artifact_review_required" not in flags
+    assert "flat_zero_block_detected" not in flags
+    assert metrics["artifact_fraction_inside_fit_window"] == 0.0
+    assert metrics["unhandled_artifact_fraction_inside_fit_window"] == 0.0
+    assert metrics["already_rejected_input_mask_fraction_inside_fit_window"] == 0.4
+    assert metrics["n_already_rejected_input_mask_inside_fit_window"] == 4
+
+    readiness = analysis_readiness_audit(
+        segment,
+        fit_windows=[(4100.0, 4109.0)],
+        min_fit_pixels=1,
+    )
+    assert "artifact_review_required" not in readiness["blockers"]
+
+
+def test_audit_accepts_per_segment_regions_without_counting_support_padding():
+    first = SpectrumSegment(
+        wave=np.array([4098.0, 4099.0, 4100.0, 4101.0, 4102.0, 4103.0, 4104.0]),
+        flux=np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        err=np.full(7, 0.1),
+        mask=np.array([False, False, True, True, True, True, True]),
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=5400.0),
+        name="line_a",
+    )
+    second = SpectrumSegment(
+        wave=np.array([4338.0, 4339.0, 4340.0, 4341.0, 4342.0, 4343.0, 4344.0]),
+        flux=np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        err=np.full(7, 0.1),
+        mask=np.array([False, False, True, True, True, True, True]),
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        resolution=ResolutionDescriptor(quantity="R", value=5400.0),
+        name="line_b",
+    )
+    collection = SpectrumCollection([first, second])
+
+    audit = audit_spectrum_for_fit(
+        collection,
+        regions=[[(4100.0, 4104.0)], [(4340.0, 4344.0)]],
+        flat_block_min=2,
+    )
+
+    assert audit["n_inside_fit_window"] == 10
+    assert audit["n_fit_candidate"] == 10
+    assert "artifact_review_required" not in audit["interpretation_flags"]
+    assert "flat_zero_block_detected" not in audit["interpretation_flags"]
+    for segment_audit in audit["segments"]:
+        metrics = segment_audit["artifact_metrics"]
+        assert metrics["unhandled_artifact_fraction_inside_fit_window"] == 0.0
+        assert metrics["already_rejected_input_mask_fraction_inside_fit_window"] == 0.0
+
+    readiness = analysis_readiness_audit(
+        collection,
+        regions=[[(4100.0, 4104.0)], [(4340.0, 4344.0)]],
+        min_fit_pixels=1,
+    )
+    assert "artifact_review_required" not in readiness["blockers"]
 
 
 def test_audit_does_not_treat_high_resolution_absorption_lines_as_spikes():
@@ -411,7 +494,7 @@ def test_audit_archive_mask_application_removes_fit_overlap_blocking_flags():
     ]["exclude_masks"]
 
 
-def test_publication_readiness_blocks_quicklook_only_metadata():
+def test_analysis_readiness_blocks_quicklook_only_metadata():
     segment = SpectrumSegment(
         wave=np.linspace(5000.0, 5050.0, 250),
         flux=np.ones(250),
@@ -420,9 +503,9 @@ def test_publication_readiness_blocks_quicklook_only_metadata():
         stellar_rest_status="unknown",
     )
 
-    readiness = publication_readiness_audit(segment, min_fit_pixels=10)
+    readiness = analysis_readiness_audit(segment, min_fit_pixels=10)
 
-    assert readiness["publication_ready"] is False
+    assert readiness["analysis_ready"] is False
     blockers = set(readiness["blockers"])
     assert "missing_uncertainties" in blockers
     assert "resolution_assumption_required" in blockers
@@ -432,7 +515,7 @@ def test_publication_readiness_blocks_quicklook_only_metadata():
     assert readiness["audit"]["quicklook_only"] is True
 
 
-def test_publication_readiness_requires_validated_resolution_by_default():
+def test_analysis_readiness_requires_validated_resolution_by_default():
     segment = SpectrumSegment(
         wave=np.linspace(5000.0, 5050.0, 250),
         flux=np.ones(250),
@@ -442,7 +525,7 @@ def test_publication_readiness_requires_validated_resolution_by_default():
         stellar_rest_status="observed",
     )
 
-    readiness = publication_readiness_audit(
+    readiness = analysis_readiness_audit(
         segment,
         min_fit_pixels=10,
         assumed_resolution={
@@ -453,10 +536,10 @@ def test_publication_readiness_requires_validated_resolution_by_default():
     )
 
     assert readiness["audit"]["fit_ready"] is True
-    assert readiness["publication_ready"] is False
+    assert readiness["analysis_ready"] is False
     assert "resolution_is_assumed_not_validated" in readiness["blockers"]
 
-    allowed = publication_readiness_audit(
+    allowed = analysis_readiness_audit(
         segment,
         min_fit_pixels=10,
         assumed_resolution={
@@ -466,10 +549,10 @@ def test_publication_readiness_requires_validated_resolution_by_default():
         },
         allow_assumed_resolution=True,
     )
-    assert allowed["publication_ready"] is True
+    assert allowed["analysis_ready"] is True
 
 
-def test_publication_readiness_passes_documented_fit_ready_segment():
+def test_analysis_readiness_passes_documented_fit_ready_segment():
     segment = SpectrumSegment(
         wave=np.linspace(5000.0, 5050.0, 250),
         flux=np.ones(250),
@@ -480,13 +563,13 @@ def test_publication_readiness_passes_documented_fit_ready_segment():
         resolution=ResolutionDescriptor(quantity="R", value=2000.0),
     )
 
-    readiness = publication_readiness_audit(segment, min_fit_pixels=10)
+    readiness = analysis_readiness_audit(segment, min_fit_pixels=10)
 
-    assert readiness["publication_ready"] is True
+    assert readiness["analysis_ready"] is True
     assert readiness["blockers"] == []
 
 
-def test_publication_readiness_blocks_unapplied_sdss_wdisp_by_default():
+def test_analysis_readiness_blocks_unapplied_sdss_wdisp_by_default():
     segment = SpectrumSegment(
         wave=np.linspace(5000.0, 5050.0, 250),
         flux=np.ones(250),
@@ -504,15 +587,15 @@ def test_publication_readiness_blocks_unapplied_sdss_wdisp_by_default():
         },
     )
 
-    readiness = publication_readiness_audit(segment, min_fit_pixels=10)
+    readiness = analysis_readiness_audit(segment, min_fit_pixels=10)
 
-    assert readiness["publication_ready"] is False
+    assert readiness["analysis_ready"] is False
     assert "sdss_wdisp_lsf_not_applied" in readiness["blockers"]
 
-    allowed = publication_readiness_audit(
+    allowed = analysis_readiness_audit(
         segment,
         min_fit_pixels=10,
         allow_sdss_wdisp_not_applied=True,
     )
-    assert allowed["publication_ready"] is True
+    assert allowed["analysis_ready"] is True
     assert "sdss_wdisp_lsf_not_applied" in allowed["warnings"]

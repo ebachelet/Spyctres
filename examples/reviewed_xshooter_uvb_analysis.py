@@ -1,20 +1,20 @@
-"""Example 7: publication-oriented X-SHOOTER UVB workflow scaffold.
+"""Example 7: reviewed-analysis X-SHOOTER UVB workflow scaffold.
 
 This script is deliberately stricter than ``simple_phoenix_fit.py``. It is not
 the one-command path for new users; it is a reproducible scaffold for expert
-work where fitted stellar parameters should eventually be defensible in a paper
-or technical report.
+work where fitted stellar parameters should eventually be defensible in a
+scientific report.
 
 The default run is audit-only. It reads the bundled X-SHOOTER UVB spectrum,
 constructs explicit Balmer-window segments with documented masks, runs both the
-ordinary fit-readiness audit and the stricter publication-readiness audit, and
+ordinary fit-readiness audit and the stricter reviewed-analysis audit, and
 writes a JSON checkpoint. The expensive PHOENIX baseline fit is opt-in via
 ``--run-baseline-fit``.
 
 Example audit-only run
 ----------------------
-python examples/publication_quality_xshooter_uvb.py \
-  --output-json /tmp/spyctres_publication_xshooter_uvb.json
+python examples/reviewed_xshooter_uvb_analysis.py \
+  --output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb.json
 
 Optional review artifacts can also be written as CSV/PNG tables, including
 core-mask sensitivity, generic diagnostic windows, systematic-variant plans,
@@ -23,37 +23,37 @@ diagnostics when ``--run-baseline-fit`` is enabled.
 
 Example baseline fit after PHOENIX is configured
 ------------------------------------------------
-python examples/publication_quality_xshooter_uvb.py \
+python examples/reviewed_xshooter_uvb_analysis.py \
   --run-baseline-fit \
-  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
-  --output-report-json /tmp/spyctres_publication_xshooter_uvb_report.json \
-  --output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png
+  --output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json \
+  --output-report-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_report.json \
+  --output-plot /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.png
 
 Optional bounded systematic-variant run
 ---------------------------------------
-python examples/publication_quality_xshooter_uvb.py \
+python examples/reviewed_xshooter_uvb_analysis.py \
   --run-baseline-fit \
   --run-systematic-variants \
   --max-systematic-run-variants 2 \
-  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json \
   --output-systematic-results-csv /tmp/spyctres_systematic_results.csv
 
 Optional same-model synthetic recovery check
 --------------------------------------------
-python examples/publication_quality_xshooter_uvb.py \
+python examples/reviewed_xshooter_uvb_analysis.py \
   --run-baseline-fit \
   --run-injection-recovery \
   --injection-recovery-trials 3 \
-  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
+  --output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json \
   --output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv
 
 Optional compact reviewer summary
 ---------------------------------
-python examples/publication_quality_xshooter_uvb.py \
+python examples/reviewed_xshooter_uvb_analysis.py \
   --run-baseline-fit \
-  --output-json /tmp/spyctres_publication_xshooter_uvb_fit.json \
-  --output-publication-summary-md /tmp/spyctres_publication_summary.md \
-  --output-publication-summary-csv /tmp/spyctres_publication_summary.csv
+  --output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json \
+  --output-review-summary-md /tmp/spyctres_review_summary.md \
+  --output-review-summary-csv /tmp/spyctres_review_summary.csv
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ from Spyctres import (
     fit_stellar_spectrum,
     input_checksum_provenance,
     prepare_phoenix_fit_kwargs,
-    publication_readiness_audit,
+    analysis_readiness_audit,
     select_diagnostic_windows,
 )
 from Spyctres._serialization import (
@@ -130,7 +130,7 @@ METAL_RV_WINDOWS = (
 )
 
 
-PUBLICATION_FOLLOWUP_STEPS = (
+REVIEWED_ANALYSIS_FOLLOWUP_STEPS = (
     "Inspect formal uncertainties, bad-pixel/product masks, and wavelength "
     "medium/frame provenance before interpreting fitted parameters.",
     "Compare joint Balmer-window and per-line Balmer fits; use leave-one-line-out "
@@ -140,7 +140,7 @@ PUBLICATION_FOLLOWUP_STEPS = (
     "Run target-matched synthetic injection/recovery before claiming calibrated "
     "uncertainties for this data quality and spectral type.",
     "Only after these checks pass should an optional posterior/profile scan be "
-    "used for publication uncertainty tables.",
+    "used for final-analysis uncertainty tables.",
 )
 
 
@@ -198,38 +198,38 @@ CALIBRATION_ASSESSMENT_ORDER = {
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Publication-oriented X-SHOOTER UVB scaffold. Default is audit-only; "
+            "Reviewed-analysis X-SHOOTER UVB scaffold. Default is audit-only; "
             "use --run-baseline-fit to run the expensive PHOENIX baseline fit."
         ),
         epilog=(
             "Examples:\n"
-            "  python examples/publication_quality_xshooter_uvb.py "
-            "--output-json /tmp/spyctres_publication_xshooter_uvb.json\n\n"
-            "  python examples/publication_quality_xshooter_uvb.py "
-            "--output-json /tmp/spyctres_publication_xshooter_uvb.json "
+            "  python examples/reviewed_xshooter_uvb_analysis.py "
+            "--output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb.json\n\n"
+            "  python examples/reviewed_xshooter_uvb_analysis.py "
+            "--output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb.json "
             "--output-balmer-line-csv /tmp/spyctres_balmer_lines.csv "
             "--output-systematic-plan-csv /tmp/spyctres_systematics.csv\n\n"
-            "  python examples/publication_quality_xshooter_uvb.py "
+            "  python examples/reviewed_xshooter_uvb_analysis.py "
             "--run-baseline-fit "
-            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
-            "--output-report-json /tmp/spyctres_publication_xshooter_uvb_report.json "
-            "--output-plot /tmp/spyctres_publication_xshooter_uvb_fit.png "
+            "--output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json "
+            "--output-report-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_report.json "
+            "--output-plot /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.png "
             "--output-balmer-residual-csv /tmp/spyctres_balmer_residuals.csv\n\n"
-            "  python examples/publication_quality_xshooter_uvb.py "
+            "  python examples/reviewed_xshooter_uvb_analysis.py "
             "--run-baseline-fit --run-systematic-variants "
             "--max-systematic-run-variants 2 "
-            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
+            "--output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json "
             "--output-systematic-results-csv /tmp/spyctres_systematic_results.csv\n\n"
-            "  python examples/publication_quality_xshooter_uvb.py "
+            "  python examples/reviewed_xshooter_uvb_analysis.py "
             "--run-baseline-fit --run-injection-recovery "
             "--injection-recovery-trials 3 "
-            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
+            "--output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json "
             "--output-injection-recovery-csv /tmp/spyctres_injection_recovery.csv\n\n"
-            "  python examples/publication_quality_xshooter_uvb.py "
+            "  python examples/reviewed_xshooter_uvb_analysis.py "
             "--run-baseline-fit "
-            "--output-json /tmp/spyctres_publication_xshooter_uvb_fit.json "
-            "--output-publication-summary-md /tmp/spyctres_publication_summary.md "
-            "--output-publication-summary-csv /tmp/spyctres_publication_summary.csv"
+            "--output-json /tmp/spyctres_reviewed_analysis_xshooter_uvb_fit.json "
+            "--output-review-summary-md /tmp/spyctres_review_summary.md "
+            "--output-review-summary-csv /tmp/spyctres_review_summary.csv"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -252,7 +252,7 @@ def build_parser():
     parser.add_argument("--phoenix-dir", default=None)
     parser.add_argument(
         "--output-json",
-        default="/tmp/spyctres_publication_xshooter_uvb.json",
+        default="/tmp/spyctres_reviewed_analysis_xshooter_uvb.json",
         help="Atomic JSON checkpoint/output path.",
     )
     parser.add_argument(
@@ -330,7 +330,8 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        "--output-publication-summary-md",
+        "--output-review-summary-md",
+        dest="output_review_summary_md",
         default=None,
         help=(
             "Optional compact Markdown reviewer summary built from the JSON "
@@ -338,7 +339,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        "--output-publication-summary-csv",
+        "--output-reviewed-analysis-summary-md",
+        "--output-reviewed_analysis-summary-md",
+        "--output-publication-summary-md",
+        dest="output_review_summary_md",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--output-review-summary-csv",
+        dest="output_review_summary_csv",
         default=None,
         help=(
             "Optional compact CSV comparison of baseline, systematic variants, "
@@ -346,12 +355,27 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        "--output-publication-summary-plot",
+        "--output-reviewed-analysis-summary-csv",
+        "--output-reviewed_analysis-summary-csv",
+        "--output-publication-summary-csv",
+        dest="output_review_summary_csv",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--output-review-summary-plot",
+        dest="output_review_summary_plot",
         default=None,
         help=(
             "Optional compact PNG plot of recovered-minus-baseline parameter "
             "deltas for completed systematic and injection/recovery checks."
         ),
+    )
+    parser.add_argument(
+        "--output-reviewed-analysis-summary-plot",
+        "--output-reviewed_analysis-summary-plot",
+        "--output-publication-summary-plot",
+        dest="output_review_summary_plot",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--output-balmer-line-csv",
@@ -386,7 +410,7 @@ def build_parser():
         default=False,
         help=(
             "Run a baseline native-grid PHOENIX fit on the Balmer-window "
-            "segments only after publication readiness passes, unless an "
+            "segments only after reviewed-analysis readiness passes, unless an "
             "explicit exploratory override is supplied. Default: False, so "
             "the scaffold can run without PHOENIX."
         ),
@@ -397,8 +421,8 @@ def build_parser():
         default=False,
         help=(
             "Expert-only override: allow --run-baseline-fit even when the "
-            "publication readiness gate is blocked. The result is recorded as "
-            "exploratory and not publication-valid."
+            "reviewed-analysis gate is blocked. The result is recorded as "
+            "exploratory and not final-analysis-valid."
         ),
     )
     parser.add_argument(
@@ -502,7 +526,7 @@ def build_parser():
         default=None,
         dest="resolution_R",
         help=(
-            "Optional user-supplied constant resolving power. Publication "
+            "Optional user-supplied constant resolving power. Reviewed-analysis "
             "readiness treats this as assumed unless --allow-assumed-resolution "
             "is supplied."
         ),
@@ -511,7 +535,7 @@ def build_parser():
         "--allow-assumed-resolution",
         action="store_true",
         help=(
-            "Allow a user-supplied --R to pass the publication gate. Use only "
+            "Allow a user-supplied --R to pass the reviewed-analysis gate. Use only "
             "after separately validating that approximation."
         ),
     )
@@ -572,7 +596,7 @@ def build_parser():
         default=12,
         help=(
             "Maximum planned fit-level systematic variants to list. This "
-            "keeps publication scaffolds bounded. Default: 12."
+            "keeps reviewed-analysis scaffolds bounded. Default: 12."
         ),
     )
     parser.add_argument(
@@ -758,7 +782,7 @@ def _resolution_assumption(args):
     assumption = _shared_resolution_assumption_for_audit(
         args.resolution_R,
         assumption_warning=(
-            "user-supplied constant resolution for publication scaffold; "
+            "user-supplied constant resolution for reviewed-analysis scaffold; "
             "validate before using for final parameters"
         ),
     )
@@ -786,11 +810,11 @@ def _prepare_balmer_collection(args, segment, *, core_mask_halfwidth):
     collection = SpectrumCollection(
         case.fit_segments,
         meta={
-            "workflow": "publication_quality_xshooter_uvb_scaffold",
+            "workflow": "reviewed_xshooter_uvb_analysis_scaffold",
             "source_spectrum": str(args.spectrum),
             "balmer_case": case.provenance,
         },
-        name="xshooter_uvb_publication_balmer_windows",
+        name="xshooter_uvb_reviewed_analysis_balmer_windows",
     )
     archive_masks = _archive_masks_by_segment(
         collection.segments,
@@ -954,7 +978,7 @@ def _balmer_line_diagnostics(collection, exclude_masks, *, core_mask_halfwidth):
     """Return cheap observed-profile diagnostics for each Balmer fit segment.
 
     These summaries intentionally avoid PHOENIX models. They are meant to flag
-    line-specific data/model-risk before expensive publication fits: sideband
+    line-specific data/model-risk before expensive reviewed-analysis fits: sideband
     coverage, masked-pixel fractions, line-depth proxies, wing asymmetry, and
     known DIB overlaps.
     """
@@ -1584,7 +1608,7 @@ def _systematic_window_variants(case):
             "window_labels": labels,
             "rationale": (
                 "Baseline joint fit keeps all selected Balmer wings in one "
-                "likelihood, which is the preferred first publication check."
+                "likelihood, which is the preferred first reviewed-analysis check."
             ),
         }
     ]
@@ -1609,7 +1633,7 @@ def _systematic_window_variants(case):
                     "rationale": (
                         "Leave-one-line-out stability check; large parameter "
                         "shifts identify a line that should be inspected "
-                        "before publication use."
+                        "before final analysis use."
                     ),
                 }
             )
@@ -1667,7 +1691,7 @@ def _build_systematic_variant_plan(args, case, *, core_mask_recommendation=None)
 
     This is intentionally a plan by default, not another hidden expensive fit
     loop.  The listed variants are the first checks a reviewer would expect
-    before publication-style parameter claims: continuum degree, preparation
+    before reviewed-analysis parameter claims: continuum degree, preparation
     normalization, core-mask choice, resolution assumption, and line-window
     sensitivity.
     """
@@ -1800,7 +1824,7 @@ def _build_systematic_variant_plan(args, case, *, core_mask_recommendation=None)
                 rationale=(
                     "Resolution systematics require an explicit baseline --R "
                     "or validated segment LSF metadata. The reader must not "
-                    "invent publication-quality resolution assumptions."
+                    "invent reviewed-analysis resolution assumptions."
                 ),
                 executable=False,
                 skip_reasons=["missing_explicit_or_validated_resolution"],
@@ -1857,7 +1881,7 @@ def _build_systematic_variant_plan(args, case, *, core_mask_recommendation=None)
         "truncated": bool(truncated),
         "variant_policy": {
             "purpose": (
-                "Bounded fit-level systematic plan for publication-oriented "
+                "Bounded fit-level systematic plan for reviewed-analysis "
                 "work. It records what should be varied before treating "
                 "stellar parameters as defensible."
             ),
@@ -2053,7 +2077,7 @@ def _filter_collection_by_labels(collection, exclude_masks, labels):
             "systematic_window_subset_labels": labels,
         },
         name="{0}_{1}".format(
-            collection.name or "xshooter_uvb_publication_balmer_windows",
+            collection.name or "xshooter_uvb_reviewed_analysis_balmer_windows",
             "_".join(_safe_id_token(label) for label in labels),
         ),
     )
@@ -2198,7 +2222,7 @@ def _run_one_systematic_variant(
             source_segment,
             variant,
         )
-        ordinary_i, publication_i = _run_readiness(
+        ordinary_i, reviewed_analysis_i = _run_readiness(
             variant_args,
             collection_i,
             exclude_masks_i,
@@ -2228,7 +2252,7 @@ def _run_one_systematic_variant(
             "fit_overrides": dict(variant.get("fit_overrides") or {}),
             "window_labels": list(variant.get("window_labels") or ()),
             "ordinary_readiness": ordinary_i,
-            "publication_readiness": publication_i,
+            "analysis_readiness": reviewed_analysis_i,
             "fit_summary": fit_summary,
             "fit": fit_payload,
             "line_residual_diagnostics": residuals,
@@ -2518,7 +2542,7 @@ def _make_synthetic_collection_from_baseline(
             "synthetic_error_sources": list(dict.fromkeys(error_sources)),
         },
         name="{0}_synthetic_trial_{1}".format(
-            collection.name or "publication_balmer",
+            collection.name or "reviewed_analysis_balmer",
             int(trial_index),
         ),
     )
@@ -2625,7 +2649,7 @@ def _injection_recovery_summary(records, truth):
         "interpretation": (
             "Same-model synthetic recovery checks optimizer, masks, continuum "
             "handling, and noise response around the baseline solution. Passing "
-            "this test is necessary but not sufficient for publication use, "
+            "this test is necessary but not sufficient for final analysis use, "
             "because it does not test PHOENIX model physics against real stars."
         ),
     }
@@ -2653,7 +2677,7 @@ def _run_one_injection_recovery_trial(
             trial_index=trial_index,
             rng=rng,
         )
-        ordinary_i, publication_i = _run_readiness(
+        ordinary_i, reviewed_analysis_i = _run_readiness(
             args,
             synthetic_collection,
             exclude_masks,
@@ -2676,7 +2700,7 @@ def _run_one_injection_recovery_trial(
             "status": "ok" if fit_payload.get("success") else "fit_failed",
             "elapsed_s": float(time.monotonic() - started),
             "ordinary_readiness": ordinary_i,
-            "publication_readiness": publication_i,
+            "analysis_readiness": reviewed_analysis_i,
             "fit_summary": _injection_trial_summary(fit_payload, truth),
             "fit": fit_payload,
             "line_residual_diagnostics": residuals,
@@ -3260,7 +3284,7 @@ def _core_mask_audit_interpretation(payload):
         assessment = "borderline"
         detail = (
             "baseline core-mask width {0:g} A differs from audit recommendation "
-            "{1:g} A; compare fitted variants before publication use".format(
+            "{1:g} A; compare fitted variants before final analysis use".format(
                 default_width,
                 recommended_width,
             )
@@ -3361,28 +3385,28 @@ def _injection_recovery_interpretation(payload, rows):
     }
 
 
-def _publication_readiness_interpretation(payload):
-    publication = payload.get("publication_readiness") or {}
-    blockers = list(publication.get("blockers") or ())
-    if not publication:
+def _analysis_readiness_interpretation(payload):
+    reviewed_analysis = payload.get("analysis_readiness") or {}
+    blockers = list(reviewed_analysis.get("blockers") or ())
+    if not reviewed_analysis:
         return {
-            "scope": "publication_readiness",
-            "item": "Publication gate",
+            "scope": "analysis_readiness",
+            "item": "Reviewed-analysis gate",
             "assessment": "not_evaluated",
-            "detail": "publication-readiness audit has not been run",
+            "detail": "reviewed-analysis audit has not been run",
         }
     if blockers:
         return {
-            "scope": "publication_readiness",
-            "item": "Publication gate",
+            "scope": "analysis_readiness",
+            "item": "Reviewed-analysis gate",
             "assessment": "blocking",
             "detail": "readiness blockers: {0}".format(", ".join(blockers)),
         }
     return {
-        "scope": "publication_readiness",
-        "item": "Publication gate",
+        "scope": "analysis_readiness",
+        "item": "Reviewed-analysis gate",
         "assessment": "acceptable",
-        "detail": "publication-readiness audit has no blockers",
+        "detail": "reviewed-analysis audit has no blockers",
     }
 
 
@@ -3391,7 +3415,7 @@ def _build_calibration_interpretation(payload, rows):
         row.update(_assess_comparison_row_sensitivity(row))
 
     checks = [
-        _publication_readiness_interpretation(payload),
+        _analysis_readiness_interpretation(payload),
         _core_mask_audit_interpretation(payload),
         _row_group_interpretation(
             rows,
@@ -3399,7 +3423,7 @@ def _build_calibration_interpretation(payload, rows):
             item="Fitted Balmer-core mask sensitivity",
             missing_detail=(
                 "no fitted core-mask variants have been run; run an explicit "
-                "balmer_core_mask variant before publication use"
+                "balmer_core_mask variant before final analysis use"
             ),
         ),
         _row_group_interpretation(
@@ -3408,7 +3432,7 @@ def _build_calibration_interpretation(payload, rows):
             item="Fitted window-set sensitivity",
             missing_detail=(
                 "no fitted window-set variants have been run; run at least one "
-                "single-line or leave-one-line-out variant before publication use"
+                "single-line or leave-one-line-out variant before final analysis use"
             ),
         ),
         _injection_recovery_interpretation(payload, rows),
@@ -3478,8 +3502,8 @@ def _build_calibration_interpretation(payload, rows):
     }
 
 
-def _build_publication_stability_interpretation(payload, rows, calibration):
-    """Return a plain-language verdict for the current publication scaffold.
+def _build_review_stability_interpretation(payload, rows, calibration):
+    """Return a plain-language verdict for the current reviewed-analysis scaffold.
 
     This intentionally interprets already-computed checks only.  It does not
     alter the fit, choose a model, or rescue an unstable result.
@@ -3526,11 +3550,11 @@ def _build_publication_stability_interpretation(payload, rows, calibration):
             "audit scaffold only."
         )
     elif blocking_checks:
-        claim_status = "exploratory_not_publication_stable"
+        claim_status = "exploratory_not_reviewed_analysis_stable"
         plain = (
             "The scaffold is behaving as designed: it found one or more "
-            "blocking publication-stability checks. Treat the current fitted "
-            "parameters as diagnostic/exploratory rather than publication-grade."
+            "blocking reviewed-analysis stability checks. Treat the current fitted "
+            "parameters as diagnostic/exploratory rather than reviewed-analysis."
         )
         guidance = (
             "Inspect the limiting checks and referee plots before changing "
@@ -3542,7 +3566,7 @@ def _build_publication_stability_interpretation(payload, rows, calibration):
         plain = (
             "No blocking instability is summarized, but at least one check is "
             "borderline or not yet evaluated. The result is still a candidate "
-            "classification/diagnostic fit, not a calibrated publication fit."
+            "classification/diagnostic fit, not a calibrated reviewed-analysis fit."
         )
         guidance = (
             "Run the suggested bounded follow-up checks, then regenerate the "
@@ -3562,10 +3586,10 @@ def _build_publication_stability_interpretation(payload, rows, calibration):
     else:
         claim_status = "not_evaluated"
         plain = (
-            "Publication stability cannot be interpreted from the current "
+            "Reviewed-analysis stability cannot be interpreted from the current "
             "checkpoint because the required calibration summary is incomplete."
         )
-        guidance = "Run or regenerate the publication summary after the needed checks."
+        guidance = "Run or regenerate the review summary after the needed checks."
 
     if unstable_rows:
         worst_scopes = sorted(
@@ -3588,7 +3612,7 @@ def _build_publication_stability_interpretation(payload, rows, calibration):
         "unstable_fit_rows": unstable_rows,
         "dominant_instability_scopes": worst_scopes,
         "interpretation": (
-            "Plain-language interpretation of already-computed publication "
+            "Plain-language interpretation of already-computed reviewed analysis "
             "readiness, mask, window-set, and recovery checks. This is a "
             "reporting layer only and does not alter the likelihood."
         ),
@@ -3634,7 +3658,7 @@ def _append_option(parts, flag, value):
     parts.extend([flag, str(value)])
 
 
-def _publication_replay_parts(args):
+def _reviewed_analysis_replay_parts(args):
     """Return the scientific settings worth carrying into suggested commands."""
     if args is None:
         return [str(EXAMPLE_UVB), "--reader", "xshooter_merge1d"]
@@ -3686,7 +3710,7 @@ def _summary_artifact_paths(output_json, suffix):
     }
 
 
-def _publication_command(
+def _reviewed_analysis_command(
     args,
     output_json,
     *,
@@ -3696,8 +3720,8 @@ def _publication_command(
     injection_csv=None,
     include_summary_outputs=True,
 ):
-    parts = ["python", "examples/publication_quality_xshooter_uvb.py"]
-    parts.extend(_publication_replay_parts(args))
+    parts = ["python", "examples/reviewed_xshooter_uvb_analysis.py"]
+    parts.extend(_reviewed_analysis_replay_parts(args))
     parts.extend(extra_parts)
     parts.extend(["--output-json", str(output_json)])
     _append_option(parts, "--output-plot", output_plot)
@@ -3707,11 +3731,11 @@ def _publication_command(
         paths = _summary_artifact_paths(output_json, "")
         parts.extend(
             [
-                "--output-publication-summary-md",
+                "--output-review-summary-md",
                 paths["md"],
-                "--output-publication-summary-csv",
+                "--output-review-summary-csv",
                 paths["csv"],
-                "--output-publication-summary-plot",
+                "--output-review-summary-plot",
                 paths["plot"],
             ]
         )
@@ -3749,7 +3773,7 @@ def _recommended_next_actions(args, payload, summary):
     base_json = (
         str(getattr(args, "output_json"))
         if args is not None and getattr(args, "output_json", None) is not None
-        else "/tmp/spyctres_publication_xshooter_uvb.json"
+        else "/tmp/spyctres_reviewed_analysis_xshooter_uvb.json"
     )
     calibration = summary.get("calibration_interpretation") or {}
     actions = []
@@ -3779,7 +3803,7 @@ def _recommended_next_actions(args, payload, summary):
             "run_baseline_fit",
             1,
             "No baseline PHOENIX fit is present, so parameter-stability checks are not interpretable yet.",
-            command=_publication_command(
+            command=_reviewed_analysis_command(
                 args,
                 output_json,
                 extra_parts=("--run-baseline-fit",),
@@ -3789,13 +3813,13 @@ def _recommended_next_actions(args, payload, summary):
         )
         return actions
 
-    publication = payload.get("publication_readiness") or {}
-    blockers = list(publication.get("blockers") or ())
+    reviewed_analysis = payload.get("analysis_readiness") or {}
+    blockers = list(reviewed_analysis.get("blockers") or ())
     if blockers:
         add(
-            "review_publication_readiness_blockers",
+            "review_analysis_readiness_blockers",
             1,
-            "Publication-readiness blockers remain: {0}.".format(", ".join(blockers)),
+            "Reviewed-analysis blockers remain: {0}.".format(", ".join(blockers)),
             status="manual_review_required",
             expensive=False,
         )
@@ -3812,8 +3836,8 @@ def _recommended_next_actions(args, payload, summary):
             add(
                 "run_core_mask_fit_sensitivity",
                 2,
-                "The audit grid is useful, but at least one fitted Balmer-core mask variant is still needed before publication-style claims.",
-                command=_publication_command(
+                "The audit grid is useful, but at least one fitted Balmer-core mask variant is still needed before reviewed-analysis claims.",
+                command=_reviewed_analysis_command(
                     args,
                     output_json,
                     extra_parts=(
@@ -3856,7 +3880,7 @@ def _recommended_next_actions(args, payload, summary):
                 "run_window_set_sensitivity",
                 3,
                 "Run at least one single-line or leave-one-line-out Balmer fit to see whether the joint solution is dominated by one window.",
-                command=_publication_command(
+                command=_reviewed_analysis_command(
                     args,
                     output_json,
                     extra_parts=(
@@ -3897,7 +3921,7 @@ def _recommended_next_actions(args, payload, summary):
             "run_same_model_injection_recovery",
             4,
             "Same-model synthetic recovery has not been run; use a small bounded trial set before treating random-noise recovery as understood.",
-            command=_publication_command(
+            command=_reviewed_analysis_command(
                 args,
                 output_json,
                 extra_parts=(
@@ -3927,7 +3951,7 @@ def _recommended_next_actions(args, payload, summary):
         add(
             "share_summary_for_review",
             5,
-            "All currently summarized publication checks are acceptable; share the Markdown/CSV/PNG summary with the reviewer and move to real reference-star validation.",
+            "All currently summarized reviewed-analysis checks are acceptable; share the Markdown/CSV/PNG summary with the reviewer and move to real reference-star validation.",
             status="ready_for_review",
             expensive=False,
         )
@@ -3936,16 +3960,16 @@ def _recommended_next_actions(args, payload, summary):
     return actions
 
 
-def _build_publication_comparison_summary(payload, args=None):
+def _build_reviewed_analysis_comparison_summary(payload, args=None):
     baseline_fit = payload.get("baseline_fit")
     baseline_available = isinstance(baseline_fit, dict)
     rows = []
     headline_flags = set()
 
-    publication = payload.get("publication_readiness") or {}
-    if publication and not publication.get("publication_ready", False):
-        headline_flags.add("publication_gate_blocked")
-    for blocker in publication.get("blockers") or ():
+    reviewed_analysis = payload.get("analysis_readiness") or {}
+    if reviewed_analysis and not reviewed_analysis.get("analysis_ready", False):
+        headline_flags.add("reviewed_analysis_gate_blocked")
+    for blocker in reviewed_analysis.get("blockers") or ():
         headline_flags.add("blocker:{0}".format(blocker))
 
     if baseline_available:
@@ -4027,7 +4051,7 @@ def _build_publication_comparison_summary(payload, args=None):
     calibration = _build_calibration_interpretation(payload, rows)
     for flag in calibration.get("headline_flags") or ():
         headline_flags.add(flag)
-    stability = _build_publication_stability_interpretation(
+    stability = _build_review_stability_interpretation(
         payload,
         rows,
         calibration,
@@ -4035,8 +4059,8 @@ def _build_publication_comparison_summary(payload, args=None):
 
     if not baseline_available:
         status = "summary_ready_no_baseline_fit"
-    elif "publication_gate_blocked" in headline_flags:
-        status = "summary_ready_publication_blocked"
+    elif "reviewed_analysis_gate_blocked" in headline_flags:
+        status = "summary_ready_reviewed_analysis_blocked"
     elif (
         calibration.get("overall_assessment") in {"blocking", "borderline"}
         or any("failed" in flag or "error" in flag for flag in headline_flags)
@@ -4060,12 +4084,12 @@ def _build_publication_comparison_summary(payload, args=None):
         )
     if "line_residual_flags_present" in headline_flags:
         recommendations.append(
-            "Inspect line-specific residual flags before treating the fit as publication-grade."
+            "Inspect line-specific residual flags before treating the fit as reviewed-analysis."
         )
-    if publication.get("blockers"):
+    if reviewed_analysis.get("blockers"):
         recommendations.append(
-            "Resolve publication-readiness blockers: {0}.".format(
-                ", ".join(publication.get("blockers"))
+            "Resolve reviewed-analysis blockers: {0}.".format(
+                ", ".join(reviewed_analysis.get("blockers"))
             )
         )
     recommendations.extend(calibration.get("recommendations") or ())
@@ -4075,13 +4099,13 @@ def _build_publication_comparison_summary(payload, args=None):
         "status": status,
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "baseline_available": bool(baseline_available),
-        "publication_ready": publication.get("publication_ready"),
-        "publication_blockers": list(publication.get("blockers") or ()),
+        "analysis_ready": reviewed_analysis.get("analysis_ready"),
+        "reviewed_analysis_blockers": list(reviewed_analysis.get("blockers") or ()),
         "headline_flags": sorted(headline_flags),
         "comparison_rows": rows,
         "max_abs_parameter_shifts": _max_abs_shift_by_kind(rows),
         "calibration_interpretation": calibration,
-        "publication_stability_interpretation": stability,
+        "review_stability_interpretation": stability,
         "systematic_variant_status": systematic.get("status"),
         "injection_recovery_status": injection.get("status"),
         "recommendations": recommendations,
@@ -4100,7 +4124,7 @@ def _build_publication_comparison_summary(payload, args=None):
     return summary
 
 
-def _write_publication_summary_csv(path, summary):
+def _write_review_summary_csv(path, summary):
     if path is None:
         return
     columns = [
@@ -4199,7 +4223,7 @@ def _markdown_table(columns, rows):
     return "\n".join(lines) + "\n"
 
 
-def _write_publication_summary_markdown(path, summary):
+def _write_review_summary_markdown(path, summary):
     if path is None:
         return
     path = Path(path)
@@ -4220,7 +4244,7 @@ def _write_publication_summary_markdown(path, summary):
         if row.get("source_kind") == "injection_recovery_trial"
     ]
     calibration = summary.get("calibration_interpretation") or {}
-    stability = summary.get("publication_stability_interpretation") or {}
+    stability = summary.get("review_stability_interpretation") or {}
     param_columns = [
         ("source_id", "id"),
         ("status", "status"),
@@ -4264,7 +4288,7 @@ def _write_publication_summary_markdown(path, summary):
         ("line_info_flags", "line info"),
     ]
     content = [
-        "# Spyctres publication workflow summary",
+        "# Spyctres reviewed-analysis workflow summary",
         "",
         "Status: `{0}`".format(summary.get("status")),
         "",
@@ -4293,7 +4317,7 @@ def _write_publication_summary_markdown(path, summary):
     content.extend(
         [
             "",
-            "## Publication-stability interpretation",
+            "## Reviewed-analysis stability interpretation",
             "",
             "Claim status: `{0}`".format(
                 stability.get("claim_status", "not_evaluated")
@@ -4301,7 +4325,7 @@ def _write_publication_summary_markdown(path, summary):
             "",
             stability.get(
                 "plain_language_summary",
-                "No publication-stability interpretation is available.",
+                "No reviewed-analysis stability interpretation is available.",
             ),
             "",
             "Guidance: {0}".format(
@@ -4380,7 +4404,7 @@ def _write_publication_summary_markdown(path, summary):
     path.write_text("\n".join(content), encoding="utf-8")
 
 
-def _write_publication_summary_plot(path, summary):
+def _write_review_summary_plot(path, summary):
     if path is None:
         return
     import matplotlib.pyplot as plt
@@ -4448,17 +4472,17 @@ def _write_publication_summary_plot(path, summary):
             ax.grid(axis="y", alpha=0.25)
         axes[-1].set_xticks(x)
         axes[-1].set_xticklabels(labels, rotation=35, ha="right")
-    fig.suptitle("Publication workflow parameter-shift summary")
+    fig.suptitle("Reviewed-analysis parameter-shift summary")
     save_figure(fig, path, dpi=160, bbox_inches=None)
     plt.close(fig)
 
 
-def _write_publication_summary_outputs(args, payload):
-    summary = _build_publication_comparison_summary(payload, args=args)
-    payload["publication_summary"] = summary
-    _write_publication_summary_csv(args.output_publication_summary_csv, summary)
-    _write_publication_summary_markdown(args.output_publication_summary_md, summary)
-    _write_publication_summary_plot(args.output_publication_summary_plot, summary)
+def _write_review_summary_outputs(args, payload):
+    summary = _build_reviewed_analysis_comparison_summary(payload, args=args)
+    payload["review_summary"] = summary
+    _write_review_summary_csv(args.output_review_summary_csv, summary)
+    _write_review_summary_markdown(args.output_review_summary_md, summary)
+    _write_review_summary_plot(args.output_review_summary_plot, summary)
     return summary
 
 
@@ -4466,7 +4490,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
     generic_windows = _diagnostic_window_payload(segment)
     return {
         "schema_version": 1,
-        "workflow": "publication_quality_xshooter_uvb_scaffold",
+        "workflow": "reviewed_xshooter_uvb_analysis_scaffold",
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "audit_started",
         "input": {
@@ -4475,7 +4499,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
         },
         "analysis_design": {
             "phase": "scaffold",
-            "default_claim_status": "exploratory_until_publication_checks_pass",
+            "default_claim_status": "exploratory_until_reviewed_analysis_checks_pass",
             "balmer_windows": case.provenance["balmer_windows"],
             "metal_rv_windows": list(METAL_RV_WINDOWS),
             "generic_diagnostic_windows": generic_windows,
@@ -4503,7 +4527,7 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
                 "truth. Audit the grid first; run fit-grid variants only when "
                 "the extra PHOENIX cost is justified."
             ),
-            "followup_steps_before_publication_claims": list(PUBLICATION_FOLLOWUP_STEPS),
+            "followup_steps_before_reviewed_analysis_claims": list(REVIEWED_ANALYSIS_FOLLOWUP_STEPS),
         },
         "balmer_case": case.provenance,
         "fit_segments": _fit_window_summary(collection.segments),
@@ -4518,13 +4542,13 @@ def _base_payload(args, spectrum_path, segment, case, collection, exclude_masks)
             core_mask_halfwidth=float(args.balmer_core_mask),
         ),
         "ordinary_readiness": None,
-        "publication_readiness": None,
+        "analysis_readiness": None,
         "core_mask_sensitivity": None,
         "core_mask_sensitivity_recommendation": None,
         "systematic_variant_plan": _build_systematic_variant_plan(args, case),
         "systematic_variant_results": None,
         "injection_recovery": None,
-        "publication_summary": None,
+        "review_summary": None,
         "baseline_fit": None,
         "baseline_line_residual_diagnostics": None,
     }
@@ -4595,8 +4619,8 @@ def _write_core_mask_comparison_csv(path, records):
         "excessive_core_mask",
         "recommended_core_mask",
         "rejected_inside_fit_window_fraction",
-        "publication_ready",
-        "publication_blockers",
+        "analysis_ready",
+        "reviewed_analysis_blockers",
         "teff",
         "logg",
         "feh",
@@ -4625,8 +4649,8 @@ def _write_core_mask_comparison_csv(path, records):
                 "rejected_inside_fit_window_fraction": record[
                     "rejected_inside_fit_window_fraction"
                 ],
-                "publication_ready": record["publication_ready"],
-                "publication_blockers": ";".join(record["publication_blockers"]),
+                "analysis_ready": record["analysis_ready"],
+                "reviewed_analysis_blockers": ";".join(record["reviewed_analysis_blockers"]),
                 "teff": _core_mask_fit_value(record, "teff"),
                 "logg": _core_mask_fit_value(record, "logg"),
                 "feh": _core_mask_fit_value(record, "feh"),
@@ -4726,13 +4750,13 @@ def _run_readiness(args, collection, exclude_masks):
     ordinary = audit_spectrum_for_fit(
         collection,
         exclude_masks=exclude_masks,
-        intended_use="publication_scaffold_baseline",
+        intended_use="reviewed_analysis_scaffold_baseline",
         assumed_resolution=resolution,
     )
-    publication = publication_readiness_audit(
+    reviewed_analysis = analysis_readiness_audit(
         collection,
         exclude_masks=exclude_masks,
-        intended_use="publication_quality_stellar_parameters",
+        intended_use="reviewed_analysis_quality_stellar_parameters",
         assumed_resolution=resolution,
         min_fit_pixels=args.min_fit_pixels,
         max_rejected_inside_fit_window_fraction=(
@@ -4740,7 +4764,7 @@ def _run_readiness(args, collection, exclude_masks):
         ),
         allow_assumed_resolution=args.allow_assumed_resolution,
     )
-    return ordinary, publication
+    return ordinary, reviewed_analysis
 
 
 def _fit_kwargs_from_args(args, collection, exclude_masks):
@@ -4757,7 +4781,7 @@ def _fit_kwargs_from_args(args, collection, exclude_masks):
         collection,
         auto_defaults=True,
         defaults_mode=args.baseline_defaults_mode,
-        science_case="publication_scaffold",
+        science_case="reviewed_analysis_scaffold",
         resolution_R=args.resolution_R,
         p0_overrides=(args.teff, args.feh, args.logg, args.rv),
         lower_bound_overrides=(args.teff_min, args.feh_min, args.logg_min, args.rv_min),
@@ -4775,7 +4799,7 @@ def _run_baseline_fit(
     return_result=False,
     fit_label="baseline",
     ordinary_readiness=None,
-    publication_readiness=None,
+    analysis_readiness=None,
 ):
     fit_kwargs, suggestion = _fit_kwargs_from_args(args, collection, exclude_masks)
     print("Running {0} native-grid PHOENIX fit...".format(fit_label), flush=True)
@@ -4784,7 +4808,7 @@ def _run_baseline_fit(
         model="phoenix",
         phoenix_dir=args.phoenix_dir,
         auto_defaults=False,
-        science_case="publication_scaffold",
+        science_case="reviewed_analysis_scaffold",
         progress_callback=lambda event: print(event, flush=True),
         **fit_kwargs,
     )
@@ -4793,9 +4817,9 @@ def _run_baseline_fit(
     if ordinary_readiness is not None:
         result.summary["spectrum_readiness"] = ordinary_readiness
         result.provenance["spectrum_readiness"] = ordinary_readiness
-    if publication_readiness is not None:
-        result.summary["publication_readiness"] = publication_readiness
-        result.provenance["publication_readiness"] = publication_readiness
+    if analysis_readiness is not None:
+        result.summary["analysis_readiness"] = analysis_readiness
+        result.provenance["analysis_readiness"] = analysis_readiness
     result.summary["archive_mask_policy"] = {
         "policy": str(args.archive_mask_policy),
         "applied": bool(str(args.archive_mask_policy).lower() == "apply"),
@@ -4845,11 +4869,11 @@ def _write_baseline_report_json(args, result):
         plot_paths=plot_paths,
         relative_to=Path(args.output_json).expanduser().resolve().parent,
         report_context={
-            "workflow": "examples/publication_quality_xshooter_uvb.py",
+            "workflow": "examples/reviewed_xshooter_uvb_analysis.py",
             "report_scope": "baseline_fit_only",
             "scaffold_checkpoint_json": args.output_json,
             "note": (
-                "The full publication scaffold checkpoint remains in "
+                "The full reviewed-analysis scaffold checkpoint remains in "
                 "--output-json; this report envelope contains the baseline "
                 "PhoenixFitResult payload and key provenance for hand-off."
             ),
@@ -4858,7 +4882,7 @@ def _write_baseline_report_json(args, result):
     print("Wrote baseline fit report: {0}".format(args.output_report_json), flush=True)
 
 
-def _summarize_core_mask_variant(width, ordinary, publication, fit_payload=None):
+def _summarize_core_mask_variant(width, ordinary, reviewed_analysis, fit_payload=None):
     return {
         "core_mask_halfwidth_A": float(width),
         "mask_enabled": bool(width > 0.0),
@@ -4869,8 +4893,8 @@ def _summarize_core_mask_variant(width, ordinary, publication, fit_payload=None)
             ordinary["rejected_inside_fit_window_fraction"]
         ),
         "interpretation_flags": list(ordinary["interpretation_flags"]),
-        "publication_ready": bool(publication["publication_ready"]),
-        "publication_blockers": list(publication["blockers"]),
+        "analysis_ready": bool(reviewed_analysis["analysis_ready"]),
+        "reviewed_analysis_blockers": list(reviewed_analysis["blockers"]),
         "segment_fit_pixels": [
             {
                 "name": item["name"],
@@ -4946,7 +4970,7 @@ def _annotate_core_mask_information(records, *, min_retained_fraction):
         recommended = min(
             nonzero_eligible,
             key=lambda item: (
-                int(len(item.get("publication_blockers", ()))),
+                int(len(item.get("reviewed_analysis_blockers", ()))),
                 float(item["core_mask_information_penalty"]),
                 float(item["core_mask_halfwidth_A"]),
             ),
@@ -4998,7 +5022,7 @@ def _run_core_mask_sensitivity(args, segment):
             segment,
             core_mask_halfwidth=width,
         )
-        ordinary_i, publication_i = _run_readiness(
+        ordinary_i, reviewed_analysis_i = _run_readiness(
             args,
             collection_i,
             exclude_masks_i,
@@ -5019,7 +5043,7 @@ def _run_core_mask_sensitivity(args, segment):
             _summarize_core_mask_variant(
                 width,
                 ordinary_i,
-                publication_i,
+                reviewed_analysis_i,
                 fit_payload=fit_payload,
             )
         )
@@ -5040,40 +5064,40 @@ def _run_core_mask_sensitivity(args, segment):
     }
 
 
-def _exploratory_override_payload(args, publication_readiness):
+def _exploratory_override_payload(args, analysis_readiness):
     """Return override provenance for an expert exploratory blocked-gate fit."""
     reason = "" if args.override_reason is None else str(args.override_reason).strip()
     if not args.allow_exploratory_fit:
         return None
     if not reason:
         raise ValueError("--allow-exploratory-fit requires a non-empty --override-reason.")
-    blockers = list((publication_readiness or {}).get("blockers") or [])
+    blockers = list((analysis_readiness or {}).get("blockers") or [])
     return {
         "schema_version": 1,
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "requested_intent": "publication_quality_stellar_parameters",
-        "effective_interpretation": "exploratory_not_publication_valid",
+        "requested_intent": "reviewed_analysis_stellar_parameters",
+        "effective_interpretation": "exploratory_review_only",
         "override_reason": reason,
         "original_blockers": blockers,
         "overridden_blockers": blockers,
         "user_guidance": (
             "This fit was allowed only as an exploratory diagnostic. Do not "
-            "treat its atmospheric parameters as publication-quality until "
+            "treat its atmospheric parameters as analysis-ready until "
             "the recorded blockers have been resolved and the run is repeated "
             "without an exploratory override."
         ),
     }
 
 
-def _skipped_blocked_baseline(publication_readiness):
-    blockers = list((publication_readiness or {}).get("blockers") or [])
+def _skipped_blocked_baseline(analysis_readiness):
+    blockers = list((analysis_readiness or {}).get("blockers") or [])
     return {
         "success": False,
-        "status": "skipped_publication_gate_blocked",
-        "reason": "publication readiness gate is blocked",
+        "status": "skipped_reviewed_analysis_gate_blocked",
+        "reason": "reviewed-analysis readiness gate is blocked",
         "blockers": blockers,
         "user_guidance": (
-            "Resolve the blockers before running a publication-oriented fit, "
+            "Resolve the blockers before running a reviewed-analysis fit, "
             "or rerun with --allow-exploratory-fit --override-reason '...' "
             "to produce an explicitly exploratory diagnostic fit."
         ),
@@ -5089,23 +5113,23 @@ def main(argv=None):
     if args.resume and output_path.exists() and not args.force:
         existing = _read_existing(output_path)
         if (
-            args.output_publication_summary_md is not None
-            or args.output_publication_summary_csv is not None
-            or args.output_publication_summary_plot is not None
+            args.output_review_summary_md is not None
+            or args.output_review_summary_csv is not None
+            or args.output_review_summary_plot is not None
         ):
-            summary = _write_publication_summary_outputs(args, existing)
+            summary = _write_review_summary_outputs(args, existing)
             _atomic_write_json(output_path, existing)
             print(
-                "Publication summary: status={0}, rows={1}".format(
+                "Review summary: status={0}, rows={1}".format(
                     summary["status"],
                     len(summary["comparison_rows"]),
                 ),
                 flush=True,
             )
         print(
-            "Existing checkpoint: status={0}, publication_ready={1}".format(
+            "Existing checkpoint: status={0}, analysis_ready={1}".format(
                 existing.get("status"),
-                existing.get("publication_readiness", {}).get("publication_ready"),
+                existing.get("analysis_readiness", {}).get("analysis_ready"),
             ),
             flush=True,
         )
@@ -5138,24 +5162,24 @@ def main(argv=None):
     _atomic_write_json(output_path, payload)
     print("Wrote scaffold checkpoint: {0}".format(output_path), flush=True)
 
-    print("Running ordinary and publication-readiness audits...", flush=True)
-    ordinary, publication = _run_readiness(args, collection, exclude_masks)
+    print("Running ordinary and reviewed-analysis audits...", flush=True)
+    ordinary, reviewed_analysis = _run_readiness(args, collection, exclude_masks)
     payload["ordinary_readiness"] = ordinary
-    payload["publication_readiness"] = publication
+    payload["analysis_readiness"] = reviewed_analysis
     payload["status"] = (
-        "publication_gate_passed_needs_systematics"
-        if publication["publication_ready"]
-        else "exploratory_publication_gate_blocked"
+        "reviewed_analysis_gate_passed_needs_systematics"
+        if reviewed_analysis["analysis_ready"]
+        else "exploratory_reviewed_analysis_gate_blocked"
     )
     _atomic_write_json(output_path, payload)
     print(
-        "Publication readiness: ready={0}, blockers={1}".format(
-            publication["publication_ready"],
-            ", ".join(publication["blockers"]) or "none",
+        "Reviewed-analysis readiness: ready={0}, blockers={1}".format(
+            reviewed_analysis["analysis_ready"],
+            ", ".join(reviewed_analysis["blockers"]) or "none",
         ),
         flush=True,
     )
-    exploratory_override = _exploratory_override_payload(args, publication)
+    exploratory_override = _exploratory_override_payload(args, reviewed_analysis)
     if exploratory_override is not None:
         payload["exploratory_override"] = exploratory_override
         _atomic_write_json(output_path, payload)
@@ -5190,7 +5214,7 @@ def main(argv=None):
     )
     _atomic_write_json(output_path, payload)
 
-    baseline_allowed = bool(publication["publication_ready"]) or exploratory_override is not None
+    baseline_allowed = bool(reviewed_analysis["analysis_ready"]) or exploratory_override is not None
     if args.run_baseline_fit and baseline_allowed:
         baseline_payload, baseline_result = _run_baseline_fit(
             args,
@@ -5199,7 +5223,7 @@ def main(argv=None):
             output_plot=args.output_plot,
             return_result=True,
             ordinary_readiness=ordinary,
-            publication_readiness=publication,
+            analysis_readiness=reviewed_analysis,
         )
         if exploratory_override is not None:
             baseline_payload["exploratory_override"] = exploratory_override
@@ -5217,7 +5241,7 @@ def main(argv=None):
         )
         _write_baseline_report_json(args, baseline_result)
         payload["status"] = (
-            "baseline_fit_completed_needs_publication_systematics"
+            "baseline_fit_completed_needs_reviewed_analysis_systematics"
             if payload["baseline_fit"].get("success")
             else "baseline_fit_failed"
         )
@@ -5229,7 +5253,7 @@ def main(argv=None):
         print(json.dumps(summary, indent=2), flush=True)
         if exploratory_override is not None:
             print(
-                "Exploratory fit completed; this is not valid for publication "
+                "Exploratory fit completed; this is not analysis-ready "
                 "inference until blockers are resolved.",
                 flush=True,
             )
@@ -5285,12 +5309,12 @@ def main(argv=None):
             )
             _atomic_write_json(output_path, payload)
     elif args.run_baseline_fit:
-        payload["baseline_fit"] = _skipped_blocked_baseline(publication)
+        payload["baseline_fit"] = _skipped_blocked_baseline(reviewed_analysis)
         payload["baseline_line_residual_diagnostics"] = None
-        payload["status"] = "baseline_fit_skipped_publication_gate_blocked"
+        payload["status"] = "baseline_fit_skipped_reviewed_analysis_gate_blocked"
         print(
-            "Skipping baseline fit because publication readiness is blocked: {0}".format(
-                ", ".join(publication["blockers"]) or "none"
+            "Skipping baseline fit because reviewed-analysis readiness is blocked: {0}".format(
+                ", ".join(reviewed_analysis["blockers"]) or "none"
             ),
             flush=True,
         )
@@ -5353,10 +5377,10 @@ def main(argv=None):
             "configuration is ready.",
             flush=True,
         )
-    summary = _write_publication_summary_outputs(args, payload)
+    summary = _write_review_summary_outputs(args, payload)
     _atomic_write_json(output_path, payload)
     print(
-        "Publication summary: status={0}, rows={1}".format(
+        "Review summary: status={0}, rows={1}".format(
             summary["status"],
             len(summary["comparison_rows"]),
         ),

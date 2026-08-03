@@ -47,8 +47,12 @@ def _run_command(*args):
             "Example 3",
         ),
         (
-            ["examples/example4_publication_quality_fitting.py", "--help"],
-            "Example 4",
+            ["examples/example4_reviewed_balmer_analysis.py", "--help"],
+            "Example 4A",
+        ),
+        (
+            ["examples/example4b_balmer_stability_checks.py", "--help"],
+            "Example 4B",
         ),
         (
             ["examples/example5_batch_fitting.py", "--help"],
@@ -68,8 +72,8 @@ def _run_command(*args):
             "batch workflow",
         ),
         (
-            ["examples/publication_quality_xshooter_uvb.py", "--help"],
-            "Publication-oriented",
+            ["examples/reviewed_xshooter_uvb_analysis.py", "--help"],
+            "Reviewed-analysis",
         ),
         (
             ["scripts/gaia_benchmark_validation.py", "--help"],

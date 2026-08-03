@@ -67,7 +67,7 @@ scientific than smoke tests.
 - `xsl_validation_plots.py` renders saved XSL validation JSON payloads into
   classification plots for inspection and review. It can also write compact
   Markdown/CSV/JSON/PNG reference-recovery summaries from the same JSON without
-  rerunning PHOENIX. These summaries use publication-scaffold stability
+  rerunning PHOENIX. These summaries use reviewed-analysis scaffold stability
   language and reviewer questions while keeping standard recovery targets
   separate from diagnostic/stress/unsupported targets.
 - `external_spectra_validation.py` audits user-supplied SDSS/SEGUE and

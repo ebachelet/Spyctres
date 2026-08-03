@@ -335,7 +335,7 @@ def evaluate_diagnostic_window_holdout(
     windows that were selected by the diagnostic catalog but not included in
     the current fit combination.  Pixels already used by the fit or explicitly
     excluded remain out of the evaluation.  This is a predictive sanity check,
-    not a replacement for final publication validation.
+    not a replacement for final reviewed-analysis validation.
     """
     held_out_ids = list(comparison.get("held_out_window_ids", ()))
     if not held_out_ids:
@@ -945,7 +945,7 @@ def _summarize_heldout_rows(rows):
         interpretation=(
             "Held-out metrics are residual summaries on valid pixels that were "
             "not used by this comparison fit. They are useful for stability "
-            "triage but are not a calibrated publication likelihood."
+            "triage but are not a calibrated reviewed-analysis likelihood."
         ),
     )
 
@@ -960,7 +960,7 @@ def _summarize_common_rows(rows):
             "for every fit and keep fit-used pixels in the evaluation. They are "
             "a fairer cross-comparison residual summary than raw in-fit chi-"
             "square, but they are still diagnostic rather than a calibrated "
-            "publication likelihood."
+            "reviewed-analysis likelihood."
         ),
     )
 

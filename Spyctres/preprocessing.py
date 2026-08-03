@@ -1,6 +1,7 @@
 """Shared spectrum masking and preprocessing provenance helpers."""
 
 from dataclasses import dataclass
+import warnings
 
 import numpy as np
 
@@ -84,7 +85,7 @@ NONSTELLAR_FEATURES = {
             "hobbs2008_dib_catalog_hd204827",
             "garcia_hernandez2013_fullerene_pn_dibs",
         ),
-        diagnostic_lines=(),
+        diagnostic_lines=("Hgamma",),
     ),
     "dib_4882": NonStellarFeature(
         name="DIB 4882",
@@ -536,6 +537,105 @@ def nonstellar_feature_metadata(names=("dib_4428",), padding_A=0.0):
     return out
 
 
+def find_known_nonstellar_features(regions, *, names=None, padding_A=0.0):
+    """Find known non-stellar catalog features overlapping user regions.
+
+    This is a diagnostic lookup helper.  It is meant for the common notebook
+    situation where a user sees a suspicious residual near an approximate
+    wavelength but does not know whether Spyctres has a relevant DIB/telluric
+    catalog entry.  Returned matches are candidate explanations only; this
+    helper does not mask, correct, or identify a physical origin.
+
+    Parameters
+    ----------
+    regions : tuple or sequence
+        One ``(wmin, wmax)`` interval, a sequence of intervals, or mappings with
+        ``region_A``/``limits_A``.  Wavelengths are in Angstrom on the current
+        data grid.
+    names : sequence or str, optional
+        Restrict the lookup to specific feature IDs.  By default all known
+        non-stellar features are searched.
+    padding_A : float, optional
+        Padding applied to catalog feature regions before testing overlap.
+    """
+    query_regions = _normalize_feature_query_regions(regions)
+    feature_names = tuple(NONSTELLAR_FEATURES) if names is None else names
+    if isinstance(feature_names, str):
+        feature_names = (feature_names,)
+    matches = []
+    for query_index, query in enumerate(query_regions):
+        qmin, qmax = query["region_A"]
+        for feature in nonstellar_feature_metadata(
+            feature_names,
+            padding_A=padding_A,
+        ):
+            fmin, fmax = feature["region_A"]
+            overlap = max(0.0, min(float(qmax), float(fmax)) - max(float(qmin), float(fmin)))
+            if overlap <= 0.0:
+                continue
+            item = dict(feature)
+            item["query_index"] = int(query_index)
+            item["query_label"] = query.get("label")
+            item["query_region_A"] = [float(qmin), float(qmax)]
+            item["overlap_A"] = float(overlap)
+            item["query_overlap_fraction"] = float(
+                overlap / max(1.0e-12, float(qmax) - float(qmin))
+            )
+            item["feature_overlap_fraction"] = float(
+                overlap / max(1.0e-12, float(fmax) - float(fmin))
+            )
+            item["diagnostic_only"] = True
+            item["note"] = (
+                "Catalog overlap is a prompt for inspection/sensitivity tests; "
+                "it is not an automatic correction or physical identification."
+            )
+            matches.append(item)
+    matches.sort(
+        key=lambda item: (
+            int(item["query_index"]),
+            -float(item["overlap_A"]),
+            str(item.get("id", "")),
+        )
+    )
+    return matches
+
+
+def _normalize_feature_query_regions(regions):
+    if isinstance(regions, dict):
+        return [_normalize_feature_query_region(regions)]
+    try:
+        if len(regions) == 2 and all(np.isscalar(item) for item in regions):
+            return [_normalize_feature_query_region(regions)]
+    except TypeError:
+        raise TypeError(
+            "regions must be (wmin, wmax), a mapping, or a sequence of those."
+        )
+    return [_normalize_feature_query_region(region) for region in regions]
+
+
+def _normalize_feature_query_region(region):
+    label = None
+    if isinstance(region, dict):
+        label = region.get("label") or region.get("name") or region.get("id")
+        limits = (
+            region.get("region_A")
+            or region.get("limits_A")
+            or region.get("window_A")
+            or region.get("region")
+        )
+    else:
+        limits = region
+    if limits is None or len(limits) != 2:
+        raise ValueError("Each query region must contain (wmin, wmax).")
+    wmin, wmax = map(float, limits)
+    if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+        raise ValueError("Query regions require finite wmin < wmax.")
+    return {
+        "label": None if label is None else str(label),
+        "region_A": [float(wmin), float(wmax)],
+    }
+
+
 @dataclass(frozen=True)
 class ExclusionMaskSpec:
     """Named exclusion-mask callable.
@@ -579,10 +679,19 @@ class MaskBundle:
     exclude_masks: tuple = ()
     warning_regions: tuple = ()
     metadata: dict | None = None
+    valid_masks: tuple = ()
 
     def __post_init__(self):
         object.__setattr__(self, "exclude_masks", tuple(self.exclude_masks or ()))
         object.__setattr__(self, "warning_regions", tuple(self.warning_regions or ()))
+        object.__setattr__(
+            self,
+            "valid_masks",
+            tuple(
+                np.asarray(mask, dtype=bool).copy()
+                for mask in (self.valid_masks or ())
+            ),
+        )
         object.__setattr__(
             self,
             "metadata",
@@ -598,6 +707,31 @@ class MaskBundle:
     def __getitem__(self, index):
         return self.exclude_masks[index]
 
+    @property
+    def valid_mask(self):
+        """Single-segment fit-use mask; True means usable.
+
+        This property is intentionally available only for bundles built from
+        one spectrum segment. For multi-segment spectra, use
+        ``valid_masks_by_segment`` or pass the bundle as ``exclude_masks=...``.
+        """
+        if not self.valid_masks:
+            raise ValueError(
+                "MaskBundle.valid_mask is available only when build_mask() was "
+                "called with a spectrum."
+            )
+        if len(self.valid_masks) != 1:
+            raise ValueError(
+                "MaskBundle.valid_mask is ambiguous for multi-segment spectra; "
+                "use valid_masks_by_segment."
+            )
+        return np.array(self.valid_masks[0], dtype=bool, copy=True)
+
+    @property
+    def valid_masks_by_segment(self):
+        """Tuple of per-segment fit-use masks; True means usable."""
+        return tuple(np.array(mask, dtype=bool, copy=True) for mask in self.valid_masks)
+
     def to_metadata(self):
         return _json_safe(
             {
@@ -609,6 +743,48 @@ class MaskBundle:
                 "metadata": self.metadata,
             }
         )
+
+    def summary(self):
+        """Return a compact JSON-safe summary for notebooks and GUIs."""
+        summaries = list((self.metadata or {}).get("valid_mask_summaries") or [])
+        return _json_safe(
+            {
+                "schema_version": 1,
+                "n_exclusion_masks": len(self.exclude_masks),
+                "exclude_mask_names": [
+                    getattr(mask, "name", str(mask)) for mask in self.exclude_masks
+                ],
+                "n_warning_regions": len(self.warning_regions),
+                "warning_regions_are_not_applied": bool(
+                    (self.metadata or {}).get("warning_regions_are_not_applied", True)
+                ),
+                "components": list((self.metadata or {}).get("components") or []),
+                "has_valid_mask": bool(self.valid_masks),
+                "valid_mask_summaries": summaries,
+            }
+        )
+
+    def summary_text(self):
+        """Return a compact plain-text summary for scripts/notebooks."""
+        summary = self.summary()
+        lines = [
+            "Spyctres mask bundle",
+            "  exclusion masks: {0}".format(
+                ", ".join(summary["exclude_mask_names"]) or "none"
+            ),
+            "  warning regions: {0} (not applied)".format(
+                summary["n_warning_regions"]
+            ),
+        ]
+        for item in summary.get("valid_mask_summaries") or []:
+            lines.append(
+                "  segment {0}: usable={1:.1%}, explicitly excluded={2:.1%}".format(
+                    item.get("segment", "<unnamed>"),
+                    float(item.get("fit_fraction", 0.0)),
+                    float(item.get("explicit_exclusion_fraction", 0.0)),
+                )
+            )
+        return "\n".join(lines)
 
 
 def exclusion_mask(name, fn, metadata=None):
@@ -624,6 +800,43 @@ def exclusion_mask(name, fn, metadata=None):
     recorded in mask provenance.
     """
     return ExclusionMaskSpec(name=name, callable=fn, metadata=metadata)
+
+
+def wavelength_region_exclusion_mask(name, regions, *, metadata=None):
+    """Return a named exclusion mask for explicit wavelength intervals.
+
+    Parameters
+    ----------
+    name : str
+        Human-readable mask name recorded in fit provenance.
+    regions : sequence of ``(wmin, wmax)``
+        Wavelength intervals, in Angstrom on the data wavelength grid, where
+        ``True`` means reject/exclude from fitting.
+    metadata : dict, optional
+        Extra provenance to attach to the mask.
+
+    Notes
+    -----
+    This is a small public convenience wrapper around :func:`exclusion_mask`.
+    It is useful in notebooks and GUIs because users can record reviewed bad
+    wavelength intervals without defining a custom Python callback.
+    """
+    serialized = _serialize_regions(tuple(regions or ()))
+    metadata_out = {
+        "method": "wavelength_intervals",
+        "mask_type": "user_reviewed_wavelength_region",
+        "regions_A": serialized,
+        "wavelength_unit": "Angstrom",
+        "frame": "data_wavelength_grid",
+    }
+    if metadata:
+        metadata_out.update(dict(metadata))
+
+    return exclusion_mask(
+        name,
+        lambda wave: _inside_regions(np.asarray(wave, dtype=float), serialized),
+        metadata=metadata_out,
+    )
 
 
 def dilate_boolean_mask(mask, n_pix=3):
@@ -974,6 +1187,16 @@ def build_mask(
             }
         )
 
+    valid_masks = []
+    valid_mask_summaries = []
+    for index, segment in enumerate(segments):
+        result = compose_fit_mask(segment, exclude_masks=tuple(masks))
+        valid_masks.append(result.fit_use_mask)
+        item = result.to_summary()
+        item["segment"] = getattr(segment, "name", None)
+        item["segment_index"] = int(index)
+        valid_mask_summaries.append(item)
+
     return MaskBundle(
         exclude_masks=tuple(masks),
         warning_regions=tuple(_json_safe(item) for item in warning_regions),
@@ -984,7 +1207,9 @@ def build_mask(
             "components": components,
             "n_exclusion_masks": len(masks),
             "n_warning_regions": len(warning_regions),
+            "valid_mask_summaries": valid_mask_summaries,
         },
+        valid_masks=tuple(valid_masks),
     )
 
 
@@ -1693,6 +1918,11 @@ def _resolve_audit_mask_options(segments, option, label):
     if _is_global_mask_option(option) or not isinstance(option, dict):
         return [option] * len(segments)
 
+    return _resolve_segment_keyed_options(segments, option, label)
+
+
+def _resolve_segment_keyed_options(segments, option, label):
+    """Resolve an integer/name keyed per-segment option mapping."""
     resolved = [None] * len(segments)
     names = [getattr(seg, "name", None) for seg in segments]
     for key, value in option.items():
@@ -1727,6 +1957,74 @@ def _resolve_audit_mask_options(segments, option, label):
             raise ValueError("{0} assigns segment {1} more than once.".format(label, index))
         resolved[index] = value
     return resolved
+
+
+def _is_region_pair(value):
+    if isinstance(value, (str, bytes, dict)):
+        return False
+    try:
+        if len(value) != 2:
+            return False
+        first, second = value
+    except TypeError:
+        return False
+    try:
+        float(first)
+        float(second)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _is_region_sequence(value):
+    if value is None or isinstance(value, (str, bytes, dict)):
+        return False
+    try:
+        items = list(value)
+    except TypeError:
+        return False
+    return all(_is_region_pair(item) for item in items)
+
+
+def _is_per_segment_regions_sequence(regions, n_segments):
+    if regions is None or isinstance(regions, (str, bytes, dict)):
+        return False
+    try:
+        items = list(regions)
+    except TypeError:
+        return False
+    if len(items) != int(n_segments):
+        return False
+    # A plain list of wavelength pairs is the historical/global form.  Only a
+    # nested list/tuple, e.g. [[(w1, w2)], [(w3, w4)]], is treated as
+    # per-segment.  This keeps existing two-window/two-segment calls stable.
+    if all(_is_region_pair(item) for item in items):
+        return False
+    return all(item is None or _is_region_sequence(item) for item in items)
+
+
+def _resolve_audit_regions_by_segment(segments, regions):
+    """Return one region list per segment for readiness auditing.
+
+    ``regions`` keeps its historical meaning when passed as a flat sequence of
+    ``(wmin, wmax)`` wavelength intervals: every segment is audited against the
+    same set of regions.  A caller that has already split a spectrum into
+    prepared segments can instead pass either:
+
+    - a dict keyed by segment index or segment name; or
+    - a nested sequence with one region-list per segment.
+
+    This matters for workflows that use padded support around line windows:
+    padding pixels are useful for normalization/model support, but should not
+    be counted as unhandled artifacts inside the science fit window.
+    """
+    if regions is None:
+        return [None] * len(segments)
+    if isinstance(regions, dict):
+        return _resolve_segment_keyed_options(segments, regions, "regions")
+    if _is_per_segment_regions_sequence(regions, len(segments)):
+        return list(regions)
+    return [regions] * len(segments)
 
 
 def _regions_mask(wave, regions):
@@ -2066,7 +2364,7 @@ READINESS_INTENTS = (
     "quicklook_classification",
     "atmospheric_parameters",
     "radial_velocity",
-    "publication",
+    "reviewed_analysis",
 )
 
 
@@ -2087,9 +2385,18 @@ READINESS_INTENT_ALIASES = {
     "rv": "radial_velocity",
     "radial_velocity": "radial_velocity",
     "physical_rv": "radial_velocity",
-    "publication": "publication",
-    "publication_quality": "publication",
-    "publication_quality_stellar_parameters": "publication",
+    "reviewed": "reviewed_analysis",
+    "reviewed_analysis": "reviewed_analysis",
+    "analysis_ready": "reviewed_analysis",
+    "analysis_grade": "reviewed_analysis",
+    "reviewed_stellar_parameters": "reviewed_analysis",
+    # Compatibility aliases kept for older notebooks/scripts. New user-facing
+    # examples should use reviewed_analysis because Spyctres cannot certify
+    # that a result is final-science-ready; it can only require explicit reviewed
+    # assumptions, residual checks, and stability evidence.
+    "publication": "reviewed_analysis",
+    "publication_quality": "reviewed_analysis",
+    "publication_quality_stellar_parameters": "reviewed_analysis",
 }
 
 
@@ -2127,7 +2434,7 @@ READINESS_INTENT_BLOCKERS = {
         "flat_zero_block_detected",
         "sdss_wdisp_lsf_not_applied",
     },
-    "publication": {
+    "reviewed_analysis": {
         "no_fitted_pixels",
         "missing_uncertainties",
         "resolution_assumption_required",
@@ -2216,8 +2523,8 @@ def _normalize_readiness_intent(intent=None, intended_use=None):
     key = text.replace("-", "_").replace(" ", "_")
     if key in READINESS_INTENT_ALIASES:
         return READINESS_INTENT_ALIASES[key]
-    if "publication" in key:
-        return "publication"
+    if "reviewed" in key or "analysis_ready" in key or "publication" in key:
+        return "reviewed_analysis"
     if "radial_velocity" in key or key.endswith("_rv") or key == "rv":
         return "radial_velocity"
     if "atmospheric" in key or "parameter" in key:
@@ -2394,9 +2701,15 @@ def _segment_readiness(
             lsf_undersampled = bool(pixels_per_fwhm_median < 2.0)
 
     bad_error = ~err_good if errors_present else np.zeros(wave.shape, dtype=bool)
-    artifact_mask = (~finite) | near_zero | negative_flux | spike | (~input_mask) | bad_error
+    already_rejected_inside = inside & ~input_mask
+    invalid_unmasked = input_mask & ((~finite) | bad_error)
+    suspect_flux_unmasked = input_mask & finite & (near_zero | negative_flux | spike)
+    artifact_mask = invalid_unmasked | suspect_flux_unmasked
     artifact_inside = artifact_mask & inside
-    flat_block_count = _count_true_blocks(near_zero & inside, flat_block_min)
+    flat_block_count = _count_true_blocks(
+        near_zero & inside & input_mask,
+        flat_block_min,
+    )
     n_inside = int(np.sum(inside))
     n_fit = int(np.sum(fit_candidate))
     rejected_inside = int(np.sum(inside & ~fit_candidate))
@@ -2464,15 +2777,29 @@ def _segment_readiness(
         "metadata": _json_safe(metadata),
         "artifact_metrics": {
             "nonfinite_fraction": _fraction(np.sum(~finite), n_total),
-            "near_zero_fraction": _fraction(np.sum(near_zero & inside), n_inside),
+            "near_zero_fraction": _fraction(
+                np.sum(near_zero & inside & input_mask),
+                n_inside,
+            ),
             "negative_flux_fraction": _fraction(
-                np.sum(negative_flux & inside),
+                np.sum(negative_flux & inside & input_mask),
                 n_inside,
             ),
             "extreme_spike_fraction": _fraction(np.sum(spike), n_inside),
             "artifact_fraction_inside_fit_window": _fraction(
                 np.sum(artifact_inside),
                 n_inside,
+            ),
+            "unhandled_artifact_fraction_inside_fit_window": _fraction(
+                np.sum(artifact_inside),
+                n_inside,
+            ),
+            "already_rejected_input_mask_fraction_inside_fit_window": _fraction(
+                np.sum(already_rejected_inside),
+                n_inside,
+            ),
+            "n_already_rejected_input_mask_inside_fit_window": int(
+                np.sum(already_rejected_inside)
             ),
             "flat_zero_block_count": flat_block_count,
             "large_gap_count": large_gap_count,
@@ -2521,6 +2848,7 @@ def audit_spectrum_for_fit(
             raise ValueError("Pass either regions or fit_windows, not both.")
         regions = fit_windows
     segments = _audit_segments(spectrum)
+    regions_by_segment = _resolve_audit_regions_by_segment(segments, regions)
     exclude_mask_by_segment = _resolve_audit_mask_options(
         segments,
         exclude_mask,
@@ -2538,7 +2866,7 @@ def audit_spectrum_for_fit(
     per_segment = [
         _segment_readiness(
             seg,
-            regions=regions,
+            regions=regions_by_segment[index],
             exclude_mask=exclude_mask_by_segment[index],
             exclude_masks=exclude_masks_by_segment[index],
             mask_threshold=mask_threshold,
@@ -2650,7 +2978,7 @@ def audit_spectrum_for_fit(
     )
 
 
-PUBLICATION_READINESS_BLOCKING_FLAGS = frozenset(
+ANALYSIS_READINESS_BLOCKING_FLAGS = frozenset(
     {
         "no_fitted_pixels",
         "missing_uncertainties",
@@ -2667,6 +2995,9 @@ PUBLICATION_READINESS_BLOCKING_FLAGS = frozenset(
     }
 )
 
+# Deprecated compatibility alias. Prefer ANALYSIS_READINESS_BLOCKING_FLAGS.
+PUBLICATION_READINESS_BLOCKING_FLAGS = ANALYSIS_READINESS_BLOCKING_FLAGS
+
 
 def _segment_has_assumed_resolution(segment_audit):
     resolution = (
@@ -2676,7 +3007,7 @@ def _segment_has_assumed_resolution(segment_audit):
     return bool(resolution.get("present") and resolution.get("assumed"))
 
 
-def publication_readiness_audit(
+def analysis_readiness_audit(
     spectrum,
     regions=None,
     fit_windows=None,
@@ -2684,25 +3015,25 @@ def publication_readiness_audit(
     exclude_masks=None,
     mask_threshold=0.5,
     assumed_resolution=None,
-    intended_use="publication_quality_stellar_parameters",
+    intended_use="reviewed_analysis_stellar_parameters",
     min_fit_pixels=200,
     max_rejected_inside_fit_window_fraction=0.5,
     allow_assumed_resolution=False,
     allow_sdss_wdisp_not_applied=False,
     **audit_kwargs,
 ):
-    """Return a stricter audit for publication-oriented stellar parameters.
+    """Return a stricter audit for reviewed stellar-parameter analysis.
 
     This wrapper intentionally builds on :func:`audit_spectrum_for_fit` rather
     than replacing it. The ordinary audit answers "is this usable for a
     quicklook or classification fit?". This helper answers the stricter
-    question "are the data and assumptions sufficiently documented to start a
-    publication-quality parameter analysis?".
+    question "are the data and assumptions explicit enough for a reviewed
+    analysis workflow?".
 
-    A failing publication audit is not a failed ingestion. It usually means the
-    workflow should remain in exploratory/quicklook mode until uncertainties,
-    wavelength/frame metadata, LSF provenance, artifact masks, and fit-window
-    choices have been reviewed.
+    A failing reviewed-analysis audit is not a failed ingestion. It usually
+    means the workflow should remain in exploratory/quicklook mode until
+    uncertainties, wavelength/frame metadata, LSF provenance, artifact masks,
+    residuals, stability checks, and fit-window choices have been reviewed.
     """
     audit = audit_spectrum_for_fit(
         spectrum,
@@ -2712,12 +3043,12 @@ def publication_readiness_audit(
         exclude_masks=exclude_masks,
         mask_threshold=mask_threshold,
         intended_use=intended_use,
-        intent="publication",
+        intent="reviewed_analysis",
         assumed_resolution=assumed_resolution,
         **audit_kwargs,
     )
     flags = set(audit.get("interpretation_flags", []))
-    blocking_flags = set(PUBLICATION_READINESS_BLOCKING_FLAGS)
+    blocking_flags = set(ANALYSIS_READINESS_BLOCKING_FLAGS)
     if allow_sdss_wdisp_not_applied:
         blocking_flags.discard("sdss_wdisp_lsf_not_applied")
 
@@ -2746,6 +3077,10 @@ def publication_readiness_audit(
         {
             "schema_version": 1,
             "intended_use": str(intended_use),
+            "analysis_ready": ready,
+            "ready_for_reviewed_analysis": ready,
+            # Compatibility fields for older notebooks/scripts. Prefer
+            # analysis_ready in new code.
             "publication_ready": ready,
             "ready_for_publication": ready,
             "exploratory_only": not ready,
@@ -2766,6 +3101,22 @@ def publication_readiness_audit(
             "audit": audit,
         }
     )
+
+
+def publication_readiness_audit(*args, **kwargs):
+    """Deprecated alias for :func:`analysis_readiness_audit`.
+
+    The old name is retained during alpha development for compatibility with
+    existing notebooks and serialized examples. New code should use
+    ``analysis_readiness_audit`` and the ``analysis_ready`` result field.
+    """
+    warnings.warn(
+        "publication_readiness_audit() is deprecated; use "
+        "analysis_readiness_audit() and the analysis_ready result field instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return analysis_readiness_audit(*args, **kwargs)
 
 
 def artifact_exclusion_mask_from_segment(

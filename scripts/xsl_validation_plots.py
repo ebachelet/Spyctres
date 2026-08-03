@@ -151,7 +151,7 @@ def build_parser():
         default=None,
         help=(
             "Optional JSON copy of the compact reference-recovery and "
-            "publication-style stability summary."
+            "reviewed-analysis stability summary."
         ),
     )
     return parser
@@ -407,11 +407,11 @@ def _count_by_key(rows, key):
     return dict(sorted(counts.items()))
 
 
-def _build_publication_style_summary(summary):
-    """Return publication-scaffold-style stability interpretation.
+def _build_reviewed_analysis_style_summary(summary):
+    """Return reviewed-analysis-scaffold-style stability interpretation.
 
     This is intentionally scoped to XSL/reference-star validation.  It does
-    not claim that Spyctres is publication-ready as a whole.
+    not claim that Spyctres is analysis-ready as a whole.
     """
     rows = list(summary.get("rows") or ())
     ordinary = list(summary.get("ordinary_rows") or ())
@@ -470,7 +470,7 @@ def _build_publication_style_summary(summary):
             "All successful ordinary XSL standard-reference targets are within "
             "the current provisional thresholds. This is a reviewer-ready "
             "classification-stability check, but not a final package-wide "
-            "publication claim."
+            "final science claim."
         )
 
     review_questions = [
@@ -490,13 +490,13 @@ def _build_publication_style_summary(summary):
         "input_summary_status": status,
         "claim_status": claim_status,
         "claim_scope": (
-            "XSL/reference-star validation only; final software publication "
+            "XSL/reference-star validation only; final software reviewed-analysis "
             "claims still require broader real-spectrum validation, sensitivity "
             "checks, and reviewer inspection."
         ),
         "plain_language_summary": plain,
         "ready_for_referee_review": bool(rows),
-        "ready_for_publication_claim": False,
+        "ready_for_reviewed_analysis_claim": False,
         "ordinary_stability_label_counts": _count_by_key(
             ordinary,
             "stability_label",
@@ -633,7 +633,7 @@ def build_reference_recovery_summary(payload):
         "diagnostic_or_stress_rows": diagnostic_rows,
         "recommendations": recommendations,
     }
-    out["publication_summary"] = _build_publication_style_summary(out)
+    out["review_summary"] = _build_reviewed_analysis_style_summary(out)
     return out
 
 
@@ -751,19 +751,19 @@ def write_reference_recovery_summary_markdown(path, summary):
         "",
         summary.get("plain_language_summary", ""),
         "",
-        "## Publication-style stability interpretation",
+        "## Reviewed-analysis stability interpretation",
         "",
         "Claim status: `{0}`".format(
-            (summary.get("publication_summary") or {}).get("claim_status")
+            (summary.get("review_summary") or {}).get("claim_status")
         ),
         "",
-        (summary.get("publication_summary") or {}).get(
+        (summary.get("review_summary") or {}).get(
             "plain_language_summary",
-            "No publication-style interpretation is available.",
+            "No reviewed-analysis interpretation is available.",
         ),
         "",
         "Claim scope: {0}".format(
-            (summary.get("publication_summary") or {}).get(
+            (summary.get("review_summary") or {}).get(
                 "claim_scope",
                 "XSL/reference-star validation only.",
             )
@@ -800,7 +800,7 @@ def write_reference_recovery_summary_markdown(path, summary):
             "",
         ]
     )
-    review_questions = (summary.get("publication_summary") or {}).get(
+    review_questions = (summary.get("review_summary") or {}).get(
         "review_questions",
         (),
     )
@@ -902,10 +902,10 @@ def plot_reference_recovery_summary(summary, savepath=None):
             ax.grid(axis="y", alpha=0.25)
         axes[-1].set_xticks(x)
         axes[-1].set_xticklabels(labels, rotation=35, ha="right")
-    publication = summary.get("publication_summary") or {}
+    reviewed_analysis = summary.get("review_summary") or {}
     fig.suptitle(
         "XSL reference-star recovery summary — {0}".format(
-            publication.get("claim_status", summary.get("claim_status", "unknown"))
+            reviewed_analysis.get("claim_status", summary.get("claim_status", "unknown"))
         )
     )
     if savepath is not None:

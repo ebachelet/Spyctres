@@ -10,11 +10,11 @@ from Spyctres.io import SpectrumCollection, SpectrumSegment
 from Spyctres.results import PhoenixFitResult
 
 
-def _load_publication_example_module():
+def _load_reviewed_analysis_example_module():
     root = Path(__file__).resolve().parents[1]
-    module_path = root / "examples" / "publication_quality_xshooter_uvb.py"
+    module_path = root / "examples" / "reviewed_xshooter_uvb_analysis.py"
     spec = importlib.util.spec_from_file_location(
-        "publication_quality_xshooter_uvb_test_module",
+        "reviewed_xshooter_uvb_analysis_test_module",
         module_path,
     )
     module = importlib.util.module_from_spec(spec)
@@ -22,20 +22,20 @@ def _load_publication_example_module():
     return module
 
 
-def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
+def test_reviewed_xshooter_uvb_analysis_audit_only(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    output_json = tmp_path / "publication_scaffold.json"
+    output_json = tmp_path / "reviewed_analysis_scaffold.json"
     comparison_csv = tmp_path / "core_mask_summary.csv"
     comparison_plot = tmp_path / "core_mask_summary.png"
     window_csv = tmp_path / "diagnostic_windows.csv"
     systematic_csv = tmp_path / "systematic_plan.csv"
     line_csv = tmp_path / "balmer_lines.csv"
-    summary_md = tmp_path / "nested" / "publication_summary.md"
-    summary_csv = tmp_path / "nested" / "publication_summary.csv"
-    summary_plot = tmp_path / "nested" / "publication_summary.png"
+    summary_md = tmp_path / "nested" / "review_summary.md"
+    summary_csv = tmp_path / "nested" / "review_summary.csv"
+    summary_plot = tmp_path / "nested" / "review_summary.png"
     cmd = [
         sys.executable,
-        "examples/publication_quality_xshooter_uvb.py",
+        "examples/reviewed_xshooter_uvb_analysis.py",
         "--output-json",
         str(output_json),
         "--output-comparison-csv",
@@ -48,11 +48,11 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
         str(systematic_csv),
         "--output-balmer-line-csv",
         str(line_csv),
-        "--output-publication-summary-md",
+        "--output-review-summary-md",
         str(summary_md),
-        "--output-publication-summary-csv",
+        "--output-review-summary-csv",
         str(summary_csv),
-        "--output-publication-summary-plot",
+        "--output-review-summary-plot",
         str(summary_plot),
         "--force",
     ]
@@ -67,25 +67,25 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     payload = json.loads(output_json.read_text())
-    assert payload["workflow"] == "publication_quality_xshooter_uvb_scaffold"
+    assert payload["workflow"] == "reviewed_xshooter_uvb_analysis_scaffold"
     assert payload["baseline_fit"] is None
     assert payload["baseline_line_residual_diagnostics"] is None
     assert payload["systematic_variant_results"] is None
     assert payload["injection_recovery"] is None
-    assert payload["publication_summary"]["status"] == "summary_ready_no_baseline_fit"
-    assert payload["publication_summary"]["comparison_rows"] == []
-    assert "baseline_not_run" in payload["publication_summary"]["headline_flags"]
-    next_actions = payload["publication_summary"]["recommended_next_actions"]
+    assert payload["review_summary"]["status"] == "summary_ready_no_baseline_fit"
+    assert payload["review_summary"]["comparison_rows"] == []
+    assert "baseline_not_run" in payload["review_summary"]["headline_flags"]
+    next_actions = payload["review_summary"]["recommended_next_actions"]
     assert next_actions[0]["action"] == "run_baseline_fit"
     assert "--run-baseline-fit" in next_actions[0]["command"]
     assert "_baseline.json" in next_actions[0]["command"]
-    stability = payload["publication_summary"][
-        "publication_stability_interpretation"
+    stability = payload["review_summary"][
+        "review_stability_interpretation"
     ]
     assert stability["claim_status"] == "not_evaluated_baseline_missing"
     assert "audit scaffold only" in stability["user_guidance"]
     assert payload["ordinary_readiness"]["n_fit_candidate"] > 0
-    assert "publication_readiness" in payload
+    assert "analysis_readiness" in payload
     assert "balmer_windows" in payload["analysis_design"]
     assert payload["analysis_design"]["metal_rv_windows"]
     generic = payload["analysis_design"]["generic_diagnostic_windows"]
@@ -148,15 +148,15 @@ def test_publication_quality_xshooter_uvb_audit_only(tmp_path):
     assert summary_md.exists()
     assert summary_csv.exists()
     assert summary_plot.exists()
-    assert "Spyctres publication workflow summary" in summary_md.read_text()
-    assert "Publication-stability interpretation" in summary_md.read_text()
+    assert "Spyctres reviewed-analysis workflow summary" in summary_md.read_text()
+    assert "Reviewed-analysis stability interpretation" in summary_md.read_text()
     assert "Suggested next commands" in summary_md.read_text()
     assert "delta_teff" in summary_csv.read_text().splitlines()[0]
 
 
-def test_publication_exploratory_override_requires_reason_and_records_blockers():
-    module = _load_publication_example_module()
-    blocked = {"publication_ready": False, "blockers": ["artifact_review_required"]}
+def test_reviewed_analysis_exploratory_override_requires_reason_and_records_blockers():
+    module = _load_reviewed_analysis_example_module()
+    blocked = {"analysis_ready": False, "blockers": ["artifact_review_required"]}
 
     args = module.build_parser().parse_args(["--allow-exploratory-fit"])
     try:
@@ -175,15 +175,15 @@ def test_publication_exploratory_override_requires_reason_and_records_blockers()
     )
     override = module._exploratory_override_payload(args, blocked)
 
-    assert override["effective_interpretation"] == "exploratory_not_publication_valid"
+    assert override["effective_interpretation"] == "exploratory_review_only"
     assert override["override_reason"] == "reviewing residual morphology only"
     assert override["original_blockers"] == ["artifact_review_required"]
     assert override["overridden_blockers"] == ["artifact_review_required"]
     assert override["created_utc"].endswith("Z")
 
 
-def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path):
-    module = _load_publication_example_module()
+def test_review_summary_compares_baseline_systematics_and_recovery(tmp_path):
+    module = _load_reviewed_analysis_example_module()
     line_diagnostics = {
         "status": "computed",
         "summary": {"quality_flags": ["line_high_chi2_proxy"]},
@@ -200,8 +200,8 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
         ],
     }
     payload = {
-        "publication_readiness": {
-            "publication_ready": False,
+        "analysis_readiness": {
+            "analysis_ready": False,
             "blockers": ["artifact_review_required"],
         },
         "baseline_fit": {
@@ -263,11 +263,11 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
         },
     }
 
-    summary = module._build_publication_comparison_summary(payload)
+    summary = module._build_reviewed_analysis_comparison_summary(payload)
 
-    assert summary["status"] == "summary_ready_publication_blocked"
+    assert summary["status"] == "summary_ready_reviewed_analysis_blocked"
     assert len(summary["comparison_rows"]) == 3
-    assert "publication_gate_blocked" in summary["headline_flags"]
+    assert "reviewed_analysis_gate_blocked" in summary["headline_flags"]
     assert "injection_recovery_needs_review" in summary["headline_flags"]
     assert "line_residual_flags_present" in summary["headline_flags"]
     assert summary["max_abs_parameter_shifts"]["systematic_variant"]["delta_teff"] == 125.0
@@ -279,57 +279,57 @@ def test_publication_summary_compares_baseline_systematics_and_recovery(tmp_path
     assert calibration["overall_assessment"] == "blocking"
     assert "calibration_interpretation_blocking" in summary["headline_flags"]
     assert any(
-        item["scope"] == "publication_readiness"
+        item["scope"] == "analysis_readiness"
         and item["assessment"] == "blocking"
         for item in calibration["checks"]
     )
-    stability = summary["publication_stability_interpretation"]
-    assert stability["claim_status"] == "exploratory_not_publication_stable"
+    stability = summary["review_stability_interpretation"]
+    assert stability["claim_status"] == "exploratory_not_reviewed_analysis_stable"
     assert "diagnostic/exploratory" in stability["plain_language_summary"]
     assert stability["limiting_checks"]
 
     args = module.build_parser().parse_args(
         [
             "--output-json",
-            str(tmp_path / "publication.json"),
-            "--output-publication-summary-md",
-            str(tmp_path / "summary" / "publication.md"),
-            "--output-publication-summary-csv",
-            str(tmp_path / "summary" / "publication.csv"),
-            "--output-publication-summary-plot",
-            str(tmp_path / "summary" / "publication.png"),
+            str(tmp_path / "reviewed_analysis.json"),
+            "--output-review-summary-md",
+            str(tmp_path / "summary" / "reviewed_analysis.md"),
+            "--output-review-summary-csv",
+            str(tmp_path / "summary" / "reviewed_analysis.csv"),
+            "--output-review-summary-plot",
+            str(tmp_path / "summary" / "reviewed_analysis.png"),
         ]
     )
-    written_summary = module._write_publication_summary_outputs(args, payload)
+    written_summary = module._write_review_summary_outputs(args, payload)
 
-    assert payload["publication_summary"]["status"] == written_summary["status"]
-    assert (tmp_path / "summary" / "publication.md").exists()
-    assert (tmp_path / "summary" / "publication.csv").exists()
-    assert (tmp_path / "summary" / "publication.png").exists()
-    md_text = (tmp_path / "summary" / "publication.md").read_text()
+    assert payload["review_summary"]["status"] == written_summary["status"]
+    assert (tmp_path / "summary" / "reviewed_analysis.md").exists()
+    assert (tmp_path / "summary" / "reviewed_analysis.csv").exists()
+    assert (tmp_path / "summary" / "reviewed_analysis.png").exists()
+    md_text = (tmp_path / "summary" / "reviewed_analysis.md").read_text()
     assert "Calibration interpretation" in md_text
-    assert "Publication-stability interpretation" in md_text
-    assert "Claim status: `exploratory_not_publication_stable`" in md_text
+    assert "Reviewed-analysis stability interpretation" in md_text
+    assert "Claim status: `exploratory_not_reviewed_analysis_stable`" in md_text
     assert "Suggested next commands" in md_text
     assert "Systematic variants" in md_text
     assert "Injection/recovery" in md_text
-    csv_text = (tmp_path / "summary" / "publication.csv").read_text()
+    csv_text = (tmp_path / "summary" / "reviewed_analysis.csv").read_text()
     assert "sensitivity_assessment" in csv_text.splitlines()[0]
     assert "continuum_mdeg_1" in csv_text
     assert "trial_1" in csv_text
 
 
-def test_publication_summary_recommends_baseline_command(tmp_path):
-    module = _load_publication_example_module()
+def test_review_summary_recommends_baseline_command(tmp_path):
+    module = _load_reviewed_analysis_example_module()
     args = module.build_parser().parse_args(
         [
             "--output-json",
-            str(tmp_path / "publication.json"),
+            str(tmp_path / "reviewed_analysis.json"),
         ]
     )
     payload = {
-        "publication_readiness": {
-            "publication_ready": False,
+        "analysis_readiness": {
+            "analysis_ready": False,
             "blockers": ["base_fit_readiness_failed"],
         },
         "baseline_fit": None,
@@ -337,29 +337,29 @@ def test_publication_summary_recommends_baseline_command(tmp_path):
         "injection_recovery": None,
     }
 
-    summary = module._build_publication_comparison_summary(payload, args=args)
+    summary = module._build_reviewed_analysis_comparison_summary(payload, args=args)
     actions = summary["recommended_next_actions"]
 
     assert [item["action"] for item in actions] == ["run_baseline_fit"]
     command = actions[0]["command"]
     assert "--run-baseline-fit" in command
-    assert str(tmp_path / "publication_baseline.json") in command
-    assert str(tmp_path / "publication.json") not in command
+    assert str(tmp_path / "reviewed_analysis_baseline.json") in command
+    assert str(tmp_path / "reviewed_analysis.json") not in command
     assert actions[0]["writes_new_checkpoint"] is True
 
 
-def test_publication_baseline_report_writer_saves_versioned_envelope(tmp_path):
-    module = _load_publication_example_module()
+def test_reviewed_analysis_baseline_report_writer_saves_versioned_envelope(tmp_path):
+    module = _load_reviewed_analysis_example_module()
     args = module.build_parser().parse_args(
         [
             "--run-baseline-fit",
             "--output-json",
-            str(tmp_path / "publication_fit.json"),
+            str(tmp_path / "reviewed_analysis_fit.json"),
             "--output-report-json",
-            str(tmp_path / "publication_report.json"),
+            str(tmp_path / "reviewed_analysis_report.json"),
             "--record-input-checksum",
             "--output-plot",
-            str(tmp_path / "publication_fit.png"),
+            str(tmp_path / "reviewed_analysis_fit.png"),
         ]
     )
     assert args.record_input_checksum is True
@@ -378,29 +378,29 @@ def test_publication_baseline_report_writer_saves_versioned_envelope(tmp_path):
 
     module._write_baseline_report_json(args, result)
 
-    report = json.loads((tmp_path / "publication_report.json").read_text())
+    report = json.loads((tmp_path / "reviewed_analysis_report.json").read_text())
     assert report["report_type"] == "spyctres.fit_result_report"
     assert report["result"]["generated_files"]["plots"]["referee_plot"] == (
-        "publication_fit.png"
+        "reviewed_analysis_fit.png"
     )
     assert report["provenance_summary"]["fit_setup_hash"] == "baseline-setup"
     assert report["provenance_summary"]["quality_flags"] == ["ok"]
     assert report["report_context"]["report_scope"] == "baseline_fit_only"
     assert report["report_context"]["scaffold_checkpoint_json"].endswith(
-        "publication_fit.json"
+        "reviewed_analysis_fit.json"
     )
 
 
-def test_publication_summary_recommends_window_set_command(tmp_path):
-    module = _load_publication_example_module()
+def test_review_summary_recommends_window_set_command(tmp_path):
+    module = _load_reviewed_analysis_example_module()
     args = module.build_parser().parse_args(
         [
             "--output-json",
-            str(tmp_path / "publication_fit.json"),
+            str(tmp_path / "reviewed_analysis_fit.json"),
         ]
     )
     payload = {
-        "publication_readiness": {"publication_ready": True, "blockers": []},
+        "analysis_readiness": {"analysis_ready": True, "blockers": []},
         "per_line_balmer_diagnostics": {"core_mask_halfwidth_A": 4.0},
         "core_mask_sensitivity": [
             {
@@ -498,7 +498,7 @@ def test_publication_summary_recommends_window_set_command(tmp_path):
         },
     }
 
-    summary = module._build_publication_comparison_summary(payload, args=args)
+    summary = module._build_reviewed_analysis_comparison_summary(payload, args=args)
     actions = {
         item["action"]: item
         for item in summary["recommended_next_actions"]
@@ -509,14 +509,14 @@ def test_publication_summary_recommends_window_set_command(tmp_path):
     assert "--run-systematic-variants" in command
     assert "--systematic-variant-ids" in command
     assert "window_set_single_hgamma,window_set_single_hbeta" in command
-    assert str(tmp_path / "publication_fit_windowset_variants.json") in command
-    assert str(tmp_path / "publication_fit.json") not in command
+    assert str(tmp_path / "reviewed_analysis_fit_windowset_variants.json") in command
+    assert str(tmp_path / "reviewed_analysis_fit.json") not in command
 
 
 def test_calibration_interpretation_flags_core_mask_and_window_sensitivity():
-    module = _load_publication_example_module()
+    module = _load_reviewed_analysis_example_module()
     payload = {
-        "publication_readiness": {"publication_ready": True, "blockers": []},
+        "analysis_readiness": {"analysis_ready": True, "blockers": []},
         "per_line_balmer_diagnostics": {"core_mask_halfwidth_A": 10.0},
         "core_mask_sensitivity": [
             {
@@ -620,7 +620,7 @@ def test_calibration_interpretation_flags_core_mask_and_window_sensitivity():
         },
     }
 
-    summary = module._build_publication_comparison_summary(payload)
+    summary = module._build_reviewed_analysis_comparison_summary(payload)
     calibration = summary["calibration_interpretation"]
     checks = {item["scope"]: item for item in calibration["checks"]}
     rows = {item["source_id"]: item for item in summary["comparison_rows"]}
@@ -635,8 +635,8 @@ def test_calibration_interpretation_flags_core_mask_and_window_sensitivity():
     assert "calibration_interpretation_blocking" in summary["headline_flags"]
 
 
-def test_publication_summary_treats_masked_core_note_as_informational():
-    module = _load_publication_example_module()
+def test_review_summary_treats_masked_core_note_as_informational():
+    module = _load_reviewed_analysis_example_module()
     diagnostics = {
         "status": "computed",
         "summary": {"quality_flags": ["core_model_only_not_fitted"]},
@@ -653,7 +653,7 @@ def test_publication_summary_treats_masked_core_note_as_informational():
         ],
     }
     payload = {
-        "publication_readiness": {"publication_ready": True, "blockers": []},
+        "analysis_readiness": {"analysis_ready": True, "blockers": []},
         "baseline_fit": {
             "success": True,
             "teff": 9000.0,
@@ -668,7 +668,7 @@ def test_publication_summary_treats_masked_core_note_as_informational():
         "injection_recovery": {"status": "planned", "records": []},
     }
 
-    summary = module._build_publication_comparison_summary(payload)
+    summary = module._build_reviewed_analysis_comparison_summary(payload)
     row = summary["comparison_rows"][0]
 
     assert "line_residual_flags_present" not in summary["headline_flags"]
@@ -678,7 +678,7 @@ def test_publication_summary_treats_masked_core_note_as_informational():
 
 
 def test_balmer_model_residual_diagnostics_from_reconstructed_result(tmp_path):
-    module = _load_publication_example_module()
+    module = _load_reviewed_analysis_example_module()
     wave = np.linspace(4310.0, 4370.0, 301)
     center = 4340.5
     flux = 1.0 - 0.25 * np.exp(-0.5 * ((wave - center) / 7.0) ** 2)
@@ -734,11 +734,11 @@ def test_balmer_model_residual_diagnostics_from_reconstructed_result(tmp_path):
 
 
 def test_systematic_variant_execution_is_bounded_and_checkpointed(tmp_path):
-    module = _load_publication_example_module()
+    module = _load_reviewed_analysis_example_module()
     args = module.build_parser().parse_args(
         [
             "--output-json",
-            str(tmp_path / "publication_with_systematics.json"),
+            str(tmp_path / "reviewed_analysis_with_systematics.json"),
             "--output-systematic-results-csv",
             str(tmp_path / "systematic_results.csv"),
             "--max-systematic-run-variants",
@@ -854,11 +854,11 @@ def test_systematic_variant_execution_is_bounded_and_checkpointed(tmp_path):
 
 
 def test_injection_recovery_is_bounded_and_checkpointed(tmp_path):
-    module = _load_publication_example_module()
+    module = _load_reviewed_analysis_example_module()
     args = module.build_parser().parse_args(
         [
             "--output-json",
-            str(tmp_path / "publication_with_injection.json"),
+            str(tmp_path / "reviewed_analysis_with_injection.json"),
             "--output-injection-recovery-csv",
             str(tmp_path / "injection_recovery.csv"),
             "--injection-recovery-trials",

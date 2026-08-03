@@ -4,9 +4,11 @@ from Spyctres.io import ResolutionDescriptor, SpectrumCollection, SpectrumSegmen
 from Spyctres.linefitting import (
     LineFitConfig,
     LineSpec,
+    compare_line_fits,
     fit_line,
     fit_lines,
     known_line_spec,
+    list_known_lines,
 )
 from Spyctres.waveutils import C_KMS
 
@@ -67,6 +69,34 @@ def test_beginner_line_alias_and_center_calls_are_supported():
     assert known_line_spec("Hgamma").name == "Hgamma"
 
 
+def test_list_known_lines_exposes_names_details_aliases_and_filters():
+    names = list_known_lines()
+
+    assert "Hgamma" in names
+    assert "Mg II 4481" in names
+
+    blue_names = list_known_lines(wmin=4300.0, wmax=4500.0)
+    assert "Hgamma" in blue_names
+    assert "Mg II 4481" in blue_names
+    assert "Halpha" not in blue_names
+
+    aliases = list_known_lines(include_aliases=True, wmin=4300.0, wmax=4500.0)
+    assert "hgamma" in aliases
+    assert "mg_ii_4481" in aliases
+
+    details = list_known_lines(details=True, wmin=4300.0, wmax=4350.0)
+    assert details == [
+        {
+            "name": "Hgamma",
+            "rest_wave_A": 4340.47,
+            "wave_medium": "air",
+            "default_window_A": 16.0,
+            "kind": "absorption",
+            "aliases": ["h_gamma", "hgamma", "hγ"],
+        }
+    ]
+
+
 def test_line_alias_selects_covering_segment_from_collection():
     segment, _rest, center = make_line()
     blue = SpectrumSegment(
@@ -112,6 +142,22 @@ def test_missing_errors_are_estimated_and_masked_pixels_are_excluded():
     assert result.n_points == np.count_nonzero(mask)
 
 
+def test_fit_line_accepts_public_valid_mask_override():
+    segment, rest, center = make_line()
+    valid_mask = np.ones_like(segment.wave, dtype=bool)
+    valid_mask[(segment.wave > center + 0.5) & (segment.wave < center + 1.0)] = False
+
+    result = fit_line(
+        segment,
+        LineSpec("Halpha", rest, window_A=4.0),
+        LineFitConfig(rv_guess_kms=24.0),
+        valid_mask=valid_mask,
+    )
+
+    assert result.success
+    assert result.n_points == np.count_nonzero(valid_mask)
+
+
 def test_nearby_independent_lines_are_flagged_as_blend_candidates():
     segment, rest, _ = make_line()
     results = fit_lines(
@@ -124,6 +170,27 @@ def test_nearby_independent_lines_are_flagged_as_blend_candidates():
     )
 
     assert all("blend_candidate" in result.flags for result in results)
+
+
+def test_compare_line_fits_returns_compact_table():
+    segment, rest, _ = make_line()
+    first = fit_line(
+        segment,
+        LineSpec("Halpha", rest, window_A=4.0),
+        LineFitConfig(rv_guess_kms=24.0),
+    )
+    second = fit_line(
+        segment,
+        LineSpec("nearby", rest + 1.0, window_A=4.0),
+        LineFitConfig(rv_guess_kms=24.0),
+    )
+
+    comparison = compare_line_fits([first, second], labels=["Halpha", "nearby"])
+
+    assert comparison["operation"] == "compare_line_fits"
+    assert len(comparison.rows) == 2
+    assert comparison.summary()["n_results"] == 2
+    assert "Spyctres line-fit comparison" in comparison.summary_text()
 
 
 def test_line_rest_wavelength_is_converted_to_segment_medium():

@@ -1,5 +1,6 @@
 """Small, LSF-aware local spectral-line diagnostic layer."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 import json
 
@@ -40,6 +41,80 @@ _LINE_ALIASES = {
 
 def _normalize_line_alias(value):
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _known_line_records():
+    records = {}
+    for alias, values in _LINE_ALIASES.items():
+        label, rest_wave, medium, window_A = values
+        record = records.setdefault(
+            label,
+            {
+                "name": label,
+                "rest_wave_A": float(rest_wave),
+                "wave_medium": medium,
+                "default_window_A": float(window_A),
+                "kind": "absorption",
+                "aliases": set(),
+            },
+        )
+        record["aliases"].add(str(alias))
+    out = []
+    for record in records.values():
+        item = dict(record)
+        item["aliases"] = sorted(item["aliases"])
+        out.append(item)
+    return sorted(out, key=lambda item: (item["rest_wave_A"], item["name"]))
+
+
+def list_known_lines(*, details=False, include_aliases=False, wmin=None, wmax=None):
+    """List built-in local-line names known by :func:`fit_line`.
+
+    By default this returns the compact canonical names accepted by
+    ``fit_line(spec, "name")``.  Use ``details=True`` to inspect the rest
+    wavelength, catalog wavelength medium, default fitting half-window, and
+    accepted aliases.
+
+    Parameters
+    ----------
+    details : bool, optional
+        Return dictionaries with line metadata instead of just names.
+    include_aliases : bool, optional
+        When ``details=False``, return all accepted alias strings instead of
+        canonical display names.  When ``details=True``, aliases are always
+        included in each record.
+    wmin, wmax : float, optional
+        Optional wavelength filter in Angstrom, evaluated against the catalog
+        rest wavelength in its listed wavelength medium.
+    """
+    if wmin is not None:
+        wmin = float(wmin)
+        if not np.isfinite(wmin):
+            raise ValueError("wmin must be finite when supplied.")
+    if wmax is not None:
+        wmax = float(wmax)
+        if not np.isfinite(wmax):
+            raise ValueError("wmax must be finite when supplied.")
+    if wmin is not None and wmax is not None and wmax < wmin:
+        raise ValueError("wmax must be >= wmin.")
+
+    records = []
+    for record in _known_line_records():
+        rest = float(record["rest_wave_A"])
+        if wmin is not None and rest < wmin:
+            continue
+        if wmax is not None and rest > wmax:
+            continue
+        records.append(record)
+
+    if details:
+        return [dict(record) for record in records]
+    if include_aliases:
+        aliases = []
+        for record in records:
+            aliases.extend(record["aliases"])
+        return sorted(set(aliases))
+    return [record["name"] for record in records]
 
 
 @dataclass(frozen=True)
@@ -118,6 +193,42 @@ class LineFitResult:
 
     def to_json(self, **kwargs):
         return json.dumps(self.to_dict(), **kwargs)
+
+    def summary(self):
+        """Return a compact JSON-safe line-fit summary."""
+        return {
+            "line_name": self.line_name,
+            "success": bool(self.success),
+            "rest_wave_A": float(self.rest_wave),
+            "center_wave_A": float(self.center_wave),
+            "rv_kms": float(self.rv_kms),
+            "rv_err_kms": float(self.rv_err_kms),
+            "equivalent_width_A": float(self.equivalent_width_A),
+            "fwhm_A": float(self.fwhm_A),
+            "chi2_red": float(self.chi2_red),
+            "n_points": int(self.n_points),
+            "mask_fraction": float(self.mask_fraction),
+            "flags": list(self.flags),
+            "interpretation": (
+                "local diagnostic line fit; broad lines are not precision-RV anchors"
+            ),
+        }
+
+    def summary_text(self):
+        """Return a compact plain-text summary for notebooks/scripts."""
+        flags = ", ".join(self.flags) or "none"
+        return (
+            "{0}: success={1}, RV={2:.3g} km/s, EW={3:.3g} A, "
+            "chi2_red={4:.3g}, N={5}, flags={6}"
+        ).format(
+            self.line_name,
+            bool(self.success),
+            float(self.rv_kms),
+            float(self.equivalent_width_A),
+            float(self.chi2_red),
+            int(self.n_points),
+            flags,
+        )
 
 
 def _poly_design(x, order):
@@ -282,6 +393,42 @@ def _choose_line_segment(spectrum, line, config):
     )
 
 
+def _coerce_line_valid_mask(spectrum, segment, valid_mask):
+    if valid_mask is None:
+        return None
+    mask = None
+    if isinstance(spectrum, SpectrumSegment):
+        mask = valid_mask
+    elif hasattr(spectrum, "segments"):
+        segments = list(spectrum.segments)
+        index = segments.index(segment)
+        if isinstance(valid_mask, Mapping):
+            key = segment.name if segment.name in valid_mask else index
+            if key not in valid_mask:
+                raise ValueError(
+                    "valid_mask mapping must contain the selected segment name or index."
+                )
+            mask = valid_mask[key]
+        else:
+            array = np.asarray(valid_mask)
+            if array.shape == np.asarray(segment.wave).shape:
+                mask = array
+            else:
+                masks = list(valid_mask)
+                if len(masks) != len(segments):
+                    raise ValueError(
+                        "valid_mask for a SpectrumCollection must contain one "
+                        "mask per segment, or one mask matching the selected segment."
+                    )
+                mask = masks[index]
+    else:
+        mask = valid_mask
+    mask = np.asarray(mask, dtype=bool)
+    if mask.shape != np.asarray(segment.wave).shape:
+        raise ValueError("valid_mask must match the selected segment wavelength shape.")
+    return mask
+
+
 def fit_line(
     segment,
     line=None,
@@ -293,6 +440,7 @@ def fit_line(
     kind=None,
     window_A=None,
     wave_medium=None,
+    valid_mask=None,
 ):
     """Fit a Gaussian local line plus multiplicative Legendre continuum.
 
@@ -313,7 +461,11 @@ def fit_line(
         window_A=window_A,
         wave_medium=wave_medium,
     )
+    input_spectrum = segment
     segment = _choose_line_segment(segment, line, config)
+    user_valid_mask = _coerce_line_valid_mask(input_spectrum, segment, valid_mask)
+    if user_valid_mask is not None:
+        segment = segment.copy(mask=np.asarray(segment.mask, dtype=bool) & user_valid_mask)
 
     segment_medium = str(segment.wave_medium).lower()
     rest_wave_data = float(line.rest_wave)
@@ -466,10 +618,13 @@ def fit_line(
     )
 
 
-def fit_lines(segment, lines, config=None):
+def fit_lines(segment, lines, config=None, *, valid_mask=None):
     """Fit multiple lines and flag independently fitted close neighbours."""
     specs = [_line_spec_from_input(item) for item in lines]
-    results = [fit_line(segment, item, config=config) for item in specs]
+    results = [
+        fit_line(segment, item, config=config, valid_mask=valid_mask)
+        for item in specs
+    ]
     for i, spec in enumerate(specs):
         close = any(
             j != i and abs(other.rest_wave - spec.rest_wave) < spec.window_A
@@ -479,3 +634,106 @@ def fit_lines(segment, lines, config=None):
             flags = tuple(flag for flag in results[i].flags if flag != "ok") + ("blend_candidate",)
             results[i] = replace(results[i], flags=flags)
     return results
+
+
+class LineFitComparison(dict):
+    """Dict-compatible line-fit comparison with display helpers."""
+
+    @property
+    def rows(self):
+        return list(self.get("rows", ()))
+
+    def to_dict(self):
+        return dict(self)
+
+    def summary(self):
+        return {
+            "schema_version": 1,
+            "n_results": len(self.rows),
+            "n_success": int(sum(1 for row in self.rows if row.get("success"))),
+            "rv_median_kms": self.get("rv_median_kms"),
+            "rv_scatter_kms": self.get("rv_scatter_kms"),
+            "rows": self.rows,
+        }
+
+    def plot(self, **kwargs):
+        """Plot compact diagnostic metrics for this line-fit comparison."""
+        from .plotting import plot_line_fit_comparison
+
+        return plot_line_fit_comparison(self, **kwargs)
+
+    def summary_text(self):
+        header = (
+            "label                 line           RV[km/s]   EW[A]  "
+            "chi2red  Nfit  flags"
+        )
+        lines = [
+            "Spyctres line-fit comparison",
+            "  successful={0}/{1}, median RV={2}".format(
+                self.summary()["n_success"],
+                len(self.rows),
+                "n/a"
+                if self.get("rv_median_kms") is None
+                else "{0:.3g} km/s".format(float(self["rv_median_kms"])),
+            ),
+            header,
+            "-" * len(header),
+        ]
+        for row in self.rows:
+            rv = row.get("rv_kms")
+            ew = row.get("equivalent_width_A")
+            chi2 = row.get("chi2_red")
+            lines.append(
+                "{label:<21} {line:<12} {rv:>8} {ew:>7} {chi2:>7} {n:>5}  {flags}".format(
+                    label=str(row.get("label", ""))[:21],
+                    line=str(row.get("line_name", ""))[:12],
+                    rv="nan" if rv is None or not np.isfinite(rv) else "{0:.3g}".format(rv),
+                    ew="nan" if ew is None or not np.isfinite(ew) else "{0:.3g}".format(ew),
+                    chi2=(
+                        "nan"
+                        if chi2 is None or not np.isfinite(chi2)
+                        else "{0:.3g}".format(chi2)
+                    ),
+                    n=int(row.get("n_points") or 0),
+                    flags=",".join(row.get("flags") or []) or "none",
+                )
+            )
+        return "\n".join(lines)
+
+
+def compare_line_fits(results, labels=None):
+    """Return a compact comparison of local line-fit results."""
+    results = list(results)
+    if labels is None:
+        labels = [getattr(result, "line_name", "line {0}".format(index + 1)) for index, result in enumerate(results)]
+    labels = list(labels)
+    if len(labels) != len(results):
+        raise ValueError("labels length must match line-fit results length.")
+    rows = []
+    rvs = []
+    for label, result in zip(labels, results):
+        row = result.summary() if hasattr(result, "summary") else dict(result)
+        row["label"] = str(label)
+        rows.append(row)
+        rv = row.get("rv_kms")
+        if rv is not None and np.isfinite(rv) and row.get("success"):
+            rvs.append(float(rv))
+    if rvs:
+        rv_median = float(np.nanmedian(rvs))
+        rv_scatter = float(1.4826 * np.nanmedian(np.abs(np.asarray(rvs) - rv_median)))
+    else:
+        rv_median = None
+        rv_scatter = None
+    return LineFitComparison(
+        {
+            "schema_version": 1,
+            "operation": "compare_line_fits",
+            "rows": rows,
+            "rv_median_kms": rv_median,
+            "rv_scatter_kms": rv_scatter,
+            "interpretation": (
+                "Line agreement is a diagnostic. Broad Balmer-line centers "
+                "should not be treated as precision radial velocities."
+            ),
+        }
+    )

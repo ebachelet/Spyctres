@@ -135,7 +135,7 @@ def readiness_intent_detail_lines(readiness, *, prefix="  "):
 def unique_archive_masks(spectrum, *, policy="apply", only_ids=None):
     """Return unique archive masks for workflows that build derived segments.
 
-    This preserves the publication scaffold's existing behaviour: when several
+    This preserves the reviewed-analysis scaffold's existing behaviour: when several
     derived line-window segments share the same original archive/product mask,
     the mask is recorded once by name rather than repeated for every window.
     """

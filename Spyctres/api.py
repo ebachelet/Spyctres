@@ -376,8 +376,6 @@ def fit_stellar_spectrum(
         if setup_science_case:
             science_case = setup_science_case
         explicit_controls = []
-        if valid_mask is not None:
-            explicit_controls.append("valid_mask")
         if mask is not None:
             explicit_controls.append("mask")
         if resolution_R is not None:

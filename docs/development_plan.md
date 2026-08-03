@@ -26,7 +26,7 @@ result = fit_stellar_spectrum(spec, model="phoenix", setup=setup)
 plot_fit_referee(result)
 ```
 
-Expert and publication-oriented workflows should build on the same components,
+Expert and reviewed-analysis workflows should build on the same components,
 but they must not silently relax metadata, LSF, mask, or uncertainty
 requirements.
 
@@ -56,16 +56,18 @@ envelope for archival and reviewer-facing products.
      `example2_lines_windows_and_masks.ipynb`
    - `example3_improving_a_phoenix_fit.py` /
      `example3_improving_a_phoenix_fit.ipynb`
-   - `example4_publication_quality_fitting.py` /
-     `example4_publication_quality_fitting.ipynb`
+   - `example4_reviewed_balmer_analysis.py` /
+     `example4_reviewed_balmer_analysis.ipynb`
    - `example5_batch_fitting.py` / `example5_batch_fitting.ipynb`
 
    Remaining work: enrich the notebook prose after user testing, keep heavy
-   PHOENIX runs opt-in where possible, and gradually move validation/stress
-   material out of the numbered beginner path into clearly labelled areas such
-   as `examples/validation/` or `examples/advanced/`. User-facing examples
-   should continue to use bundled spectra under `examples/data/` unless
-   explicitly labelled as external-user validation.
+   PHOENIX runs opt-in where possible, and, once the numbered examples have
+   passed manual review, retire or archive older unnumbered examples that are
+   superseded by the new path. Validation/stress material that remains useful
+   should move into clearly labelled areas such as `examples/validation/` or
+   `examples/advanced/`. User-facing examples should continue to use bundled
+   spectra under `examples/data/` unless explicitly labelled as external-user
+   validation.
 
 2. **Reviewed setup as a first-class object.**
    Initial implementation is in place: `suggest_fit_setup()` returns a
@@ -92,16 +94,16 @@ envelope for archival and reviewer-facing products.
    - `quicklook_classification`
    - `atmospheric_parameters`
    - `radial_velocity`
-   - `publication`
+   - `reviewed_analysis`
 
    The same missing metadata may be allowed for visual inspection, allowed with
    caveats for quicklook classification, and blocked for physical RV or
-   publication-quality inference. Existing `blocker`/`review` labels remain
+   reviewed-analysis inference. Existing `blocker`/`review` labels remain
    useful display labels, but are no longer the only policy layer. Remaining
    work: calibrate the exact intent matrix with referee feedback, continue
    moving scripts from generic `fit_ready` displays to intent-aware summaries,
-   and decide whether `publication_readiness_audit()` should remain a stricter
-   wrapper or become purely a named publication-intent preset.
+   and decide whether `analysis_readiness_audit()` should remain a stricter
+   wrapper or become purely a named reviewed-analysis intent preset.
 
 4. **Curated public facade and documentation source of truth.**
    Keep the top-level namespace useful but not sprawling. The intended one
@@ -142,7 +144,7 @@ envelope for archival and reviewer-facing products.
    records schema version, Spyctres version, git commit if available, path
    sanitization policy, generated plot paths, a direct `result` payload, and a
    compact provenance summary with the reviewed setup hash when present. The
-   simple PHOENIX example and the publication-quality X-SHOOTER scaffold now
+   simple PHOENIX example and the reviewed-analysis X-SHOOTER scaffold now
    expose this as optional `--output-report-json`; their existing
    `--output-json` products are unchanged.
 
@@ -182,7 +184,7 @@ envelope for archival and reviewer-facing products.
    structured residuals, or window inconsistency should widen refinement bounds
    or skip refinement rather than confidently narrowing.
 
-8. **Publication-oriented X-SHOOTER UVB workflow.**
+8. **Reviewed-analysis X-SHOOTER UVB workflow.**
    Add a separate expert workflow, not a replacement for
    `examples/simple_phoenix_fit.py`, for cases where the user wants defensible
    stellar parameters rather than a first-pass classification. The first target
@@ -193,13 +195,13 @@ envelope for archival and reviewer-facing products.
    checkpoint/resume support, and provenance/uncertainty tables.
 
    This workflow is allowed to be slower and more verbose than the public
-   examples. It should report "publication-oriented" only after metadata,
+   examples. It should report "reviewed-analysis" only after metadata,
    LSF, masking, recovery, residual, and alternative-model checks pass. Until
    then it should label results as exploratory.
 
-   Initial scaffold: `examples/publication_quality_xshooter_uvb.py` and
-   `examples/publication_quality_xshooter_uvb.ipynb` provide an audit-first
-   workflow with explicit Balmer segments, documented masks, publication
+   Initial scaffold: `examples/reviewed_xshooter_uvb_analysis.py` and
+   `examples/reviewed_xshooter_uvb_analysis.ipynb` provide an audit-first
+   workflow with explicit Balmer segments, documented masks, reviewed-analysis
    readiness checks, a Balmer-core mask sensitivity audit grid, atomic JSON
    checkpoints, generic diagnostic-window provenance, optional compact
    mask-sensitivity CSV/PNG summaries, an explicit core-mask information-loss
@@ -210,7 +212,7 @@ envelope for archival and reviewer-facing products.
    per-line model-residual diagnostics, opt-in execution of a bounded subset of
    fit-level systematic variants with per-variant JSON checkpoints, opt-in
    same-model synthetic injection/recovery trials with per-trial checkpoints,
-   compact Markdown/CSV/PNG publication-summary artifacts generated from the
+   compact Markdown/CSV/PNG review summary artifacts generated from the
    saved checkpoint without launching extra fits, conservative
    calibration-interpretation labels for readiness, Balmer-core mask
    sensitivity, window-set sensitivity, and same-model recovery, and a separate
@@ -221,7 +223,7 @@ envelope for archival and reviewer-facing products.
    residual proxies and same-window residual summaries when reconstructed
    model arrays are available, so users can compare parameter stability and
    residual behaviour without treating raw in-fit chi-square as a winner
-   selector. The publication summary now includes bounded suggested next
+   selector. The review summary now includes bounded suggested next
    commands for the current checkpoint state, writing fresh follow-up JSON
    products instead of mutating reviewed checkpoints. The remaining work is to
    interpret/calibrate the selected
@@ -234,7 +236,47 @@ envelope for archival and reviewer-facing products.
    rankings, masks, and fit-comparison behaviour on real spectra rather than
    expanding the catalog mechanically.
 
-9. **LSF, hot-regime, and model-support safeguards.**
+9. **Optional microlensing-source physical-flux/SED workflow.**
+   Preserve the scientific functionality of the historical
+   `fit_spectra_chichi()` / `model_spectra()` path, especially the
+   `theta_s`/`Av`/magnification/SED use case for microlensing source stars.
+   This should become an explicit expert workflow layer rather than a hidden
+   fallback when PHOENIX is unavailable.
+
+   The current PHOENIX path remains the default line/shape classification
+   workflow for continuum-normalized spectra. It fits atmospheric parameters
+   and RV from spectral morphology and should not report an angular source
+   radius from normalized spectra alone. The microlensing-source workflow is
+   different: it requires flux-calibrated spectra and/or photometry, records
+   extinction and magnification assumptions, and can fit or propagate
+   `theta_s` only when the data contain absolute-flux information.
+
+   Smallest sensible modern layer:
+
+   - keep the legacy `k93models`/`stsynphot` routines available for
+     compatibility;
+   - add a modern wrapper only after it can accept `SpectrumSegment` /
+     `SpectrumCollection` inputs plus optional photometry in a documented
+     schema;
+   - return a structured result with explicit parameter meanings:
+     `theta_s`, `Av`, `rv_kms`, `Teff`, `[Fe/H]` or model-grid metallicity,
+     `logg`, magnification, blend/scale/error nuisance terms where used;
+   - mark `theta_s` as unconstrained when the input is continuum-normalized or
+     otherwise lacks an absolute flux/SED anchor;
+   - preserve the historical physical-flux model reconstruction but keep
+     continuum-normalized comparison plots separate from physical SED plots;
+   - record the atmosphere backend (`k93models`, later possibly a PHOENIX SED
+     mode), extinction law, photometric filters, magnification assumptions,
+     flux units, and whether data were normalized.
+
+   Planned example slot: add an advanced
+   `example7_microlensing_source_sed.py` /
+   `example7_microlensing_source_sed.ipynb` only after the wrapper and test
+   data are ready. Until then, the historical compatibility reference remains
+   `docs/example_spectral_typing_analysis.ipynb`, which should be clearly
+   labelled as legacy and not mixed into the five-example beginner path.
+
+10. **LSF, hot-regime, and model-support safeguards.**
    Keep constant Gaussian LSF broadening as the production path for now. Define
    but do not yet activate the SDSS wavelength-dependent LSF acceptance tests:
    exact `wdisp` interpretation, unit conversion, constant-LSF equivalence,
@@ -249,7 +291,7 @@ envelope for archival and reviewer-facing products.
    `stress_only`, `unsupported`) so such windows can identify likely regime
    mismatch without implying ordinary PHOENIX refinement is valid.
 
-10. **Legacy, import, and packaging hygiene.**
+11. **Legacy, import, and packaging hygiene.**
     Before beta, produce a migration table for legacy functions: current
     replacement, status, deprecation release, removal target, and optional
     dependency requirements. The modern core should not require importing
@@ -266,13 +308,13 @@ envelope for archival and reviewer-facing products.
     should fail CI. Continue package-data, wheel/sdist, and console-entry-point
     checks.
 
-11. **Later beta features.**
+12. **Later beta features.**
    Defer heavier additions until the above pieces are stable: optional
    wavelength-dependent LSF fitting, compression/MOPED-style acceleration,
-   posterior samplers, alternative atmosphere backends, a GUI, and publication
+   posterior samplers, alternative atmosphere backends, a GUI, and reviewed-analysis
    SED/arm-scaling modes.
 
-12. **Final pre-beta audit.**
+13. **Final pre-beta audit.**
    Before treating Spyctres as stable enough for broader collaborator use,
    run a whole-package audit: public API compatibility, source-distribution and
    package-data checks, Django/server-side plotting compatibility with
@@ -280,23 +322,23 @@ envelope for archival and reviewer-facing products.
    clarity and ordering, notebook reproducibility, warning baseline, legacy API
    compatibility, and a final pass over README/setup instructions.
 
-## New publication-readiness gate
+## New reviewed-analysis readiness gate
 
-The stricter publication workflow uses `publication_readiness_audit()` as a
+The stricter reviewed-analysis workflow uses `analysis_readiness_audit()` as a
 guardrail around the ordinary `audit_spectrum_for_fit()` result. A spectrum may
-be good enough for quicklook classification while still failing the publication
+be good enough for quicklook classification while still failing the reviewed-analysis
 gate because it has assumed rather than validated resolution, unknown wavelength
 metadata, missing formal errors, artifact flags, unapplied archive bad regions,
 or too few usable pixels.
 
 This distinction is deliberate: ingestion and quick classification should be
-forgiving, while publication-quality parameter claims should be conservative.
+forgiving, while reviewed-analysis parameter claims should be conservative.
 
 This has now been partly folded into the intent-aware readiness model:
-publication remains the strictest ordinary intent, while inspect and quicklook
+reviewed-analysis remains the strictest ordinary intent, while inspect and quicklook
 classification may allow some missing metadata only when the output explicitly
-labels which interpretations are invalid. `publication_readiness_audit()`
-remains as a conservative wrapper because it adds publication-specific settings
+labels which interpretations are invalid. `analysis_readiness_audit()`
+remains as a conservative wrapper because it adds reviewed-analysis-specific settings
 that are not just flag severity, such as minimum fitted pixels, maximum rejected
 inside-window fraction, and whether assumed resolution or unapplied SDSS `wdisp`
 provenance may be accepted after review.
@@ -312,7 +354,7 @@ target is:
   time;
 - setup inspection and the actual fit use the same reviewed setup object;
 - readiness is task/intent-aware and explains which interpretations are valid;
-- quicklook, atmospheric-parameter, RV, and publication claims are clearly
+- quicklook, atmospheric-parameter, RV, and final science claims are clearly
   separated;
 - wavelength medium, observer frame, stellar-rest status, mask policy,
   formal-error policy, PHOENIX model-family/composition assumptions, and
@@ -326,6 +368,9 @@ target is:
   those data files in the repository;
 - batch quickscan/refine has measured runtime, skip-rate, and false-narrowing
   behavior on representative spectra;
+- the microlensing-source physical-flux/SED workflow is either explicitly
+  wrapped with modern provenance and `theta_s` validity checks, or clearly
+  labelled as legacy/compatibility material rather than a beginner path;
 - legacy APIs have a migration table and optional-dependency policy;
 - import-time side effects, warnings, wheel/sdist packaging, console entry
   points, and Django/headless plotting behavior have been audited.
@@ -333,7 +378,7 @@ target is:
 ## Referee feedback questions currently open
 
 - What should the exact intent-readiness matrix allow or block for quicklook
-  classification versus atmospheric parameters, physical RV, and publication?
+  classification versus atmospheric parameters, physical RV, and reviewed analysis?
 - Should `classify_spectrum()` remain as a documented first-pass PHOENIX-label
   helper, become a distinct classification object, or be deprecated as an alias?
 - Should the current custom public-help registry be retained for GUI use if it
@@ -348,3 +393,8 @@ target is:
   HARPS products and Spyctres still has known PHOENIX/LSF/abundance limits?
   The current runner uses provisional first-pass review bands, not a release
   acceptance gate.
+- For the microlensing-source workflow, what is the minimal photometry/SED
+  schema needed before `theta_s` can be reported responsibly? Which extinction
+  law and filter metadata should be the first supported default, and should the
+  modern wrapper expose the historical `k93models` backend first or wait for a
+  PHOENIX-based physical-flux mode?

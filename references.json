@@ -259,6 +259,8 @@
       "description": "Presents a high-resolution optical catalogue of diffuse interstellar bands between 3900 and 8100 Angstrom. Spyctres uses this as a general literature basis for treating DIBs as non-photospheric absorption that should be annotated or optionally masked rather than interpreted as missing PHOENIX stellar-atmosphere opacity.",
       "affected_code": [
         "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/preprocessing.py:find_known_nonstellar_features",
+        "Spyctres/diagnostics.py:KNOWN_RESIDUAL_WINDOWS",
         "examples/simple_phoenix_fit.py"
       ]
     },
@@ -273,6 +275,8 @@
       "description": "Discusses the very broad 4428 Angstrom diffuse interstellar band and its unusually intense appearance in fullerene-bearing planetary nebulae. Spyctres uses this reference for the explicit DIB 4428 non-stellar feature annotation and optional masking guardrail.",
       "affected_code": [
         "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/preprocessing.py:find_known_nonstellar_features",
+        "Spyctres/diagnostics.py:KNOWN_RESIDUAL_WINDOWS",
         "Spyctres/plotting.py:plot_fit_referee",
         "examples/simple_phoenix_fit.py"
       ]
@@ -287,6 +291,8 @@
       "description": "Studies very broad diffuse interstellar bands, including features at approximately 4430 and 4882 Angstrom. Spyctres uses this reference for the DIB 4882 catalog entry and for warning that absorption near the H-beta red wing may be non-stellar contamination rather than missing PHOENIX stellar opacity.",
       "affected_code": [
         "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/preprocessing.py:find_known_nonstellar_features",
+        "Spyctres/diagnostics.py:KNOWN_RESIDUAL_WINDOWS",
         "examples/simple_phoenix_fit.py"
       ]
     },
@@ -338,7 +344,7 @@
         "Spyctres/fitting.py:_coarse_physical_start_native_interp",
         "Spyctres/fitting.py:_build_local_multistarts",
         "scripts/xsl_validation.py",
-        "examples/publication_quality_xshooter_uvb.py"
+        "examples/reviewed_xshooter_uvb_analysis.py"
       ]
     },
     {
@@ -351,7 +357,7 @@
       "description": "Uses Balmer-line wings for stellar-parameter work while excluding the central core because classical model atmospheres do not reliably reproduce the core/inner-wing region; the excluded core half-width is reported as parameter dependent, with examples near 0.7-1.5 Angstrom at high spectral resolution. Spyctres uses this as scientific provenance for treating Balmer-core masks as explicit sensitivity choices and for penalizing overly large masks that discard useful wing information.",
       "affected_code": [
         "Spyctres/recipes.py:make_balmer_core_exclude_mask",
-        "examples/publication_quality_xshooter_uvb.py"
+        "examples/reviewed_xshooter_uvb_analysis.py"
       ]
     },
     {

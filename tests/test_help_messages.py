@@ -2,6 +2,8 @@ import pytest
 
 from Spyctres import (
     classify_spectrum,
+    build_fit_collection_from_windows,
+    classify_quality_flag,
     describe_public_function_group,
     describe_public_function,
     format_public_api_guide,
@@ -11,7 +13,9 @@ from Spyctres import (
     input_checksum_provenance,
     list_public_functions,
     list_public_function_groups,
+    quality_flag_actions,
     read_spectrum,
+    summarize_quality_flags,
 )
 
 
@@ -20,12 +24,23 @@ def test_public_function_help_is_structured_and_formatted():
 
     assert "fit_stellar_spectrum" in topics
     assert "fit_line" in topics
+    assert "list_known_lines" in topics
     assert "build_mask" in topics
     assert "plot_spectrum" in topics
     assert "plot_fit_referee" in topics
+    assert "plot_fit_comparison_line_windows" in topics
+    assert "plot_line_fit_comparison" in topics
+    assert "annotate_nonstellar_features" in topics
+    assert "diagnose_known_residual_windows" in topics
+    assert "find_known_nonstellar_features" in topics
+    assert "known_feature_masks" in topics
     assert "select_diagnostic_windows" in topics
+    assert "build_fit_collection_from_windows" in topics
     assert "audit_spectrum_for_fit" in topics
     assert "compare_fits" in topics
+    assert "summarize_quality_flags" in topics
+    assert "quality_flag_actions" in topics
+    assert "classify_quality_flag" in topics
     assert "suggest_fit_setup" in topics
     assert "input_checksum_provenance" in topics
     assert "readiness_flag_actions" in topics
@@ -43,6 +58,8 @@ def test_public_function_help_is_structured_and_formatted():
 
     line_text = format_public_function_help("fit_line")
     assert 'fit_line(spec, "Hgamma")' in line_text
+    line_list_text = format_public_function_help("list_known_lines")
+    assert "List built-in local-line names" in line_list_text
 
     setup_text = format_public_function_help("suggest_fit_setup")
     assert "without running PHOENIX" in setup_text
@@ -54,6 +71,16 @@ def test_public_function_help_is_structured_and_formatted():
     checksum_text = format_public_function_help("input_checksum_provenance")
     assert "input-file checksum provenance" in checksum_text
     assert input_checksum_provenance is not None
+    retained_text = format_public_function_help("build_fit_collection_from_windows")
+    assert "fit-only SpectrumCollection" in retained_text
+    assert build_fit_collection_from_windows is not None
+    line_comparison_text = format_public_function_help("plot_line_fit_comparison")
+    assert "diagnostic metrics" in line_comparison_text
+    flag_text = format_public_function_help("summarize_quality_flags")
+    assert "top user actions" in flag_text
+    assert summarize_quality_flags is not None
+    assert quality_flag_actions is not None
+    assert classify_quality_flag is not None
 
 
 def test_public_function_groups_expose_beginner_path_first():
@@ -74,12 +101,19 @@ def test_public_function_groups_expose_beginner_path_first():
         "audit_spectrum_for_fit",
         "readiness_flag_actions",
         "select_diagnostic_windows",
+        "build_fit_collection_from_windows",
         "plot_diagnostic_windows",
         "build_mask",
     ]
     for group in groups:
         for name in describe_public_function_group(group)["functions"]:
             assert describe_public_function(name)["name"] == name
+    assert list_public_functions("line_diagnostics") == [
+        "list_known_lines",
+        "fit_line",
+        "plot_line_fit",
+        "plot_line_fit_comparison",
+    ]
 
 
 def test_public_api_guide_is_one_import_oriented():

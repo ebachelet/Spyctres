@@ -100,12 +100,162 @@ class FitSetup(Mapping):
         return self.payload["setup_hash"]
 
     @property
+    def model(self):
+        return self.payload.get("model")
+
+    @property
+    def mode(self):
+        return self.payload.get("mode")
+
+    @property
+    def science_case(self):
+        return self.payload.get("science_case")
+
+    @property
+    def intent(self):
+        readiness = self.payload.get("readiness") or {}
+        return readiness.get("intent") or self.payload.get("science_case")
+
+    @property
     def fit_kwargs(self):
         return dict(self.payload.get("fit_kwargs") or {})
 
     @property
+    def regions(self):
+        fit_kwargs = self.payload.get("fit_kwargs") or {}
+        regions = fit_kwargs.get("regions") or fit_kwargs.get("include_regions")
+        if regions is None:
+            return None
+        return [tuple(float(value) for value in region) for region in regions]
+
+    @property
+    def bounds(self):
+        return (self.payload.get("fit_kwargs") or {}).get("bounds")
+
+    @property
+    def p0(self):
+        return (self.payload.get("fit_kwargs") or {}).get("p0")
+
+    @property
     def readiness(self):
         return self.payload.get("readiness")
+
+    def _replace_fit_kwargs(self, **updates):
+        payload = dict(self.payload)
+        fit_kwargs = dict(payload.get("fit_kwargs") or {})
+        fit_kwargs.update(updates)
+        payload["fit_kwargs"] = fit_kwargs
+        payload.pop("setup_hash", None)
+        payload.pop("configuration_hash", None)
+        return FitSetup(payload)
+
+    def with_regions(self, regions):
+        """Return a copy with explicit wavelength regions.
+
+        ``regions`` may be a sequence of ``(wmin, wmax)`` pairs or diagnostic
+        window ids already present in this setup's selected-window provenance.
+        """
+        resolved = _resolve_setup_regions(self, regions)
+        return self._replace_fit_kwargs(regions=resolved)
+
+    def with_readiness(self, readiness):
+        """Return a copy with an explicitly supplied readiness/audit payload.
+
+        This is useful after changing setup inputs such as wavelength regions or
+        masks outside :func:`suggest_fit_setup`.  It keeps notebooks and scripts
+        from editing the setup dictionary directly while making the displayed
+        readiness state match the final reviewed inputs.
+        """
+        if readiness is None:
+            normalized = None
+        else:
+            normalized = dict(readiness)
+            if (
+                normalized.get("ready_for_intent") is None
+                and normalized.get("fit_ready") is not None
+            ):
+                normalized["ready_for_intent"] = bool(normalized["fit_ready"])
+            if normalized.get("intent") is None and normalized.get(
+                "readiness_intent"
+            ) is not None:
+                normalized["intent"] = normalized["readiness_intent"]
+            if normalized.get("blockers_for_intent") is None:
+                blockers = (
+                    normalized.get("blockers")
+                    or normalized.get("execution_blockers")
+                    or ()
+                )
+                normalized["blockers_for_intent"] = list(blockers)
+            if normalized.get("warnings_for_intent") is None:
+                warnings = normalized.get("warnings") or ()
+                normalized["warnings_for_intent"] = list(warnings)
+            if normalized.get("actions_for_intent") is None:
+                normalized["actions_for_intent"] = list(
+                    normalized.get("recommended_actions") or ()
+                )
+        payload = dict(self.payload)
+        payload["readiness"] = normalized
+        payload.pop("setup_hash", None)
+        payload.pop("configuration_hash", None)
+        return FitSetup(payload)
+
+    def with_resolution(self, *, R=None, fwhm_kms=None):
+        """Return a copy with one explicit constant Gaussian LSF assumption."""
+        if (R is None) == (fwhm_kms is None):
+            raise ValueError("Pass exactly one of R= or fwhm_kms=.")
+        fit_kwargs = dict(self.payload.get("fit_kwargs") or {})
+        fit_kwargs.pop("R", None)
+        fit_kwargs.pop("fwhm_kms", None)
+        if R is not None:
+            value = float(R)
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError("R must be finite and > 0.")
+            fit_kwargs["R"] = value
+        else:
+            value = float(fwhm_kms)
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError("fwhm_kms must be finite and > 0.")
+            fit_kwargs["fwhm_kms"] = value
+        payload = dict(self.payload)
+        payload["fit_kwargs"] = fit_kwargs
+        payload["risk_flags"] = [
+            flag
+            for flag in payload.get("risk_flags", [])
+            if flag not in {"missing_resolution", "resolution_assumption_required"}
+        ]
+        provenance = dict(payload.get("provenance") or {})
+        provenance["assumed_resolution"] = (
+            {"quantity": "R", "value": fit_kwargs["R"], "source": "user_override"}
+            if R is not None
+            else {
+                "quantity": "fwhm_kms",
+                "value": fit_kwargs["fwhm_kms"],
+                "source": "user_override",
+            }
+        )
+        payload["provenance"] = provenance
+        payload.pop("setup_hash", None)
+        payload.pop("configuration_hash", None)
+        return FitSetup(payload)
+
+    def with_continuum_degree(self, degree):
+        """Return a copy with a different multiplicative-continuum degree."""
+        degree = int(degree)
+        if degree < 0:
+            raise ValueError("continuum degree must be >= 0.")
+        return self._replace_fit_kwargs(mdeg=degree)
+
+    def with_mode(self, mode):
+        """Return a copy labelled with a different mode.
+
+        This is a lightweight provenance update. For a fully regenerated search
+        budget, call :func:`suggest_fit_setup` with the requested ``mode``.
+        """
+        payload = dict(self.payload)
+        payload["mode"] = str(mode).strip().lower()
+        payload.pop("setup_hash", None)
+        payload.pop("configuration_hash", None)
+        return FitSetup(payload)
 
     def summary(self, max_actions=3):
         """Return a compact JSON-safe user-facing setup summary."""
@@ -126,6 +276,14 @@ class FitSetup(Mapping):
             resolution_summary = "from segment metadata"
         else:
             resolution_summary = "missing or partial; review line-width interpretation"
+        continuum_degree = fit_kwargs.get("mdeg")
+        if continuum_degree is None:
+            continuum_summary = "not specified; fitter default applies"
+        else:
+            continuum_degree = int(continuum_degree)
+            continuum_summary = "multiplicative Legendre degree {0:d}".format(
+                continuum_degree
+            )
         if coverage.get("all_have_errors"):
             uncertainty_summary = "formal 1-sigma errors available"
         else:
@@ -151,9 +309,12 @@ class FitSetup(Mapping):
                 "observer_frames": coverage.get("observer_frames") or [],
                 "stellar_rest_status": coverage.get("stellar_rest_status") or [],
                 "resolution_summary": resolution_summary,
+                "continuum_degree": continuum_degree,
+                "continuum_summary": continuum_summary,
                 "uncertainty_summary": uncertainty_summary,
                 "recommended_window_label": window.get("label"),
                 "recommended_regions_A": window.get("regions"),
+                "fit_regions_A": fit_kwargs.get("regions"),
                 "recommended_branch_id": self.payload.get("recommended_branch_id"),
                 "readiness_intent": readiness.get("intent"),
                 "ready_for_intent": readiness.get("ready_for_intent"),
@@ -167,12 +328,11 @@ class FitSetup(Mapping):
             }
         )
 
-    def summary_text(self, max_actions=3):
+    def summary_text(self, max_actions=3, *, include_hash=True):
         """Return a compact plain-text setup summary for notebooks/CLI use."""
         summary = self.summary(max_actions=max_actions)
         lines = [
             "Spyctres fit setup",
-            "  hash: {0}".format(summary.get("setup_hash")),
             "  model/mode: {0}/{1}".format(
                 summary.get("model"),
                 summary.get("mode"),
@@ -182,18 +342,23 @@ class FitSetup(Mapping):
                 summary.get("n_segments"),
             ),
         ]
+        if include_hash:
+            lines.insert(1, "  hash: {0}".format(summary.get("setup_hash")))
         if summary.get("wavelength_range_A"):
             lo, hi = summary["wavelength_range_A"]
             lines.append("  coverage: {0:.1f}-{1:.1f} A".format(float(lo), float(hi)))
         lines.append("  resolution: {0}".format(summary.get("resolution_summary")))
+        lines.append("  continuum: {0}".format(summary.get("continuum_summary")))
         lines.append("  uncertainties: {0}".format(summary.get("uncertainty_summary")))
         if summary.get("recommended_window_label"):
             lines.append(
-                "  window: {0} {1}".format(
+                "  recommended window: {0} {1}".format(
                     summary.get("recommended_window_label"),
                     summary.get("recommended_regions_A"),
                 )
             )
+        if summary.get("fit_regions_A"):
+            lines.append("  fit regions: {0}".format(summary.get("fit_regions_A")))
         lines.append(
             "  readiness: intent={0}, ready={1}".format(
                 summary.get("readiness_intent"),
@@ -238,8 +403,8 @@ class FitSetup(Mapping):
     def allow_exploratory(self, reason, *, effective_interpretation=None):
         """Return a copied setup with an explicit exploratory override.
 
-        This does not make a blocked setup publication-ready.  It records why
-        an expert chose to run a diagnostic fit despite readiness blockers, so
+        This does not make a blocked setup analysis-ready. It records why an
+        expert chose to run a diagnostic fit despite readiness blockers, so
         downstream reports can label the result as exploratory rather than
         scientifically approved.
         """
@@ -256,7 +421,7 @@ class FitSetup(Mapping):
             ).isoformat().replace("+00:00", "Z"),
             "requested_intent": readiness.get("intent"),
             "effective_interpretation": effective_interpretation
-            or "exploratory_not_publication_valid",
+            or "exploratory_review_only",
             "override_reason": reason,
             "original_blockers": blockers,
             "overridden_blockers": blockers,
@@ -725,6 +890,46 @@ def _diagnostic_records_by_id(selection):
         for record in selection.get("selected", ())
         if isinstance(record, dict) and record.get("id") is not None
     }
+
+
+def _resolve_setup_regions(setup, regions):
+    if regions is None:
+        raise ValueError("regions must not be None.")
+    records = {}
+    for record in (
+        (setup.payload.get("diagnostic_windows") or {}).get("selected") or []
+    ):
+        if isinstance(record, Mapping) and record.get("id") is not None:
+            records[str(record["id"])] = record
+    resolved = []
+    missing = []
+    for item in regions:
+        if isinstance(item, str):
+            record = records.get(item)
+            if record is None:
+                missing.append(item)
+                continue
+            region = record.get("region_A")
+        else:
+            region = item
+        if region is None or len(region) != 2:
+            raise ValueError(
+                "Each region must be a diagnostic-window id or a (wmin, wmax) pair."
+            )
+        wmin, wmax = float(region[0]), float(region[1])
+        if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+            raise ValueError("Region bounds must be finite with wmin < wmax.")
+        resolved.append((wmin, wmax))
+    if missing:
+        raise KeyError(
+            "Unknown setup diagnostic-window id(s): {0}. Available ids: {1}.".format(
+                ", ".join(missing),
+                ", ".join(sorted(records)) or "<none>",
+            )
+        )
+    if not resolved:
+        raise ValueError("At least one region is required.")
+    return resolved
 
 
 def _record_fit_allowed(record):
@@ -1487,6 +1692,7 @@ def suggest_fit_setup(
     model="phoenix",
     mode="quicklook",
     science_case="classification",
+    intent=None,
     readiness_intent=None,
     include_readiness=True,
     assumed_resolution=None,
@@ -1514,6 +1720,13 @@ def suggest_fit_setup(
     model = str(model).strip().lower()
     if model != "phoenix":
         raise ValueError("suggest_fit_setup currently supports model='phoenix'.")
+    if intent is not None and readiness_intent is not None:
+        normalized_intent = str(intent).strip().lower()
+        normalized_readiness_intent = str(readiness_intent).strip().lower()
+        if normalized_intent != normalized_readiness_intent:
+            raise ValueError("Pass intent= or readiness_intent=, not both.")
+    if intent is not None:
+        readiness_intent = intent
 
     suggestion = suggest_phoenix_fit_defaults(
         spectrum,

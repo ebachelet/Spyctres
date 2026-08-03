@@ -3,6 +3,7 @@ import numpy as np
 from Spyctres.diagnostic_windows import (
     DiagnosticWindow,
     build_diagnostic_window_combinations,
+    build_fit_collection_from_windows,
     fit_regions_from_combination,
     format_diagnostic_window_table,
     select_diagnostic_windows,
@@ -61,6 +62,11 @@ def test_blue_optical_selection_includes_balmer_ca_he_and_mg_windows():
     assert "score_components" in h_beta
     assert "detrended_contrast_score" in h_beta["score_components"]
     assert h_beta["feature_family"] == ["hydrogen"]
+    assert selection.selected == selection["selected"]
+    summary = selection.summary(max_rows=2)
+    assert summary["n_selected"] == len(selection["selected"])
+    assert len(summary["selected"]) == 2
+    assert "Spyctres diagnostic-window selection" in selection.summary_text(max_rows=2)
 
 
 def test_blue_optical_selection_includes_ch_g_band_for_intermediate_stars():
@@ -211,6 +217,32 @@ def test_format_diagnostic_window_table_is_compact():
     assert "h_beta" in table or "h_gamma" in table
 
 
+def test_selection_can_return_exact_windows_by_id_in_requested_order():
+    selection = select_diagnostic_windows(_segment(3800.0, 5220.0))
+
+    windows = selection.select_by_id(["h_beta", "h_delta"])
+
+    assert [item["id"] for item in windows] == ["h_beta", "h_delta"]
+    assert all("region_A" in item for item in windows)
+
+
+def test_selection_select_by_id_reports_missing_ids_clearly():
+    selection = select_diagnostic_windows(_segment(3800.0, 5220.0))
+
+    try:
+        selection.select_by_id(["h_beta", "not_a_window"])
+    except KeyError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive branch
+        raise AssertionError("Expected KeyError for a missing diagnostic window id.")
+
+    assert "not_a_window" in message
+    assert "h_beta" in message
+    assert selection.select_by_id(["h_beta", "not_a_window"], require_all=False)[0][
+        "id"
+    ] == "h_beta"
+
+
 def test_air_and_vacuum_segments_select_same_physical_feature():
     window = DiagnosticWindow(
         id="narrow_test_line",
@@ -300,3 +332,83 @@ def test_gap_and_resolution_element_metrics_are_recorded():
     assert h_beta["largest_gap_A"] > 20.0
     assert h_beta["n_resolution_elements"] > 1.0
     assert 0.0 < h_beta["largest_contiguous_usable_fraction"] < 1.0
+
+
+def test_build_fit_collection_from_windows_keeps_only_usable_fit_segments():
+    blue = _segment(3900.0, 5200.0, n=600, name="uvb")
+    nir_wave = np.linspace(12700.0, 12940.0, 600)
+    fragmented_nir_mask = np.zeros_like(nir_wave, dtype=bool)
+    for lo, hi in ((12758.0, 12765.0), (12803.0, 12810.0), (12848.0, 12855.0)):
+        fragmented_nir_mask |= (nir_wave >= lo) & (nir_wave <= hi)
+    nir = _segment(
+        12700.0,
+        12940.0,
+        n=nir_wave.size,
+        mask=fragmented_nir_mask,
+        name="nir",
+        wave_medium="vacuum",
+    )
+    collection = SpectrumCollection([blue, nir])
+    selection = select_diagnostic_windows(collection, max_windows=30)
+
+    retained = build_fit_collection_from_windows(
+        collection,
+        selection,
+        window_ids=["h_beta", "paschen_beta"],
+        min_usable_fraction=0.65,
+        min_contiguous_fraction=0.30,
+    )
+
+    assert retained.retained_segment_indices == (0,)
+    assert retained.diagnostic_only_segment_indices == (1,)
+    assert retained.retained_window_ids == ("h_beta",)
+    assert retained.diagnostic_only_window_ids == ("paschen_beta",)
+    assert len(retained.collection.segments) == 1
+    assert retained.collection.segments[0].name == "uvb"
+    assert retained.valid_masks_by_segment[0].shape == blue.mask.shape
+    assert retained.regions
+    assert retained.regions_by_segment == (retained.regions,)
+    assert "diagnostic-only windows: paschen_beta" in retained.summary_text()
+    assert retained.to_dict()["n_retained_segments"] == 1
+
+
+def test_build_fit_collection_from_windows_rejects_misaligned_valid_masks():
+    segment = _segment(4800.0, 4920.0, n=400)
+    selection = select_diagnostic_windows(segment)
+
+    try:
+        build_fit_collection_from_windows(
+            segment,
+            selection,
+            window_ids=["h_beta"],
+            valid_mask=np.ones(10, dtype=bool),
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive branch
+        raise AssertionError("Expected ValueError for a misaligned valid mask.")
+
+    assert "valid mask" in message
+    assert "expected" in message
+
+
+def test_build_fit_collection_from_windows_can_require_any_retained_window():
+    segment = _segment(4800.0, 4920.0, n=400)
+    selection = select_diagnostic_windows(segment)
+    invalid = np.zeros_like(segment.mask, dtype=bool)
+
+    try:
+        build_fit_collection_from_windows(
+            segment,
+            selection,
+            window_ids=["h_beta"],
+            valid_mask=invalid,
+            min_usable_fraction=0.1,
+            require_any=True,
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive branch
+        raise AssertionError("Expected ValueError when no window is retained.")
+
+    assert "No segment/window pair" in message

@@ -114,12 +114,36 @@ def test_suggest_fit_setup_wraps_defaults_and_readiness_for_users():
     assert compact["reader"] == "unknown/already-loaded"
     assert compact["n_segments"] == 1
     assert compact["resolution_summary"] == "from segment metadata"
+    assert compact["continuum_degree"] == 2
+    assert compact["continuum_summary"] == "multiplicative Legendre degree 2"
     assert compact["uncertainty_summary"] == "formal 1-sigma errors available"
     assert setup.to_dict()["setup_hash"] == setup.setup_hash
     assert '"setup_hash"' in setup.to_json()
     assert "Spyctres fit setup" in setup.summary_text()
     assert "resolution: from segment metadata" in setup.summary_text()
+    assert "continuum: multiplicative Legendre degree 2" in setup.summary_text()
+    assert "hash:" not in setup.summary_text(include_hash=False)
     assert "FitSetup(" in repr(setup)
+
+    explicit = setup.with_regions([(4300.0, 4400.0)])
+    explicit_summary = explicit.summary()
+    assert explicit_summary["fit_regions_A"] == [[4300.0, 4400.0]]
+    assert "fit regions: [[4300.0, 4400.0]]" in explicit.summary_text(
+        include_hash=False
+    )
+
+    refreshed = explicit.with_readiness(
+        {
+            "intent": "quicklook_classification",
+            "fit_ready": True,
+            "n_fit_candidate": 42,
+            "blockers": [],
+            "warnings": ["manual_region_reviewed"],
+        }
+    )
+    assert refreshed.summary()["ready_for_intent"] is True
+    assert refreshed.summary()["warnings_for_intent"] == ["manual_region_reviewed"]
+    assert "ready=True" in refreshed.summary_text(include_hash=False)
 
 
 def test_suggest_fit_setup_reports_unknown_metadata_as_review_flags():
@@ -161,7 +185,7 @@ def test_fit_setup_exploratory_override_requires_reason_and_records_blockers():
 
     assert exploratory.setup_hash != setup.setup_hash
     assert override["override_reason"] == "checking residual morphology only"
-    assert override["effective_interpretation"] == "exploratory_not_publication_valid"
+    assert override["effective_interpretation"] == "exploratory_review_only"
     assert "resolution_assumption_required" in override["original_blockers"]
     assert override["created_utc"].endswith("Z")
     assert "wave_medium_unknown" in setup["readiness"]["warnings_for_intent"]
@@ -227,6 +251,46 @@ def test_suggest_fit_setup_can_review_radial_velocity_intent():
     assert any(
         "not fit-ready for radial_velocity" in item for item in setup["next_steps"]
     )
+
+
+def test_suggest_fit_setup_public_intent_and_setup_convenience_methods():
+    segment = SpectrumSegment(
+        wave=np.linspace(3800.0, 5220.0, 1200),
+        flux=np.ones(1200),
+        err=np.full(1200, 0.1),
+        wave_medium="air",
+        observer_frame="topocentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+
+    setup = suggest_fit_setup(
+        segment,
+        mode="quicklook",
+        intent="quicklook_classification",
+    )
+    region_setup = setup.with_regions(["h_beta"])
+    resolution_setup = region_setup.with_resolution(R=6200.0)
+    continuum_setup = resolution_setup.with_continuum_degree(1)
+
+    assert setup.intent == "quicklook_classification"
+    assert setup.mode == "quicklook"
+    assert setup.regions
+    assert len(region_setup.regions) == 1
+    assert region_setup.regions[0][0] < 4861.33 < region_setup.regions[0][1]
+    assert resolution_setup.fit_kwargs["R"] == pytest.approx(6200.0)
+    assert continuum_setup.fit_kwargs["mdeg"] == 1
+    assert continuum_setup.summary()["continuum_degree"] == 1
+    assert "continuum: multiplicative Legendre degree 1" in continuum_setup.summary_text(
+        include_hash=False
+    )
+
+    with pytest.raises(ValueError, match="intent= or readiness_intent"):
+        suggest_fit_setup(
+            segment,
+            intent="reviewed_analysis",
+            readiness_intent="radial_velocity",
+        )
 
 
 def test_suggest_fit_setup_is_explicitly_phoenix_only_for_now():

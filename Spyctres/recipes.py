@@ -21,8 +21,13 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-from .io import SpectrumSegment, make_padded_window_segments
-from .preprocessing import exclusion_mask, telluric_transmission_exclusion_mask
+from ._serialization import json_safe, save_figure
+from .io import SpectrumCollection, SpectrumSegment, make_padded_window_segments
+from .preprocessing import (
+    compose_fit_mask,
+    exclusion_mask,
+    telluric_transmission_exclusion_mask,
+)
 from .waveutils import (
     C_KMS,
     convert_segment_wavelength_medium,
@@ -47,11 +52,22 @@ from .phoenix_forward import (
     build_native_interp_wave_grid_for_segments,
 )
 
-BALMER_CENTERS_VAC = {
+BALMER_CENTERS_AIR = {
     "Hα": 6562.80,
     "Hβ": 4861.33,
     "Hγ": 4340.47,
     "Hδ": 4101.74,
+}
+
+BALMER_CENTERS_VAC = {
+    label: float(
+        convert_wavelength_medium(
+            np.array([center_air], dtype=float),
+            from_medium="air",
+            to_medium="vacuum",
+        )[0]
+    )
+    for label, center_air in BALMER_CENTERS_AIR.items()
 }
 
 XSHOOTER_BALMER_WINDOWS = {
@@ -128,6 +144,406 @@ class XshooterBalmerCase:
     norm_info: object
     provenance: dict
 
+    @property
+    def collection(self):
+        """Return the prepared Balmer segments as a ``SpectrumCollection``."""
+        return SpectrumCollection(
+            self.fit_segments,
+            name="xshooter_uvb_balmer_case",
+            meta={
+                "workflow": "xshooter_balmer_case",
+                "recipe": self.provenance,
+            },
+        )
+
+    @property
+    def fit_regions(self):
+        """Return the non-padded Balmer fitting regions in Angstrom."""
+        return tuple(
+            (float(wmin), float(wmax))
+            for _label, wmin, wmax in self.balmer_windows
+        )
+
+    @property
+    def fit_regions_by_segment(self):
+        """Return one non-padded fit-region list per prepared segment.
+
+        Use this form for readiness/audit calls on ``self.collection``.  Each
+        prepared line segment carries a padded support region, but its own
+        science fit window is only the corresponding Balmer interval.
+        """
+        return tuple(
+            ((float(wmin), float(wmax)),)
+            for _label, wmin, wmax in self.balmer_windows
+        )
+
+    @property
+    def fit_windows(self):
+        """Return plotting-window dictionaries for the prepared Balmer lines."""
+        rows = []
+        for segment, (label, wmin, wmax) in zip(
+            self.fit_segments,
+            self.balmer_windows,
+        ):
+            center = segment.meta.get("line_center_data")
+            rows.append(
+                {
+                    "label": str(label),
+                    "limits_A": [float(wmin), float(wmax)],
+                    "markers_A": [] if center is None else [float(center)],
+                }
+            )
+        return tuple(rows)
+
+    @property
+    def exclusion_masks(self):
+        """Alias for recipe exclusion masks; True means reject/exclude."""
+        return self.exclude_masks
+
+    @property
+    def valid_masks(self):
+        """Return per-segment usable-pixel masks after recipe exclusions.
+
+        The polarity follows the public Spyctres convention:
+        ``True`` means the pixel is usable for fitting.
+        """
+        return self.valid_masks_for()
+
+    def combined_exclusion_masks(self, extra_exclusion_masks=None):
+        """Return recipe exclusions plus optional user-reviewed exclusions."""
+        if extra_exclusion_masks is None:
+            extra = ()
+        elif isinstance(extra_exclusion_masks, (list, tuple)):
+            extra = tuple(extra_exclusion_masks)
+        else:
+            extra = (extra_exclusion_masks,)
+        return tuple(self.exclude_masks) + extra
+
+    def valid_masks_for(self, extra_exclusion_masks=None):
+        """Return usable-pixel masks after recipe and extra exclusions.
+
+        ``extra_exclusion_masks`` is intended for genuinely new regions found
+        by visual inspection. Do not use it to duplicate pixels that the reader
+        has already rejected through the segment's input quality mask.
+        """
+        masks = self.combined_exclusion_masks(extra_exclusion_masks)
+        return tuple(
+            compose_fit_mask(segment, exclude_masks=masks).fit_use_mask
+            for segment in self.fit_segments
+        )
+
+    @property
+    def normalization_info(self):
+        """Return JSON-safe sideband-normalization diagnostics."""
+        return json_safe(self.norm_info)
+
+    def summary(self):
+        """Return a JSON-safe summary of the prepared Balmer case."""
+        valid_masks = self.valid_masks
+        segment_rows = []
+        for segment, valid, (label, wmin, wmax) in zip(
+            self.fit_segments,
+            valid_masks,
+            self.balmer_windows,
+        ):
+            wave = np.asarray(segment.wave, dtype=float)
+            base_valid = np.asarray(segment.mask, dtype=bool)
+            finite_wave = wave[np.isfinite(wave)]
+            center = segment.meta.get("line_center_data")
+            cont_windows = segment.meta.get("cont_windows")
+            sidebands = []
+            if cont_windows is not None and center is not None:
+                center = float(center)
+                for lo, hi in cont_windows:
+                    sidebands.append([center + float(lo), center + float(hi)])
+            resolution = (
+                None
+                if segment.resolution is None
+                else segment.resolution.to_metadata()
+            )
+            segment_rows.append(
+                {
+                    "label": str(label),
+                    "segment_name": segment.name,
+                    "fit_region_A": [float(wmin), float(wmax)],
+                    "segment_range_A": (
+                        None
+                        if finite_wave.size == 0
+                        else [float(np.nanmin(finite_wave)), float(np.nanmax(finite_wave))]
+                    ),
+                    "line_center_air_A": json_safe(segment.meta.get("line_center_air")),
+                    "line_center_vac_A": json_safe(segment.meta.get("line_center_vac")),
+                    "line_center_data_A": json_safe(segment.meta.get("line_center_data")),
+                    "continuum_sidebands_A": sidebands,
+                    "n_pixels": int(wave.size),
+                    "n_reader_valid_pixels": int(np.count_nonzero(base_valid)),
+                    "n_recipe_valid_pixels": int(np.count_nonzero(valid)),
+                    "recipe_valid_fraction": (
+                        0.0 if wave.size == 0 else float(np.count_nonzero(valid) / wave.size)
+                    ),
+                    "wave_medium": segment.wave_medium,
+                    "observer_frame": segment.observer_frame,
+                    "stellar_rest_status": segment.stellar_rest_status,
+                    "resolution": resolution,
+                }
+            )
+
+        total_pixels = int(sum(item["n_pixels"] for item in segment_rows))
+        total_valid = int(sum(item["n_recipe_valid_pixels"] for item in segment_rows))
+        media = sorted({segment.wave_medium for segment in self.fit_segments})
+        observer_frames = sorted({segment.observer_frame for segment in self.fit_segments})
+        rest_statuses = sorted(
+            {segment.stellar_rest_status for segment in self.fit_segments}
+        )
+        resolutions = [
+            item["resolution"]
+            for item in segment_rows
+            if item.get("resolution") is not None
+        ]
+        if not resolutions:
+            resolution_summary = None
+        elif all(item == resolutions[0] for item in resolutions):
+            resolution_summary = resolutions[0]
+        else:
+            resolution_summary = resolutions
+        return json_safe(
+            {
+                "recipe": self.provenance.get("recipe", "xshooter_balmer_case"),
+                "recipe_version": self.provenance.get("recipe_version"),
+                "n_segments": len(self.fit_segments),
+                "lines": [row["label"] for row in segment_rows],
+                "norm_mode": self.provenance.get("norm_mode"),
+                "sideband_width_A": self.provenance.get("sideband_width_A"),
+                "sideband_order": self.provenance.get("sideband_order"),
+                "core_mask_halfwidth_A": self.provenance.get(
+                    "core_mask_halfwidth_A"
+                ),
+                "exclude_masks": list(self.provenance.get("exclude_masks") or []),
+                "mask_true_means": "valid_masks_true_means_usable; "
+                "exclusion_masks_true_means_reject",
+                "wave_medium": media[0] if len(media) == 1 else media,
+                "observer_frame": (
+                    observer_frames[0] if len(observer_frames) == 1 else observer_frames
+                ),
+                "stellar_rest_status": (
+                    rest_statuses[0] if len(rest_statuses) == 1 else rest_statuses
+                ),
+                "resolution": resolution_summary,
+                "total_pixels": total_pixels,
+                "total_valid_pixels": total_valid,
+                "total_valid_fraction": (
+                    0.0 if total_pixels == 0 else float(total_valid / total_pixels)
+                ),
+                "segments": segment_rows,
+                "normalization_info": self.normalization_info,
+                "provenance": self.provenance,
+            }
+        )
+
+    def summary_text(self):
+        """Return a compact human-readable summary of the preparation."""
+        summary = self.summary()
+        resolution = summary.get("resolution")
+        if isinstance(resolution, dict) and resolution.get("value") is not None:
+            res_text = "{0}={1:g} from {2}".format(
+                resolution.get("quantity", "resolution"),
+                float(resolution.get("value")),
+                resolution.get("source", "metadata"),
+            )
+        elif resolution:
+            res_text = "mixed per-segment resolution metadata"
+        else:
+            res_text = "not available"
+
+        core_width = summary.get("core_mask_halfwidth_A")
+        core_text = (
+            "none" if core_width is None else "±{0:g} Å".format(float(core_width))
+        )
+        lines = [
+            "Prepared X-SHOOTER UVB Balmer case",
+            "  lines: {0}".format(", ".join(summary.get("lines") or [])),
+            "  normalization: {0}, sideband_width={1:g} Å, order={2}".format(
+                summary.get("norm_mode"),
+                float(summary.get("sideband_width_A") or 0.0),
+                summary.get("sideband_order"),
+            ),
+            "  core exclusion: {0}".format(core_text),
+            "  wavelength medium/frame: {0}; {1}; stellar_rest={2}".format(
+                summary.get("wave_medium"),
+                summary.get("observer_frame"),
+                summary.get("stellar_rest_status"),
+            ),
+            "  resolution: {0}".format(res_text),
+            "  valid pixels after recipe exclusions: {0}/{1} ({2:.1%})".format(
+                int(summary.get("total_valid_pixels") or 0),
+                int(summary.get("total_pixels") or 0),
+                float(summary.get("total_valid_fraction") or 0.0),
+            ),
+        ]
+        if summary.get("exclude_masks"):
+            lines.append(
+                "  exclusion masks: {0}".format(
+                    ", ".join(summary.get("exclude_masks") or [])
+                )
+            )
+        else:
+            lines.append("  exclusion masks: none")
+        lines.append("  per-line windows:")
+        for row in summary.get("segments") or []:
+            sidebands = row.get("continuum_sidebands_A") or []
+            if sidebands:
+                sb_text = "; ".join(
+                    "{0:.1f}-{1:.1f}".format(float(lo), float(hi))
+                    for lo, hi in sidebands
+                )
+            else:
+                sb_text = "not used"
+            region = row.get("fit_region_A") or [np.nan, np.nan]
+            center = row.get("line_center_data_A")
+            center_text = "unknown" if center is None else "{0:.2f} Å".format(float(center))
+            lines.append(
+                "    - {0}: fit {1:.1f}-{2:.1f} Å; center={3}; "
+                "sidebands={4}; valid={5}/{6}".format(
+                    row.get("label"),
+                    float(region[0]),
+                    float(region[1]),
+                    center_text,
+                    sb_text,
+                    int(row.get("n_recipe_valid_pixels") or 0),
+                    int(row.get("n_pixels") or 0),
+                )
+            )
+        return "\n".join(lines)
+
+    def to_dict(self):
+        """Return JSON-safe recipe preparation metadata."""
+        return self.summary()
+
+    def suggest_fit_setup(
+        self,
+        *,
+        mode="standard",
+        intent="reviewed_analysis",
+        continuum_degree=1,
+        extra_exclusion_masks=None,
+        **kwargs,
+    ):
+        """Build a ``FitSetup`` that uses this prepared Balmer case."""
+        from .defaults import suggest_fit_setup
+
+        exclude_masks = self.combined_exclusion_masks(extra_exclusion_masks)
+        setup = suggest_fit_setup(
+            self.collection,
+            mode=mode,
+            intent=intent,
+            exclude_masks=exclude_masks,
+            **kwargs,
+        )
+        return setup.with_regions(self.fit_regions).with_continuum_degree(
+            continuum_degree
+        )
+
+    def plot_preparation(
+        self,
+        *,
+        title="X-SHOOTER UVB Balmer preparation",
+        ncols=2,
+        figsize_per_panel=(7.2, 3.4),
+        savepath=None,
+    ):
+        """Plot the prepared windows, sidebands, line centres, and core mask.
+
+        The plot is diagnostic only and does not call ``show``. Orange spans
+        mark continuum sidebands; pale red spans mark the Balmer-core pixels
+        rejected by the recipe; red ``x`` markers show pixels not used after
+        reader and recipe exclusions.
+        """
+        import matplotlib.pyplot as plt
+
+        n = len(self.fit_segments)
+        ncols = max(1, int(ncols))
+        nrows = int(np.ceil(n / ncols))
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            squeeze=False,
+            figsize=(figsize_per_panel[0] * ncols, figsize_per_panel[1] * nrows),
+        )
+        axes_flat = axes.ravel()
+        valid_masks = self.valid_masks
+        core_width = self.provenance.get("core_mask_halfwidth_A")
+        for ax, segment, valid, (label, wmin, wmax) in zip(
+            axes_flat,
+            self.fit_segments,
+            valid_masks,
+            self.balmer_windows,
+        ):
+            wave = np.asarray(segment.wave, dtype=float)
+            flux = np.asarray(segment.flux, dtype=float)
+            valid = np.asarray(valid, dtype=bool)
+            ax.plot(wave, flux, color="0.15", lw=0.9, label="spectrum")
+            if np.any(~valid):
+                ax.scatter(
+                    wave[~valid],
+                    flux[~valid],
+                    s=24,
+                    marker="x",
+                    color="tab:red",
+                    alpha=0.8,
+                    label="not used",
+                )
+            center = segment.meta.get("line_center_data")
+            if center is not None:
+                center = float(center)
+                ax.axvline(
+                    center,
+                    color="tab:blue",
+                    ls="--",
+                    lw=1.0,
+                    alpha=0.75,
+                    label="line centre",
+                )
+                cont_windows = segment.meta.get("cont_windows") or ()
+                for lo, hi in cont_windows:
+                    ax.axvspan(
+                        center + float(lo),
+                        center + float(hi),
+                        color="tab:orange",
+                        alpha=0.18,
+                        label="continuum sideband",
+                    )
+                if core_width is not None and float(core_width) > 0.0:
+                    ax.axvspan(
+                        center - float(core_width),
+                        center + float(core_width),
+                        color="tab:red",
+                        alpha=0.12,
+                        label="excluded core",
+                    )
+            ax.axvspan(
+                float(wmin),
+                float(wmax),
+                color="tab:orange",
+                alpha=0.05,
+                label="fit window",
+            )
+            ax.set_title(str(label))
+            ax.set_xlabel("Wavelength [Å]")
+            ax.set_ylabel("Flux")
+            handles, labels = ax.get_legend_handles_labels()
+            unique = {}
+            for handle, label_text in zip(handles, labels):
+                unique.setdefault(label_text, handle)
+            ax.legend(unique.values(), unique.keys(), loc="best", fontsize="small")
+            ax.grid(alpha=0.15)
+        for ax in axes_flat[n:]:
+            ax.set_visible(False)
+        fig.suptitle(title)
+        fig.tight_layout()
+        if savepath is not None:
+            save_figure(fig, savepath)
+        return fig, axes
+
 
 def _sideband_fit_parameter_count(n_segments, sideband_poly_order):
     """Count nonlinear and profiled continuum parameters for fit diagnostics."""
@@ -196,6 +612,7 @@ def attach_balmer_metadata(segments, cont_windows=None, centers_vac=None):
     For each segment it stores:
     - line_label       : canonical internal label
     - line_label_input : original input label
+    - line_center_air  : standard air line center
     - line_center_vac  : vacuum line center
     - line_center_data : line center converted into the segment wavelength medium
     - cont_windows     : continuum sideband windows, if available
@@ -234,9 +651,21 @@ def attach_balmer_metadata(segments, cont_windows=None, centers_vac=None):
             )
 
         center_vac = float(centers_vac[label])
+        center_air = (
+            float(BALMER_CENTERS_AIR[label])
+            if label in BALMER_CENTERS_AIR
+            else float(
+                convert_wavelength_medium(
+                    np.array([center_vac], dtype=float),
+                    from_medium="vacuum",
+                    to_medium="air",
+                )[0]
+            )
+        )
 
         seg.meta["line_label_input"] = raw_label
         seg.meta["line_label"] = label
+        seg.meta["line_center_air"] = center_air
         seg.meta["line_center_vac"] = center_vac
 
         seg_medium = str(seg.wave_medium).lower()
@@ -636,16 +1065,34 @@ def prepare_xshooter_balmer_case(
         name_suffix="fitwin",
     )
 
-    balmer_windows = tuple(xshooter_balmer_windows(window_mode))
+    requested_balmer_windows = tuple(xshooter_balmer_windows(window_mode))
     fit_segments = make_padded_window_segments(
         clipped,
-        [(wmin_i, wmax_i) for _label, wmin_i, wmax_i in balmer_windows],
+        requested_balmer_windows,
         pad=window_pad,
         name_prefix="balmer",
     )
 
-    for seg_i, (label, _wmin_i, _wmax_i) in zip(fit_segments, balmer_windows):
-        seg_i.name = label
+    window_by_label = {
+        str(label): (str(label), float(wmin_i), float(wmax_i))
+        for label, wmin_i, wmax_i in requested_balmer_windows
+    }
+    balmer_windows = []
+    for seg_i in fit_segments:
+        label, wmin_i, wmax_i = window_by_label[str(seg_i.name)]
+        balmer_windows.append((label, wmin_i, wmax_i))
+        wave_i = np.asarray(seg_i.wave, dtype=float)
+        finite_wave_i = wave_i[np.isfinite(wave_i)]
+        seg_i.meta["fit_region_A"] = [float(wmin_i), float(wmax_i)]
+        seg_i.meta["support_region_A"] = (
+            None
+            if finite_wave_i.size == 0
+            else [
+                float(np.nanmin(finite_wave_i)),
+                float(np.nanmax(finite_wave_i)),
+            ]
+        )
+    balmer_windows = tuple(balmer_windows)
 
     if str(window_mode).strip().lower() == "notebook":
         attach_balmer_metadata(fit_segments)
@@ -687,14 +1134,60 @@ def prepare_xshooter_balmer_case(
             )
         )
 
+    line_records = []
+    resolution_records = []
+    for seg_i, (label, wmin_i, wmax_i) in zip(fit_segments, balmer_windows):
+        wave_i = np.asarray(seg_i.wave, dtype=float)
+        finite_wave_i = wave_i[np.isfinite(wave_i)]
+        resolution_records.append(
+            None if seg_i.resolution is None else seg_i.resolution.to_metadata()
+        )
+        line_records.append(
+            {
+                "label": str(label),
+                "fit_region_A": [float(wmin_i), float(wmax_i)],
+                "segment_range_A": None
+                if finite_wave_i.size == 0
+                else [
+                    float(np.nanmin(finite_wave_i)),
+                    float(np.nanmax(finite_wave_i)),
+                ],
+                "line_center_air_A": seg_i.meta.get("line_center_air"),
+                "line_center_vac_A": seg_i.meta.get("line_center_vac"),
+                "line_center_data_A": seg_i.meta.get("line_center_data"),
+                "continuum_sidebands_relative_A": seg_i.meta.get("cont_windows"),
+                "wave_medium": seg_i.wave_medium,
+            }
+        )
+
+    non_null_resolutions = [item for item in resolution_records if item is not None]
+    if not non_null_resolutions:
+        resolution_summary = None
+    elif all(item == non_null_resolutions[0] for item in non_null_resolutions):
+        resolution_summary = non_null_resolutions[0]
+    else:
+        resolution_summary = non_null_resolutions
+
     provenance = {
+        "recipe_version": 1,
         "recipe": "prepare_xshooter_balmer_case",
+        "input_segment_name": segment.name,
+        "input_reader": (segment.meta or {}).get("reader"),
+        "input_wave_medium": segment.wave_medium,
+        "input_observer_frame": segment.observer_frame,
+        "input_stellar_rest_status": segment.stellar_rest_status,
+        "resolution": resolution_summary,
         "window_mode": str(window_mode),
         "window_pad_A": float(window_pad),
         "norm_mode": str(norm_mode),
         "sideband_width_A": float(sideband_width),
         "sideband_order": int(sideband_order),
         "core_mask_halfwidth_A": None if core_mask is None else float(core_mask),
+        "mask_true_means": {
+            "segment_mask": "usable_pixel",
+            "valid_masks": "usable_pixel",
+            "exclude_masks": "reject_pixel",
+        },
         "telluric_mask_requested": bool(use_telluric_mask),
         "telluric_threshold": (
             float(telluric_threshold) if use_telluric_mask else None
@@ -703,6 +1196,7 @@ def prepare_xshooter_balmer_case(
             (str(label), float(wmin_i), float(wmax_i))
             for label, wmin_i, wmax_i in balmer_windows
         ],
+        "line_records": json_safe(line_records),
         "exclude_masks": [mask.name for mask in exclude_masks],
         "exclude_mask_metadata": {
             mask.name: dict(mask.metadata) for mask in exclude_masks
@@ -718,6 +1212,63 @@ def prepare_xshooter_balmer_case(
         norm_info=norm_info,
         provenance=provenance,
     )
+
+
+def fit_case_lines_individually(
+    case,
+    *,
+    base_setup=None,
+    extra_exclusion_masks=None,
+    model="phoenix",
+    phoenix_lib=None,
+    phoenix_dir=None,
+    progress_callback=None,
+    **fit_kwargs,
+):
+    """Fit each segment in a prepared recipe case as a line-consistency check.
+
+    This helper is intentionally small: it does not choose new science settings
+    and it does not average the answers. It runs the same public
+    ``fit_stellar_spectrum`` path one prepared line at a time so users can see
+    whether Hδ, Hγ, and Hβ pull the atmospheric solution in compatible
+    directions.
+    """
+    if not isinstance(case, XshooterBalmerCase):
+        raise TypeError("case must be an XshooterBalmerCase.")
+
+    from .api import fit_stellar_spectrum
+
+    results = {}
+    valid_masks = case.valid_masks_for(extra_exclusion_masks)
+    for segment, valid_mask, (label, wmin, wmax) in zip(
+        case.fit_segments,
+        valid_masks,
+        case.balmer_windows,
+    ):
+        collection = SpectrumCollection(
+            [segment],
+            name="xshooter_uvb_balmer_{0}".format(str(label)),
+            meta={
+                "workflow": "xshooter_balmer_case_individual_line",
+                "recipe": case.provenance,
+                "line_label": str(label),
+            },
+        )
+        if base_setup is None:
+            setup = case.suggest_fit_setup().with_regions([(float(wmin), float(wmax))])
+        else:
+            setup = base_setup.with_regions([(float(wmin), float(wmax))])
+        results[str(label)] = fit_stellar_spectrum(
+            collection,
+            model=model,
+            setup=setup,
+            valid_mask=(valid_mask,),
+            phoenix_lib=phoenix_lib,
+            phoenix_dir=phoenix_dir,
+            progress_callback=progress_callback,
+            **fit_kwargs,
+        )
+    return results
 
 
 def fit_phoenix_sideband_symmetric(
@@ -1628,6 +2179,7 @@ def pick_grid_range(grid, lo=None, hi=None):
     
     
 __all__ = [
+    "BALMER_CENTERS_AIR",
     "BALMER_CENTERS_VAC",
     "XSHOOTER_BALMER_WINDOWS",
     "XSHOOTER_NOTEBOOK_CONT_WINDOWS",
@@ -1642,6 +2194,7 @@ __all__ = [
     "solve_sideband_multiplicative_poly",
     "make_balmer_core_exclude_mask",
     "prepare_xshooter_balmer_case",
+    "fit_case_lines_individually",
     "fit_phoenix_sideband_symmetric",
     "build_plot_models_for_segments",
     "PEPSI_LEGACY_CENTERS_AIR",

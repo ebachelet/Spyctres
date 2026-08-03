@@ -13,12 +13,18 @@ from Spyctres.api import (
 from Spyctres.defaults import suggest_fit_setup
 from Spyctres.io import SpectrumSegment
 from Spyctres.results import (
+    QUALITY_FLAG_CLASSIFICATION,
+    QUALITY_FLAG_DESCRIPTIONS,
     PhoenixFitDiagnostics,
     PhoenixFitResult,
     compare_fits,
     compare_fit_results,
+    classify_quality_flag,
     describe_quality_flags,
+    format_fit_comparison_table,
     format_fit_quality_report,
+    quality_flag_actions,
+    summarize_quality_flags,
 )
 
 
@@ -84,6 +90,7 @@ def test_structured_result_has_notebook_friendly_summary_text():
     assert compact["fitted_pixels"] == 123
     assert "Spyctres PHOENIX fit" in result.summary_text()
     assert "reader=gbs_v3_ascii" in result.summary_text()
+    assert "setup_hash=" not in result.summary_text(include_hash=False)
     assert "PhoenixFitResult(" in repr(result)
 
 
@@ -141,6 +148,8 @@ def test_structured_result_quality_report_summarizes_fit_selection():
         "more than half"
         in report["quality_flag_descriptions"]["segment_mask_fraction_high"]
     )
+    assert report["quality_flag_summary"]["headline_status"] == "needs_review"
+    assert report["quality_flag_actions"][0]["flag"] == "segment_mask_fraction_high"
     assert report["reduced_chi2"] == 2.0
     assert report["mask_fraction"] == 0.25
     assert report["outside_fit_window_fraction"] == 0.20
@@ -159,6 +168,8 @@ def test_structured_result_quality_report_summarizes_fit_selection():
     text = result.quality_report_text()
     assert "Quality report:" in text
     assert "flags: segment_mask_fraction_high" in text
+    assert "flag status: needs_review" in text
+    assert "top actions:" in text
     assert "chi2_red: 2" in text
     assert "masked fraction: 25.0%" in text
     assert "mask split: outside fit window=20.0%, rejected inside fit window=6.2%" in text
@@ -250,7 +261,11 @@ def test_compare_fit_results_reports_parameter_and_quality_deltas():
             },
             "known_residual_windows": {"flagged_windows": []},
         },
-        diagnostics={"mask_fraction": np.float64(0.5), "n_pixels": np.int64(90)},
+        diagnostics={
+            "mask_fraction": np.float64(0.5),
+            "n_pixels": np.int64(90),
+            "grid_edge_flags": {"teff_high": True},
+        },
     )
 
     comparison = compare_fit_results(
@@ -274,6 +289,14 @@ def test_compare_fit_results_reports_parameter_and_quality_deltas():
     assert comparison["known_residual_windows"]["only_unmasked"] == [
         "DIB 4882 / Hβ red wing"
     ]
+    assert comparison["result_summaries"]["comparison"]["teff"] == 9600.0
+    assert (
+        comparison["result_summaries"]["comparison"]["quality_status"]
+        == "needs_review"
+    )
+    assert comparison["result_summaries"]["comparison"]["boundary_flags"] == [
+        "grid_edge_teff_high"
+    ]
     json.dumps(comparison)
 
 
@@ -288,6 +311,22 @@ def test_compare_fit_results_is_top_level_public_api():
     assert out["parameters"]["teff"]["delta"] == 100.0
     assert out["quality_flags"]["only_reference"] == ["ok"]
     assert out["quality_flags"]["only_comparison"] == ["high_chi2"]
+
+
+def test_compare_fit_results_uses_reviewed_analysis_exploratory_status():
+    reference = {"teff": 6000.0, "quality_flags": ["ok"]}
+    comparison = {
+        "teff": 6100.0,
+        "quality_flags": ["ok"],
+        "fit_setup": {"exploratory_override": {"reason": "diagnostic review"}},
+    }
+
+    out = compare_fit_results(reference, comparison)
+
+    assert (
+        out["result_summaries"]["comparison"]["interpretation_status"]
+        == "exploratory_review_only"
+    )
 
 
 def test_compare_fits_facade_compares_multiple_results():
@@ -313,6 +352,51 @@ def test_compare_fits_facade_compares_multiple_results():
     )
 
 
+def test_format_fit_comparison_table_summarizes_fit_deltas():
+    baseline = {
+        "teff": 6000.0,
+        "logg": 4.0,
+        "feh": 0.0,
+        "rv_kms": 0.0,
+        "chi2_red": 2.0,
+        "quality_flags": ["ok"],
+    }
+    masked = {
+        "teff": 6100.0,
+        "logg": 4.1,
+        "feh": -0.1,
+        "rv_kms": 3.0,
+        "chi2_red": 1.5,
+        "quality_flags": ["high_chi2", "grid_edge_teff_high"],
+    }
+    comparison = compare_fits(baseline, masked, labels=("baseline", "masked"))
+
+    text = format_fit_comparison_table(comparison)
+
+    assert "Spyctres fit-comparison table" in text
+    assert "Teff[K]" in text
+    assert "masked" in text
+    assert "6100" in text
+    assert "+100" in text
+    assert "-0.5" in text
+    assert "needs_review" in text
+    assert "edge:teff_high" in text
+    assert "high_chi2" in text
+    assert " ok" not in text
+
+
+def test_format_fit_comparison_table_is_top_level_public_api():
+    import Spyctres
+
+    comparison = Spyctres.compare_fits(
+        {"teff": 6000.0},
+        {"teff": 6100.0},
+        labels=("baseline", "variant"),
+    )
+
+    assert "variant" in Spyctres.format_fit_comparison_table(comparison)
+
+
 def test_quality_flag_descriptions_cover_static_and_grid_flags():
     descriptions = describe_quality_flags(
         [
@@ -331,6 +415,56 @@ def test_quality_flag_descriptions_cover_static_and_grid_flags():
     assert "pixels" in descriptions["low_sampling_warning"]
     assert "Jacobian" in descriptions["parameter_errors_local_linearized"]
     assert "No description" in descriptions["surprise_flag"]
+
+
+def test_quality_flag_classification_covers_static_flags_and_dynamic_families():
+    assert set(QUALITY_FLAG_CLASSIFICATION) == set(QUALITY_FLAG_DESCRIPTIONS)
+
+    high_chi2 = classify_quality_flag("high_chi2")
+    assert high_chi2["severity"] == "review"
+    assert high_chi2["needs_review"] is True
+    assert "residual" in high_chi2["action"]
+
+    optimizer = classify_quality_flag("optimizer_local_minimum_suspected")
+    assert optimizer["severity"] == "blocker"
+    assert optimizer["blocks_interpretation"] is True
+
+    edge = classify_quality_flag("grid_edge_teff_high")
+    assert edge["severity"] == "review"
+    assert edge["category"] == "model_grid"
+
+    proxy = classify_quality_flag("heldout_high_chi2_proxy")
+    assert proxy["severity"] == "review"
+    assert proxy["category"] == "comparison_proxy"
+
+    unknown = classify_quality_flag("new_future_flag")
+    assert unknown["severity"] == "review"
+    assert unknown["category"] == "unclassified"
+
+
+def test_quality_flag_actions_and_summary_are_sorted_and_actionable():
+    actions = quality_flag_actions(
+        [
+            "parameter_errors_local_linearized",
+            "high_chi2",
+            "optimizer_local_minimum_suspected",
+            "ok",
+        ]
+    )
+
+    assert [item["flag"] for item in actions[:2]] == [
+        "optimizer_local_minimum_suspected",
+        "high_chi2",
+    ]
+    assert all("action" in item for item in actions)
+
+    summary = summarize_quality_flags(
+        ["high_chi2", "structured_residuals", "error_floor_applied"]
+    )
+    assert summary["headline_status"] == "needs_review"
+    assert summary["counts_by_severity"]["review"] == 2
+    assert summary["counts_by_severity"]["advisory"] == 1
+    assert summary["top_actions"][0]["flag"] in {"high_chi2", "structured_residuals"}
 
 
 def test_wavelength_medium_helpers_are_top_level_public_api():
@@ -355,6 +489,13 @@ def test_exclusion_mask_helper_is_top_level_public_api():
 
     assert isinstance(spec, Spyctres.ExclusionMaskSpec)
     assert spec.name == "demo"
+
+    region_spec = Spyctres.wavelength_region_exclusion_mask(
+        "manual_region",
+        [(5000.0, 5001.0)],
+    )
+    assert isinstance(region_spec, Spyctres.ExclusionMaskSpec)
+    assert region_spec.metadata["regions_A"] == [[5000.0, 5001.0]]
 
 
 def test_build_mask_facade_is_top_level_and_iterable():
@@ -407,16 +548,29 @@ def test_nonstellar_feature_helpers_are_top_level_public_api():
         "nonstellar:dib_4428",
         "nonstellar:dib_4882",
     ]
+    assert Spyctres.find_known_nonstellar_features((4415.0, 4445.0))[0][
+        "id"
+    ] == "dib_4428"
     assert callable(Spyctres.annotate_nonstellar_features)
     assert callable(Spyctres.diagnose_known_residual_windows)
     assert callable(Spyctres.broad_telluric_catalog_fallback_mask)
     assert callable(Spyctres.combine_exclusion_masks)
     assert callable(Spyctres.dilate_boolean_mask)
+    assert callable(Spyctres.wavelength_region_exclusion_mask)
     assert callable(Spyctres.telluric_transmission_exclusion_mask)
+    assert callable(Spyctres.find_known_nonstellar_features)
     assert callable(Spyctres.plot_spectrum)
+    assert callable(Spyctres.plot_fit_comparison_line_windows)
     assert callable(Spyctres.plot_model_line_windows)
+    assert callable(Spyctres.plot_spectrum_line_windows)
     assert callable(Spyctres.plot_diagnostic_windows)
     assert callable(Spyctres.compare_fits)
+    assert callable(Spyctres.format_fit_comparison_table)
+    assert callable(Spyctres.compare_line_fits)
+    assert callable(Spyctres.list_known_lines)
+    assert callable(Spyctres.plot_line_fit_comparison)
+    assert "Hgamma" in Spyctres.list_known_lines()
+    assert callable(Spyctres.example_data_path)
     assert Spyctres.KNOWN_RESIDUAL_WINDOWS[0]["linked_feature"] == "dib_4882"
 
 
@@ -435,6 +589,19 @@ def test_structured_result_can_save_compact_json(tmp_path):
     assert "models" not in payload
     assert payload["diagnostics"]["residual_rms"] is None
     assert payload["quality_flags"] == ["metadata_incomplete"]
+
+
+def test_example_data_path_resolves_bundled_example_and_rejects_escape():
+    import Spyctres
+
+    path = Spyctres.example_data_path("TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits")
+
+    assert path.exists()
+    assert "examples" in path.parts
+    with pytest.raises(ValueError, match="relative"):
+        Spyctres.example_data_path(path)
+    with pytest.raises(ValueError, match="parent-directory"):
+        Spyctres.example_data_path("../README.md", must_exist=False)
 
 
 def test_compact_json_sanitizes_local_paths_and_records_relative_plot(tmp_path):
@@ -1040,18 +1207,26 @@ def test_fit_stellar_spectrum_uses_reviewed_setup(monkeypatch):
 
     monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
 
+    valid_mask = np.ones(segment.wave.shape, dtype=bool)
+    valid_mask[5] = False
     result = fit_stellar_spectrum(
         segment,
         setup=setup,
+        valid_mask=valid_mask,
         phoenix_lib=object(),
         progress_callback=lambda _event: None,
     )
 
     expected_fit_kwargs = setup.fit_kwargs
     assert np.allclose(captured["spectrum"].wave, segment.wave)
+    assert not bool(captured["spectrum"].mask[5])
+    assert captured["spectrum"].meta["valid_mask_override"]["polarity"] == (
+        "True means usable"
+    )
     assert captured["kwargs"]["regions"] == expected_fit_kwargs["regions"]
     assert captured["kwargs"]["rv_grid_n"] == expected_fit_kwargs["rv_grid_n"]
     assert captured["kwargs"]["forward_model"] == expected_fit_kwargs["forward_model"]
+    assert "valid_mask" not in captured["kwargs"]
     assert "progress_callback" in captured["kwargs"]
     assert result.summary["fit_setup_hash"] == setup.setup_hash
     assert result.summary["fit_setup"]["setup_hash"] == setup.setup_hash
@@ -1077,6 +1252,14 @@ def test_fit_stellar_spectrum_rejects_setup_plus_fit_overrides():
             setup=setup,
             phoenix_lib=object(),
             regions=[(4000.0, 5000.0)],
+        )
+
+    with pytest.raises(ValueError, match="Pass setup or explicit fit-control"):
+        fit_stellar_spectrum(
+            segment,
+            setup=setup,
+            phoenix_lib=object(),
+            mask=[lambda wave: np.zeros_like(wave, dtype=bool)],
         )
 
 

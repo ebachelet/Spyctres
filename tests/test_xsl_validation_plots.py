@@ -123,17 +123,17 @@ def test_reference_recovery_summary_excludes_stress_from_ordinary_stats():
         summary["diagnostic_or_stress_rows"][0]["stability_label"]
         == "quality_gated_diagnostic_only"
     )
-    publication = summary["publication_summary"]
+    reviewed_analysis = summary["review_summary"]
     assert (
-        publication["claim_status"]
+        reviewed_analysis["claim_status"]
         == "classification_stable_for_current_standard_targets"
     )
-    assert publication["ready_for_referee_review"] is True
-    assert publication["ready_for_publication_claim"] is False
-    assert publication["ordinary_stability_label_counts"] == {
+    assert reviewed_analysis["ready_for_referee_review"] is True
+    assert reviewed_analysis["ready_for_reviewed_analysis_claim"] is False
+    assert reviewed_analysis["ordinary_stability_label_counts"] == {
         "classification_stable": 1
     }
-    assert publication["review_questions"]
+    assert reviewed_analysis["review_questions"]
     assert any("SDSS and UVES-POP" in item for item in summary["recommendations"])
 
 
@@ -149,7 +149,7 @@ def test_reference_recovery_summary_flags_standard_outlier():
     assert summary["ordinary_rows"][0]["recovery_assessment"] == "needs_review"
     assert summary["ordinary_rows"][0]["stability_label"] == "needs_review_not_stable"
     assert (
-        summary["publication_summary"]["claim_status"]
+        summary["review_summary"]["claim_status"]
         == "exploratory_not_reference_stable"
     )
 
@@ -170,7 +170,7 @@ def test_reference_recovery_summary_missing_reference_is_not_acceptable():
     )
 
 
-def test_publication_summary_flags_failed_standard_before_empty_recovery():
+def test_review_summary_flags_failed_standard_before_empty_recovery():
     payload = _summary_payload()
     payload["results"][0]["status"] = "error"
     payload["results"][0]["fit"] = {}
@@ -181,10 +181,10 @@ def test_publication_summary_flags_failed_standard_before_empty_recovery():
     assert summary["status"] == "summary_ready_no_ordinary_reference_fits"
     assert summary["rows"][0]["stability_label"] == "not_recovered"
     assert (
-        summary["publication_summary"]["claim_status"]
+        summary["review_summary"]["claim_status"]
         == "not_ready_standard_targets_failed"
     )
-    assert summary["publication_summary"]["limiting_checks"][0]["xsl_id"] == "XSTD"
+    assert summary["review_summary"]["limiting_checks"][0]["xsl_id"] == "XSTD"
 
 
 def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
@@ -217,11 +217,11 @@ def test_reference_recovery_summary_outputs_and_main_no_target_plots(tmp_path):
     assert json_path.exists()
     md_text = md.read_text(encoding="utf-8")
     assert "Spyctres XSL reference-recovery summary" in md_text
-    assert "Publication-style stability interpretation" in md_text
+    assert "Reviewed-analysis stability interpretation" in md_text
     assert "Questions for reviewer" in md_text
     assert "Diagnostic/stress/unsupported rows" in md_text
     csv_header = csv_path.read_text(encoding="utf-8").splitlines()[0]
     assert "recovery_assessment" in csv_header
     assert "stability_label" in csv_header
     summary_json = json.loads(json_path.read_text(encoding="utf-8"))
-    assert "publication_summary" in summary_json
+    assert "review_summary" in summary_json
