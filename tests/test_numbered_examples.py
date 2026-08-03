@@ -14,6 +14,8 @@ NUMBERED_EXAMPLES = (
     "example4b_balmer_stability_checks",
     "example5_batch_fitting",
     "example6_multiarm_classification",
+    "example7_xsl_reference_validation",
+    "example8_pepsi_legacy_linefit_validation",
 )
 
 
@@ -122,3 +124,9 @@ def test_example_documentation_uses_current_reader_and_example_names():
     assert "target_id,path,instrument,R" not in text
     assert "quick_example.py" not in text
     assert "example6_microlensing_source_sed" not in text
+    assert "examples/simple_phoenix_fit.py" not in text
+    assert "examples/full_spectrum_classification.ipynb" not in text
+    assert "examples/xshooter_multiarm_classification.ipynb" not in text
+    assert "examples/xsl_figure1_validation.ipynb" not in text
+    assert "examples/pepsi_legacy_linefit_validation.ipynb" not in text
+    assert "examples/reviewed_xshooter_uvb_analysis.py" not in text

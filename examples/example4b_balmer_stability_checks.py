@@ -108,8 +108,7 @@ def build_parser():
             "Quick subset while editing:\n"
             "  add --max-variants 3\n\n"
             "Next:\n"
-            "  python examples/example6_multiarm_classification.py --help\n"
-            "  python examples/reviewed_xshooter_uvb_analysis.py --help"
+            "  python examples/example6_multiarm_classification.py --help"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -709,8 +708,8 @@ def main(argv=None):
             flush=True,
         )
     print(
-        "Next: use Example 6 for multi-arm consistency or "
-        "examples/reviewed_xshooter_uvb_analysis.py for the heavier scaffold.",
+        "Next: use Example 6 for multi-arm consistency, or Example 7 for "
+        "reference-star validation discipline.",
         flush=True,
     )
     return 0

@@ -1,7 +1,5 @@
 import csv
-import importlib.util
 import json
-from pathlib import Path
 
 import numpy as np
 
@@ -38,14 +36,6 @@ def _blue_segment():
         name="synthetic-blue",
         resolution=6200.0,
     )
-
-
-def _load_example_module():
-    path = Path(__file__).resolve().parents[1] / "examples" / "branch_quickscan.py"
-    spec = importlib.util.spec_from_file_location("branch_quickscan_example", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_branch_plan_is_bounded_and_records_policy():
@@ -141,33 +131,4 @@ def test_branch_quickscan_outputs_are_json_csv_and_plot_friendly(tmp_path):
     assert rows
     assert rows[0]["branch_id"]
     assert plot_path.exists()
-
-
-def test_branch_quickscan_example_cli_dry_run(monkeypatch, tmp_path):
-    module = _load_example_module()
-    monkeypatch.setattr(module, "read_spectrum", lambda *args, **kwargs: _blue_segment())
-
-    json_path = tmp_path / "cli" / "branches.json"
-    csv_path = tmp_path / "cli" / "branches.csv"
-    plot_path = tmp_path / "cli" / "branches.png"
-    exit_code = module.main(
-        [
-            "ignored.fits",
-            "--instrument",
-            "xshooter",
-            "--output-json",
-            str(json_path),
-            "--output-csv",
-            str(csv_path),
-            "--output-plot",
-            str(plot_path),
-        ]
-    )
-
-    assert exit_code == 0
-    assert json_path.exists()
-    assert csv_path.exists()
-    assert plot_path.exists()
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    assert payload["status"] == "planned_no_fits_run"
 

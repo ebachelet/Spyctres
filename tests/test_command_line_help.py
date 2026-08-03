@@ -33,7 +33,6 @@ def _run_command(*args):
             ["scripts/benchmark_phoenix_runtime.py", "--help"],
             "runtime benchmark",
         ),
-        (["examples/simple_phoenix_fit.py", "--help"], "Minimal fit_stellar_spectrum"),
         (
             ["examples/example1_quickstart.py", "--help"],
             "Example 1 quickstart",
@@ -58,22 +57,17 @@ def _run_command(*args):
             ["examples/example5_batch_fitting.py", "--help"],
             "Example 5",
         ),
-        (["examples/branch_quickscan.py", "--help"], "Branch quickscan"),
         (
-            ["examples/diagnostic_window_comparison.py", "--help"],
-            "Diagnostic-window comparison",
+            ["examples/example6_multiarm_classification.py", "--help"],
+            "Example 6",
         ),
         (
-            ["examples/high_resolution_sideband_normalization.py", "--help"],
-            "sideband normalization",
+            ["examples/example7_xsl_reference_validation.py", "--help"],
+            "Example 7",
         ),
         (
-            ["examples/batch_quickscan_then_refine.py", "--help"],
-            "batch workflow",
-        ),
-        (
-            ["examples/reviewed_xshooter_uvb_analysis.py", "--help"],
-            "Reviewed-analysis",
+            ["examples/example8_pepsi_legacy_linefit_validation.py", "--help"],
+            "Example 8",
         ),
         (
             ["scripts/gaia_benchmark_validation.py", "--help"],
@@ -99,15 +93,12 @@ def test_read_only_cli_rejects_abbreviated_options():
     assert caught.value.code == 2
 
 
-def test_simple_example_rejects_abbreviated_long_options():
+def test_numbered_examples_reject_abbreviated_long_options():
     completed = _run_command(
-        "examples/simple_phoenix_fit.py",
-        "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
-        "--instrument",
-        "xshooter",
-        "--plot-la",
-        "stacked",
+        "examples/example1_quickstart.py",
+        "--plot-di",
+        "/tmp/spyctres_plots",
     )
 
     assert completed.returncode == 2
-    assert "unrecognized arguments: --plot-la stacked" in completed.stderr
+    assert "unrecognized arguments: --plot-di" in completed.stderr

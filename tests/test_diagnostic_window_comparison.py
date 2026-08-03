@@ -1,7 +1,4 @@
 import json
-import subprocess
-import sys
-from pathlib import Path
 
 import numpy as np
 
@@ -260,40 +257,3 @@ def test_comparison_outputs_are_json_csv_and_plot_friendly(tmp_path):
     assert "heldout_mean_chi2_red_proxy" in header
     assert "common_mean_chi2_red_proxy" in header
     assert plot_path.exists()
-
-
-def test_diagnostic_window_comparison_example_dry_run(tmp_path):
-    root = Path(__file__).resolve().parents[1]
-    output_json = tmp_path / "example" / "windows.json"
-    output_csv = tmp_path / "example" / "windows.csv"
-    output_plot = tmp_path / "example" / "windows.png"
-    cmd = [
-        sys.executable,
-        "examples/diagnostic_window_comparison.py",
-        "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
-        "--instrument",
-        "xshooter",
-        "--max-comparisons",
-        "3",
-        "--output-json",
-        str(output_json),
-        "--output-csv",
-        str(output_csv),
-        "--output-plot",
-        str(output_plot),
-    ]
-
-    completed = subprocess.run(
-        cmd,
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    payload = json.loads(output_json.read_text())
-    assert payload["status"] == "planned_no_fits_run"
-    assert len(payload["planned_comparisons"]) <= 3
-    assert output_csv.exists()
-    assert output_plot.exists()

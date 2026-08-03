@@ -174,17 +174,12 @@ Use this checklist for a first local run from a source checkout.
      --no-show
    ```
 
-7. If you want to inspect the plausible classification branches before
-   fitting, run the dry-run branch quickscan. This is cheap and does not load
-   PHOENIX unless you explicitly add `--run-fits`:
+7. If you want to see how setup choices change a PHOENIX result before
+   committing to a stronger analysis, run Example 3. The default pass is cheap
+   and does not load PHOENIX unless you explicitly add `--run-fits`:
 
    ```bash
-   python examples/branch_quickscan.py \
-     examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-     --reader xshooter_merge1d \
-     --output-json /tmp/spyctres_branches.json \
-     --output-csv /tmp/spyctres_branches.csv \
-     --output-plot /tmp/spyctres_branches.png
+   python examples/example3_improving_a_phoenix_fit.py --no-show
    ```
 
 8. For many spectra, first run a cheap quicklook batch to identify sensible
@@ -251,6 +246,8 @@ Recommended example order:
 | Move from exploratory fitting toward reviewed analysis | Examples 4A and 4B |
 | Fit many spectra without blindly searching the whole grid | Example 5 |
 | Combine UVB/VIS/NIR evidence without hidden arm rescaling | Advanced Example 6 |
+| Validate against XSL DR3 reference-star products | Advanced Example 7 |
+| Preserve/check PEPSI legacy line-window behavior | Advanced Example 8 |
 
 The numbered examples are the maintained learning path:
 
@@ -278,15 +275,13 @@ The numbered examples are the maintained learning path:
 6. `examples/example6_multiarm_classification.py` /
    `examples/example6_multiarm_classification.ipynb` for multi-arm X-SHOOTER
    classification/consistency checks across UVB, VIS, and NIR.
-7. Advanced/validation examples after that: `simple_phoenix_fit.py`,
-   `branch_quickscan.py`, `batch_quickscan_then_refine.py`,
-   `diagnostic_window_comparison.py`,
-   `high_resolution_sideband_normalization.py`,
-   `full_spectrum_classification.ipynb`,
-   `xshooter_multiarm_classification.ipynb`,
-   `xsl_figure1_validation.ipynb`,
-   `reviewed_xshooter_uvb_analysis.py`, and
-   `pepsi_legacy_linefit_validation.ipynb`.
+7. `examples/example7_xsl_reference_validation.py` /
+   `examples/example7_xsl_reference_validation.ipynb` for XSL DR3
+   reference-star validation and ordinary/stress/unsupported target
+   separation.
+8. `examples/example8_pepsi_legacy_linefit_validation.py` /
+   `examples/example8_pepsi_legacy_linefit_validation.ipynb` for PEPSI
+   legacy line-window compatibility validation.
 
 The same beginner workflow is available from one Python import:
 
@@ -417,10 +412,10 @@ When `--plot-dir` is supplied, the batch runner also writes a small number of
 representative line-window plots so users can inspect sample fits without
 opening every spectrum in a large batch.
 
-To open the PHOENIX example notebook:
+To open the maintained first-contact notebook:
 
 ```bash
-jupyter lab examples/full_spectrum_classification.ipynb
+jupyter lab examples/example1_quickstart.ipynb
 ```
 
 ## Supported readers
@@ -659,32 +654,19 @@ defined in canonical vacuum Angstrom, stellar-rest-frame coordinates; selection
 converts those broad windows to each segment's declared wavelength medium and
 records the operational window, RV padding, score components, risk policies,
 and contiguous-coverage diagnostics in provenance.
-When you want to compare the influence of different feature families, use the
-bounded diagnostic-window comparison scaffold. It defaults to a dry run that
-writes a JSON/CSV/PNG plan without loading PHOENIX; actual fits require the
-explicit `--run-fits` flag:
+When you want to compare the influence of different feature families, start
+with the maintained setup-comparison and reviewed-analysis examples. They use
+the same package-level diagnostic-window selectors without requiring users to
+learn a separate historical script:
 
 ```bash
-python examples/diagnostic_window_comparison.py \
-  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
-  --reader xshooter_merge1d \
-  --output-json /tmp/spyctres_windows.json \
-  --output-csv /tmp/spyctres_windows.csv \
-  --output-plot /tmp/spyctres_windows.png
+python examples/example3_improving_a_phoenix_fit.py --no-show
+python examples/example4b_balmer_stability_checks.py --no-show
 ```
 
-The comparison policy is deliberately conservative: it runs only a small set of
-trusted baseline, role-balanced, single-window, and leave-one-out/family-out
-checks, records held-out windows as provenance, excludes stress-only windows by
-default, and warns that raw χ² should not be used as the sole model-selection
-criterion. When comparison fits are run with reconstructed model arrays, the
-runner also scores selected-but-held-out windows on valid pixels that were not
-used by that fit, and it scores every completed fit over the same union of
-planned diagnostic windows. The common-window residual summary is often the
-cleaner cross-comparison view because each fit is judged on the same feature
-set, while the held-out residuals remain a stricter generalization check. Both
-are proxy diagnostics, not calibrated reviewed-analysis likelihoods or automatic
-model-selection rules.
+The comparison policy remains deliberately conservative: raw χ² alone should
+not be used as a calibrated spectral-type decision, and held-out/common-window
+residual checks are diagnostics rather than final-analysis likelihoods.
 For reviewed-analysis Balmer-window work, Spyctres treats line-core masking
 as an explicit sensitivity choice rather than a hidden fit parameter. The
 reviewed-analysis scaffold records the retained-pixel fraction and an
@@ -812,7 +794,7 @@ Spyctres is organized around four layers:
 Notable files:
 
 - `Spyctres/recipes.py`
-- `examples/full_spectrum_classification.ipynb`
+- `examples/example1_quickstart.ipynb`
 - `scripts/xshooter_fit_smoketest.py`
 
 ## Current limitations

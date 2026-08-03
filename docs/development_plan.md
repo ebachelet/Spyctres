@@ -185,13 +185,14 @@ envelope for archival and reviewer-facing products.
    or skip refinement rather than confidently narrowing.
 
 8. **Reviewed-analysis X-SHOOTER UVB workflow.**
-   Add a separate expert workflow, not a replacement for
-   `examples/simple_phoenix_fit.py`, for cases where the user wants defensible
-   stellar parameters rather than a first-pass classification. The first target
-   is an X-SHOOTER UVB example using explicit Balmer and metal/RV windows,
-   formal uncertainties, documented masks, constrained resolution assumptions,
-   blind coarse likelihood mapping, independent multistart local fits, per-line
-   and joint Balmer diagnostics, profile-likelihood checks, systematic variants,
+   Keep the reviewed-analysis path in the maintained numbered examples rather
+   than as a separate historical scaffold. Examples 4A and 4B are the current
+   user-facing path for cases where the user wants defensible stellar
+   parameters rather than a first-pass classification. The first target remains
+   an X-SHOOTER UVB example using explicit Balmer and metal/RV windows, formal
+   uncertainties, documented masks, constrained resolution assumptions, blind
+   coarse likelihood mapping, independent multistart local fits, per-line and
+   joint Balmer diagnostics, profile-likelihood checks, systematic variants,
    checkpoint/resume support, and provenance/uncertainty tables.
 
    This workflow is allowed to be slower and more verbose than the public
@@ -199,20 +200,18 @@ envelope for archival and reviewer-facing products.
    LSF, masking, recovery, residual, and alternative-model checks pass. Until
    then it should label results as exploratory.
 
-   Initial scaffold: `examples/reviewed_xshooter_uvb_analysis.py` and
-   `examples/reviewed_xshooter_uvb_analysis.ipynb` provide an audit-first
-   workflow with explicit Balmer segments, documented masks, reviewed-analysis
-   readiness checks, a Balmer-core mask sensitivity audit grid, atomic JSON
-   checkpoints, generic diagnostic-window provenance, optional compact
-   mask-sensitivity CSV/PNG summaries, an explicit core-mask information-loss
-   penalty/recommendation, a bounded fit-level systematic-variant plan for
-   continuum degree, preparation normalization, Balmer-core mask, resolution
-   assumption, and Balmer window-set sensitivity, an opt-in baseline PHOENIX
-   fit, cheap per-line Balmer observed-profile diagnostics, baseline-fit
-   per-line model-residual diagnostics, opt-in execution of a bounded subset of
-   fit-level systematic variants with per-variant JSON checkpoints, opt-in
-   same-model synthetic injection/recovery trials with per-trial checkpoints,
-   compact Markdown/CSV/PNG review summary artifacts generated from the
+   Maintained path: `examples/example4_reviewed_balmer_analysis.py` and
+   `examples/example4b_balmer_stability_checks.py`, with matching notebooks,
+   provide the audit-first workflow with explicit Balmer segments, documented
+   masks, reviewed-analysis readiness checks, a Balmer-core mask sensitivity
+   audit grid, generic diagnostic-window provenance, compact comparison
+   summaries, an explicit core-mask information-loss
+   penalty/recommendation, bounded fit-level variants for continuum degree,
+   preparation normalization, Balmer-core mask, resolution assumption, and
+   Balmer window-set sensitivity, opt-in baseline PHOENIX fits, cheap per-line
+   Balmer observed-profile diagnostics, baseline-fit per-line model-residual
+   diagnostics, and compact Markdown/CSV/PNG review summary artifacts generated
+   from the
    saved checkpoint without launching extra fits, conservative
    calibration-interpretation labels for readiness, Balmer-core mask
    sensitivity, window-set sensitivity, and same-model recovery, and a separate

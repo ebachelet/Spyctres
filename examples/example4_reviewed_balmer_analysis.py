@@ -81,8 +81,7 @@ def build_parser():
             "--no-show\n\n"
             "Next:\n"
             "  python examples/example4b_balmer_stability_checks.py --help\n"
-            "  python examples/example6_multiarm_classification.py --help\n"
-            "  python examples/reviewed_xshooter_uvb_analysis.py --help"
+            "  python examples/example6_multiarm_classification.py --help"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
