@@ -2366,6 +2366,294 @@ def _add_figure_footer(fig, footer, *, fontsize=8):
     )
 
 
+def _prepared_line_window_title(segment):
+    """Return a compact title for a pre-windowed line segment."""
+    meta = dict(getattr(segment, "meta", {}) or {})
+    for key in ("legacy_window_air", "legacy_window_working"):
+        window = meta.get(key)
+        if isinstance(window, (list, tuple)) and len(window) >= 3:
+            try:
+                center = 0.5 * (float(window[1]) + float(window[2]))
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(center):
+                return "{0:.1f}".format(center)
+    name = getattr(segment, "name", None)
+    if name:
+        text = str(name).replace("legacy_", "")
+        return text
+    wave = np.asarray(getattr(segment, "wave", []), dtype=float)
+    finite = wave[np.isfinite(wave)]
+    if finite.size:
+        return "{0:.1f}".format(float(0.5 * (np.nanmin(finite) + np.nanmax(finite))))
+    return "line window"
+
+
+def plot_prepared_line_window_diagnostics(
+    segments,
+    *,
+    models=None,
+    used_masks=None,
+    title=None,
+    footer=None,
+    ncols=6,
+    figsize_per_panel=(2.25, 2.35),
+    savepath=None,
+    data_label="Data",
+    model_label="Model",
+    show_errorbars=True,
+    y_label="Normalized flux",
+    robust_ylim=True,
+    share_y=True,
+):
+    """Plot pre-windowed spectral diagnostics in a compact panel grid.
+
+    This helper is for workflows that already converted a spectrum into one
+    segment per diagnostic line window, such as the PEPSI legacy line-window
+    comparison. It is intentionally generic: it accepts any sequence of
+    ``SpectrumSegment``-like objects plus optional same-grid model arrays.
+    ``used_masks`` controls where the model is considered fitted; model traces
+    outside those pixels are shown dashed rather than silently hidden.
+    By default all panels share one robust y-axis range so normalized windows
+    can be compared directly.
+    """
+    if hasattr(segments, "segments"):
+        segments = list(segments.segments)
+    else:
+        segments = list(segments or ())
+    if not segments:
+        raise ValueError("plot_prepared_line_window_diagnostics() requires segments.")
+
+    if models is None:
+        models = [None] * len(segments)
+    else:
+        models = list(models)
+        if len(models) != len(segments):
+            raise ValueError("models length must match segments length.")
+
+    if used_masks is None:
+        used_masks = []
+        for seg in segments:
+            mask = getattr(seg, "valid_mask", None)
+            if mask is None:
+                mask = getattr(seg, "mask")
+            used_masks.append(np.asarray(mask, dtype=bool))
+    else:
+        used_masks = list(used_masks)
+        if len(used_masks) != len(segments):
+            raise ValueError("used_masks length must match segments length.")
+
+    shared_ylim = None
+    if share_y:
+        shared_values = []
+        for segment, model, used_mask in zip(segments, models, used_masks):
+            wave = _as_float_array(segment.wave)
+            flux = _as_float_array(segment.flux)
+            used = _as_bool_array(used_mask, n_expected=wave.size)
+            finite = np.isfinite(wave) & np.isfinite(flux)
+            finite_used = finite & used
+            if np.any(finite_used):
+                shared_values.append(flux[finite_used])
+            elif np.any(finite):
+                shared_values.append(flux[finite])
+            if model is not None:
+                model_array = _as_float_array(model)
+                if model_array.shape == wave.shape:
+                    finite_model = np.isfinite(model_array)
+                    finite_model_used = finite_model & used
+                    if np.any(finite_model_used):
+                        shared_values.append(model_array[finite_model_used])
+                    elif np.any(finite_model):
+                        shared_values.append(model_array[finite_model])
+        if shared_values:
+            sample = np.concatenate(
+                [np.asarray(value, dtype=float).ravel() for value in shared_values]
+            )
+            sample = sample[np.isfinite(sample)]
+            if sample.size:
+                shared_ylim = _compute_robust_ylim(
+                    sample,
+                    lower=0.5,
+                    upper=99.5,
+                    pad_frac=0.10,
+                )
+
+    nseg = len(segments)
+    ncols = min(max(1, int(ncols)), nseg)
+    nrows = int(np.ceil(nseg / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(figsize_per_panel[0] * ncols, figsize_per_panel[1] * nrows),
+        squeeze=False,
+        sharey=bool(share_y),
+        constrained_layout=True,
+    )
+    if title:
+        fig.suptitle(str(title), fontsize=12)
+
+    for index, (ax, segment, model, used_mask) in enumerate(
+        zip(axes.ravel(), segments, models, used_masks)
+    ):
+        wave = _as_float_array(segment.wave)
+        flux = _as_float_array(segment.flux)
+        if wave.shape != flux.shape:
+            raise ValueError("segment wave and flux arrays must match.")
+        used = _as_bool_array(used_mask, n_expected=wave.size)
+        finite = np.isfinite(wave) & np.isfinite(flux)
+        err = getattr(segment, "err", None)
+        if err is not None:
+            err = _as_float_array(err)
+            if err.shape != wave.shape:
+                raise ValueError("segment err arrays must match wave shape.")
+            err_good = finite & np.isfinite(err) & (err > 0.0)
+        else:
+            err_good = np.zeros(wave.size, dtype=bool)
+
+        if show_errorbars and np.any(err_good):
+            ax.errorbar(
+                wave[err_good],
+                flux[err_good],
+                yerr=err[err_good],
+                fmt=".",
+                ms=2.0,
+                lw=0.0,
+                elinewidth=0.45,
+                capsize=0,
+                color="tab:blue",
+                ecolor="tab:blue",
+                alpha=0.55,
+                label=data_label,
+            )
+            line_only = finite & ~err_good
+        else:
+            line_only = finite
+
+        if np.any(line_only):
+            ax.plot(
+                wave[line_only],
+                flux[line_only],
+                ".",
+                ms=2.0,
+                color="tab:blue",
+                alpha=0.70,
+                label=data_label if not (show_errorbars and np.any(err_good)) else None,
+            )
+
+        not_used = finite & ~used
+        if np.any(not_used):
+            ax.scatter(
+                wave[not_used],
+                flux[not_used],
+                s=7,
+                color="0.70",
+                alpha=0.45,
+                label=None,
+                zorder=2,
+            )
+
+        model_arrays = []
+        model_ylim_arrays = []
+        if model is not None:
+            model = _as_float_array(model)
+            if model.shape != wave.shape:
+                raise ValueError("Each model array must match its segment wave shape.")
+            finite_model = np.isfinite(model)
+            model_arrays.append(model)
+            finite_model_used = finite_model & used
+            if np.any(finite_model_used):
+                model_ylim_arrays.append(model[finite_model_used])
+            elif np.any(finite_model):
+                model_ylim_arrays.append(model[finite_model])
+            fit_model = finite & finite_model & used
+            _plot_contiguous_masked_line(
+                ax,
+                wave,
+                model,
+                fit_model,
+                color="tab:orange",
+                lw=1.35,
+                label=model_label,
+            )
+            masked_model = finite & finite_model & ~used
+            _plot_contiguous_masked_line(
+                ax,
+                wave,
+                model,
+                masked_model,
+                color="tab:orange",
+                lw=1.0,
+                ls="--",
+                alpha=0.65,
+                label=None,
+            )
+
+        finite_wave = wave[np.isfinite(wave)]
+        if finite_wave.size:
+            ax.set_xlim(float(np.nanmin(finite_wave)), float(np.nanmax(finite_wave)))
+        if share_y:
+            ylim = shared_ylim
+        elif robust_ylim:
+            values = []
+            finite_used = finite & used
+            if np.any(finite_used):
+                values.append(flux[finite_used])
+            elif np.any(finite):
+                values.append(flux[finite])
+            values.extend(model_ylim_arrays)
+            sample = (
+                np.concatenate(
+                    [np.asarray(value, dtype=float).ravel() for value in values]
+                )
+                if values
+                else np.array([], dtype=float)
+            )
+            sample = sample[np.isfinite(sample)]
+            ylim = (
+                _compute_robust_ylim(sample, lower=0.5, upper=99.5, pad_frac=0.10)
+                if sample.size
+                else None
+            )
+        else:
+            ylim = _window_plot_ylim(
+                wave,
+                flux,
+                finite,
+                models=model_arrays,
+            )
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        ax.set_title(_prepared_line_window_title(segment), fontsize=9)
+        ax.set_xlabel("λ [Å]")
+        if index % ncols == 0:
+            ax.set_ylabel(str(y_label))
+        else:
+            ax.tick_params(labelleft=False)
+        ax.grid(alpha=0.16, lw=0.5)
+
+    for ax in axes.ravel()[nseg:]:
+        ax.set_axis_off()
+
+    handles_by_label = {}
+    for ax in axes.ravel():
+        handles, labels = ax.get_legend_handles_labels()
+        for handle, label in zip(handles, labels):
+            if label and label not in handles_by_label:
+                handles_by_label[label] = handle
+    if handles_by_label:
+        axes.ravel()[0].legend(
+            list(handles_by_label.values()),
+            list(handles_by_label.keys()),
+            loc="lower left",
+            fontsize=8,
+            frameon=True,
+        )
+    _add_figure_footer(fig, footer, fontsize=8)
+    if savepath is not None:
+        save_figure(fig, savepath, artifact_key="prepared_line_window_plot", dpi=160)
+    return fig, axes
+
+
 def _fit_result_line_window_arrays(result, *, segment=None, context="plot"):
     """Return concatenated plotting arrays from a structured fit result."""
     source = segment if segment is not None else getattr(result, "input_spectrum", None)

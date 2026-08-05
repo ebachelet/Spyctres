@@ -22,7 +22,7 @@ reproducible examples.
 | 5 | `example5_batch_fitting.py` / `example5_batch_fitting.ipynb` | Batch quickscan-then-refine workflow for tens to hundreds of spectra, with representative inspection plots. |
 | 6 | `example6_multiarm_classification.py` / `example6_multiarm_classification.ipynb` | Optional multi-arm X-SHOOTER classification using UVB, VIS, and NIR arms as separate segments. |
 | 7 | `example7_xsl_reference_validation.py` / `example7_xsl_reference_validation.ipynb` | XSL DR3 reference-star validation discipline, including ordinary/stress/unsupported target separation. |
-| 8 | `example8_pepsi_legacy_linefit_validation.py` / `example8_pepsi_legacy_linefit_validation.ipynb` | PEPSI legacy line-window compatibility validation using the shared recipe layer. |
+| 8 | `example8_pepsi_legacy_linefit_validation.py` / `example8_pepsi_legacy_linefit_validation.ipynb` | PEPSI legacy line-window compatibility validation, including the optional compact data/model diagnostic grid. |
 
 The core beginner path is Examples 1-5.  Examples 6-8 are advanced or
 validation-oriented: useful, but not mandatory before ordinary Spyctres use.

@@ -154,8 +154,11 @@ def _print_reader_context(reader):
     print("  aliases:", ", ".join(info["aliases"]))
     print("  product:", info["expected_file_type"])
     print("  wavelength:", info["wavelength_unit"], info["default_wave_medium"])
+    print("  observer frame:", info["default_observer_frame"])
     print("  stellar rest status:", info["default_stellar_rest_status"])
     print("  resolution:", info["resolving_power"])
+    if info.get("notes"):
+        print("  note:", info["notes"])
 
 
 def _print_one_spectrum_summary(reader):
@@ -171,7 +174,13 @@ def _print_one_spectrum_summary(reader):
         )
     )
     print("  wave media:", ", ".join(summary["wave_mediums"]))
+    print("  observer frame:", ", ".join(summary["observer_frames"]))
     print("  stellar rest:", ", ".join(summary["stellar_rest_status"]))
+    print("  needs barycentric correction:", spec.needs_barycentric_correction)
+    print(
+        "  fitted RV role:",
+        spec.meta.get("fitted_rv_kms_role", "residual alignment check"),
+    )
 
 
 def _print_validation_table(payload):

@@ -243,7 +243,8 @@ class SpectrumSegment(object):
     mask: boolean array (True = valid/use; False = excluded), optional
     meta: dict, optional
     wave_medium: "air", "vacuum", or "unknown"
-    observer_frame: "topocentric", "heliocentric", "barycentric", or "unknown"
+    observer_frame: "topocentric", "heliocentric", "barycentric",
+        "not_applicable", or "unknown"
     stellar_rest_status: "observed", "corrected", or "unknown"
     stellar_rv_applied_kms: RV removed to reach the stellar rest frame, optional
     resolution: optional ResolutionDescriptor for the instrumental LSF
@@ -392,6 +393,34 @@ class SpectrumSegment(object):
     def use_mask(self):
         """Alias for ``valid_mask``; True means the pixel is valid/useable."""
         return self.valid_mask
+
+    @property
+    def wavelength_medium(self):
+        """Alias for ``wave_medium`` used in user-facing provenance displays."""
+        return self.wave_medium
+
+    @property
+    def stellar_rest(self):
+        """Whether the wavelength grid is marked as stellar-rest corrected."""
+        return self.stellar_rest_status == "corrected"
+
+    @property
+    def needs_barycentric_correction(self):
+        """Best-effort flag for whether an observer-to-barycentre correction remains.
+
+        Readers may set ``meta["needs_barycentric_correction"]`` when a product
+        profile is explicit. Otherwise this conservative convenience property
+        returns ``False`` for already stellar-rest/barycentric products, ``True``
+        for topocentric observed products, and ``None`` when the metadata are
+        not specific enough to decide.
+        """
+        if "needs_barycentric_correction" in self.meta:
+            return bool(self.meta["needs_barycentric_correction"])
+        if self.stellar_rest or self.observer_frame in {"barycentric", "not_applicable"}:
+            return False
+        if self.observer_frame == "topocentric":
+            return True
+        return None
 
     @property
     def invalid_mask(self):
@@ -665,6 +694,30 @@ class SpectrumCollection(object):
     def names(self):
         return [seg.name for seg in self.segments]
 
+    @property
+    def wavelength_medium(self):
+        """Shared wavelength medium, or ``"mixed"`` for heterogeneous collections."""
+        return _shared_segment_attribute(
+            self.segments,
+            "wave_medium",
+            default_if_mixed="mixed",
+        )
+
+    @property
+    def stellar_rest(self):
+        """Whether every segment is marked as stellar-rest corrected."""
+        return all(segment.stellar_rest for segment in self.segments)
+
+    @property
+    def needs_barycentric_correction(self):
+        """Collection-level view of segment barycentric-correction needs."""
+        values = [segment.needs_barycentric_correction for segment in self.segments]
+        if any(value is True for value in values):
+            return True
+        if all(value is False for value in values):
+            return False
+        return None
+
     def summary(self):
         """Return a compact JSON-safe description of the collection."""
         segment_summaries = [seg.summary() for seg in self.segments]
@@ -719,7 +772,13 @@ class SpectrumCollection(object):
 
 
 _VALID_WAVE_MEDIA = {"air", "vacuum", "unknown"}
-_VALID_OBSERVER_FRAMES = {"topocentric", "heliocentric", "barycentric", "unknown"}
+_VALID_OBSERVER_FRAMES = {
+    "topocentric",
+    "heliocentric",
+    "barycentric",
+    "not_applicable",
+    "unknown",
+}
 _VALID_STELLAR_REST_STATUS = {"observed", "corrected", "unknown"}
 
 
@@ -1673,7 +1732,7 @@ def read_xsl_dr3(
     ext=1,
     flux_variant="flux",
     wave_medium="air",
-    observer_frame="unknown",
+    observer_frame="not_applicable",
 ):
     """Read an X-shooter Spectral Library DR3 combined-arm FITS spectrum.
 
@@ -1682,6 +1741,8 @@ def read_xsl_dr3(
     velocity sigma is 13, 11, and 16 km/s across the UVB-through-overlap, VIS,
     and NIR-from-overlap regions respectively. Verro et al. (2022) state that
     the rest-frame wavelengths are in air, so ``air`` is the reader default.
+    Header barycentric/rest-frame values are preserved as provenance, but are
+    not applied again by the reader.
 
     https://doi.org/10.1051/0004-6361/202142388
     """
@@ -1721,6 +1782,26 @@ def read_xsl_dr3(
             XSL_DR3_PROVENANCE_HEADER_KEYS,
         )
 
+    def _numeric_header_value(key):
+        record = xsl_header_provenance.get(key)
+        if not record:
+            return None
+        value = record.get("value")
+        if isinstance(value, bool):
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return value if np.isfinite(value) else None
+
+    bary_cor_kms = _numeric_header_value("BARY_COR")
+    rest_corrections_kms = {}
+    for key in ("REST_UVB", "REST_VIS", "REST_NIR"):
+        value = _numeric_header_value(key)
+        if value is not None:
+            rest_corrections_kms[key] = value
+
     base_meta = {
         "path": path,
         "instrument": "XSL DR3",
@@ -1729,6 +1810,22 @@ def read_xsl_dr3(
         "xsl_wave_unit_input": "nm",
         "xsl_log10_sampled": True,
         "xsl_combined_arms": True,
+        "rest_frame_correction_applied": True,
+        "rest_frame_correction_source": (
+            "XSL released-product documentation and REST_* header provenance"
+        ),
+        "needs_barycentric_correction": False,
+        "observer_motion_frame_status": (
+            "not_applicable_after_released_stellar_rest_correction"
+        ),
+        "barycentric_correction_value": bary_cor_kms,
+        "barycentric_correction_unit": "km/s" if bary_cor_kms is not None else None,
+        "barycentric_correction_status": (
+            "included_in_released_stellar_rest_wavelength_grid"
+        ),
+        "fitted_rv_kms_role": (
+            "residual model/data alignment check, not a new physical stellar RV"
+        ),
         "xsl_reference": "https://doi.org/10.1051/0004-6361/202142388",
         "xsl_header_provenance": xsl_header_provenance,
         "xsl_header_provenance_policy": (
@@ -1737,9 +1834,19 @@ def read_xsl_dr3(
         ),
         "xsl_arm_scaling_applied_by_spyctres": False,
         "xsl_rv_correction_applied_by_spyctres": False,
+        "barycentric_correction_applied_by_spyctres": False,
+        "stellar_rv_correction_applied_by_spyctres": False,
+        "velocity_corrections": {
+            "status": "record_only_already_in_released_wavelength_grid",
+            "bary_cor_kms": bary_cor_kms,
+            "rest_corrections_kms": rest_corrections_kms,
+            "applied_by_spyctres": False,
+        },
         "header": primary_meta,
         "table_header": table_meta,
     }
+    if bary_cor_kms is not None:
+        base_meta["barycorr_kms"] = bary_cor_kms
     name = os.path.basename(path)
 
     # DR3 overlap regions are smoothed to sigma_v=13 km/s over 545-590 nm and
@@ -2952,12 +3059,17 @@ register_reader(
     uncertainty_column="ERR",
     wavelength_unit="nm converted to Angstrom",
     default_wave_medium="air",
-    default_observer_frame="unknown",
+    default_observer_frame="not_applicable",
     default_stellar_rest_status="corrected",
     flux_state="DR3 merged/scaled full-spectrum flux",
     segment_structure="effective UVB/VIS/NIR LSF regions",
     resolving_power="documented sigma_kms per effective region",
     known_product_quality_masks=("XSL DR3 header provenance recorded",),
+    notes=(
+        "Official XSL DR3 released spectra are air-wavelength, combined-arm "
+        "stellar-rest products; BARY_COR/REST_* header values are recorded as "
+        "already included provenance and are not applied again."
+    ),
 )
 register_reader(
     ["xshooter", "x-shooter", "xsh", "xshooter_1d", "xshooter-1d"],

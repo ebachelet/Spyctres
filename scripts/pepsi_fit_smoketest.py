@@ -33,7 +33,10 @@ from Spyctres.fitting import (
     reconstruct_phoenix_legendre_models_for_segments,
 )
 from Spyctres.preprocessing import telluric_transmission_exclusion_mask
-from Spyctres.plotting import plot_full_spectrum_fit
+from Spyctres.plotting import (
+    plot_full_spectrum_fit,
+    plot_prepared_line_window_diagnostics,
+)
 from Spyctres.recipes import (
     apply_pepsi_wave_hypothesis,
     build_pepsi_normalized_mask,
@@ -613,37 +616,32 @@ def run_legacy_pepsi_fit(args, parser):
     print("  success  =", bool(res.success))
     print("  message  =", res.message)
 
-    wave_plot = concat_with_gap([seg.wave for seg in segments], gap_value=np.nan, dtype=float)
-    flux_plot = concat_with_gap([seg.flux for seg in segments], gap_value=np.nan, dtype=float)
-    err_plot = concat_with_gap([seg.err * (10.0 ** log_scale) for seg in segments], gap_value=np.nan, dtype=float)
-    model_plot = concat_with_gap(model_norm_list, gap_value=np.nan, dtype=float)
-    used_plot = concat_bool_with_gap(used_masks)
-    excl_plot = np.zeros_like(used_plot, dtype=bool)
+    plot_segments = [
+        seg.copy(err=np.asarray(seg.err, dtype=float) * (10.0 ** log_scale))
+        for seg in segments
+    ]
+    footer = (
+        "PEPSI legacy line-window validation: Teff={0:.0f} K, "
+        "[Fe/H]={1:.2f}, logg={2:.2f}, RV={3:.1f} km/s, chi2_red={4:.2f}."
+    ).format(teff, feh, logg, rv, chi2_red)
 
-    title = (
-        "PEPSI legacy_max {0}  Teff={1:.0f}  [Fe/H]={2:.2f}  "
-        "logg={3:.2f}  RV={4:.1f}  chi2_red={5:.2f}".format(
-            args.wave_hypothesis,
-            teff,
-            feh,
-            logg,
-            rv,
-            chi2_red,
-        )
+    print("Building paper-style line-window diagnostic plot...", flush=True)
+    fig, axes = plot_prepared_line_window_diagnostics(
+        plot_segments,
+        models=model_norm_list,
+        used_masks=used_masks,
+        title="PEPSI legacy line-window diagnostic",
+        footer=footer,
+        ncols=min(6, len(plot_segments)),
+        figsize_per_panel=(2.25, 2.35),
+        savepath=args.output_line_plot,
     )
-
-    print("Building diagnostic plot...", flush=True)
-    fig, axes = plot_full_spectrum_fit(
-        wave=wave_plot,
-        flux=flux_plot,
-        err=err_plot,
-        model=model_plot,
-        used_mask=used_plot,
-        excluded_mask=excl_plot,
-        title=title,
-        line_groups=None,
-    )
-    plt.show()
+    if args.output_line_plot:
+        print("Wrote line-window diagnostic plot:", args.output_line_plot, flush=True)
+    if args.no_show:
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def main():
@@ -726,6 +724,19 @@ def main():
             "Use a smaller PEPSI development grid and shorter optimization. "
             "Intended for code testing, not final science results."
         ),
+    )
+    standard.add_argument(
+        "--output-line-plot",
+        default=None,
+        help=(
+            "Save the diagnostic plot. In legacy_max mode this is a compact "
+            "paper-style grid with one panel per line window."
+        ),
+    )
+    standard.add_argument(
+        "--no-show",
+        action="store_true",
+        help="Do not open an interactive Matplotlib window after plotting.",
     )
 
     expert.add_argument(
@@ -1104,7 +1115,16 @@ def main():
         title=title,
         line_groups=None,
     )
-    plt.show()
+    if args.output_line_plot:
+        output_dir = os.path.dirname(os.path.expanduser(args.output_line_plot))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        fig.savefig(args.output_line_plot, dpi=160, bbox_inches="tight")
+        print("Wrote diagnostic plot:", args.output_line_plot, flush=True)
+    if args.no_show:
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 if __name__ == "__main__":

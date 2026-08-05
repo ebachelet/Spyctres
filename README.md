@@ -281,7 +281,8 @@ The numbered examples are the maintained learning path:
    separation.
 8. `examples/example8_pepsi_legacy_linefit_validation.py` /
    `examples/example8_pepsi_legacy_linefit_validation.ipynb` for PEPSI
-   legacy line-window compatibility validation.
+   legacy line-window compatibility validation and an optional compact
+   per-line data/model diagnostic grid.
 
 The same beginner workflow is available from one Python import:
 

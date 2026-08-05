@@ -479,6 +479,21 @@
       "affected_code": [
         "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
       ]
+    },
+    {
+      "id": "arxiv2503_22331_pepsi_line_windows",
+      "citation": "arXiv:2503.22331 (2025), PEPSI line-window model/data diagnostic figure.",
+      "doi": null,
+      "url": "https://arxiv.org/abs/2503.22331",
+      "validated_via": "arXiv abstract and PDF endpoints returned HTTP 200; Figure 4-style PEPSI line-window layout inspected from user-provided figure.",
+      "validated_on": "2026-08-04",
+      "description": "Provides the visual precedent for a compact PEPSI legacy diagnostic grid with one panel per fitted line window, normalized observed data with uncertainties, and a model overlay. Spyctres uses this reference only for the Example 8/PEPSI regression plot presentation; it does not change the likelihood, wavelength convention, or fitting algorithm.",
+      "affected_code": [
+        "Spyctres/plotting.py:plot_prepared_line_window_diagnostics",
+        "scripts/pepsi_fit_smoketest.py",
+        "examples/example8_pepsi_legacy_linefit_validation.py",
+        "examples/example8_pepsi_legacy_linefit_validation.ipynb"
+      ]
     }
   ]
 }

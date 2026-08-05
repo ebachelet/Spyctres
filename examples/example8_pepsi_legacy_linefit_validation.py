@@ -32,17 +32,19 @@ Inspection plot:
     --plot-dir /tmp/spyctres_example8_pepsi \
     --no-show
 
-Full legacy regression fit, requires PHOENIX:
+Full legacy regression fit, requires PHOENIX and creates a compact model
+overlay grid:
 
-  python scripts/pepsi_fit_smoketest.py \
-    --preset pepsi_legacy_red_fast \
-    examples/data/pepsir.20230603.009.dxt.nor \
-    examples/data/pepsir.20230603.010.dxt.nor
+  python examples/example8_pepsi_legacy_linefit_validation.py \
+    --run-legacy-fit \
+    --plot-dir /tmp/spyctres_example8_pepsi \
+    --no-show
 """
 
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -75,9 +77,8 @@ def build_parser():
             "  python examples/example8_pepsi_legacy_linefit_validation.py "
             "--plot-dir /tmp/spyctres_example8_pepsi --no-show\n\n"
             "Run the full legacy optimizer:\n"
-            "  python scripts/pepsi_fit_smoketest.py --preset pepsi_legacy_red_fast "
-            "examples/data/pepsir.20230603.009.dxt.nor "
-            "examples/data/pepsir.20230603.010.dxt.nor"
+            "  python examples/example8_pepsi_legacy_linefit_validation.py "
+            "--run-legacy-fit --plot-dir /tmp/spyctres_example8_pepsi --no-show"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -109,6 +110,15 @@ def build_parser():
     )
     parser.add_argument("--telluric-threshold", type=float, default=0.90)
     parser.add_argument("--plot-dir", default=None)
+    parser.add_argument(
+        "--run-legacy-fit",
+        action="store_true",
+        help=(
+            "Run the maintained PEPSI legacy PHOENIX regression fit and write "
+            "a compact data/model line-window diagnostic. Requires a configured "
+            "local PHOENIX library."
+        ),
+    )
     parser.add_argument("--no-show", action="store_true")
     return parser
 
@@ -209,46 +219,69 @@ def _print_collection_summary(collection):
 
 
 def _plot_collection(collection, plot_dir=None):
-    import matplotlib.pyplot as plt
-
-    nseg = len(collection.segments)
-    fig, axes = plt.subplots(
-        nseg,
-        1,
-        figsize=(11.5, max(2.0, 1.55 * nseg)),
-        sharex=False,
-        constrained_layout=True,
-    )
-    axes = np.atleast_1d(axes)
-    for ax, segment in zip(axes, collection.segments):
-        wave = np.asarray(segment.wave, dtype=float)
-        flux = np.asarray(segment.flux, dtype=float)
-        valid = np.asarray(segment.mask, dtype=bool) & np.isfinite(wave) & np.isfinite(flux)
-        ax.plot(wave[valid], flux[valid], color="0.15", lw=0.8, label="used")
-        if np.any(~valid):
-            ax.plot(
-                wave[~valid],
-                flux[~valid],
-                ".",
-                color="0.70",
-                ms=2,
-                label="not used",
-            )
-        ax.set_ylabel(str(segment.name))
-        ax.grid(alpha=0.18)
-    axes[-1].set_xlabel("Wavelength [Å]")
-    axes[0].set_title(
-        "Example 8: PEPSI legacy line windows; no PHOENIX fit has been run"
-    )
-    axes[0].legend(frameon=False, fontsize=8, loc="best")
-
+    savepath = None
     if plot_dir is not None:
         plot_dir = Path(plot_dir)
         plot_dir.mkdir(parents=True, exist_ok=True)
-        path = plot_dir / "example8_pepsi_legacy_windows.png"
-        fig.savefig(path, dpi=160)
-        print("Wrote", path)
+        savepath = plot_dir / "example8_pepsi_legacy_windows.png"
+    fig, _axes = sp.plot_prepared_line_window_diagnostics(
+        collection,
+        title="Example 8: PEPSI legacy line windows; no PHOENIX fit has been run",
+        footer=(
+            "Blue = prepared normalized PEPSI windows; gray = pixels not used by "
+            "the legacy mask. The orange model overlay appears only in the "
+            "optional PHOENIX legacy fit."
+        ),
+        ncols=min(6, len(collection.segments)),
+        savepath=savepath,
+    )
+    if savepath is not None:
+        print("Wrote", savepath)
     return fig
+
+
+def _legacy_fit_command(args, output_line_plot=None):
+    paths = [Path(path) for path in args.spectra] if args.spectra else _example_paths()
+    command = [
+        sys.executable,
+        str(_REPO_ROOT / "scripts" / "pepsi_fit_smoketest.py"),
+        "--preset",
+        "pepsi_legacy_red_fast",
+        "--wave-hypothesis",
+        args.wave_hypothesis,
+    ]
+    if args.use_telluric_mask:
+        command.extend(
+            ["--use-telluric-mask", "--telluric-threshold", str(args.telluric_threshold)]
+        )
+    if output_line_plot is not None:
+        command.extend(["--output-line-plot", str(output_line_plot)])
+    if args.no_show:
+        command.append("--no-show")
+    command.extend(str(path) for path in paths)
+    return command
+
+
+def _maybe_run_legacy_fit(args):
+    output_line_plot = None
+    if args.plot_dir is not None:
+        plot_dir = Path(args.plot_dir)
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        output_line_plot = plot_dir / "example8_pepsi_legacy_fit.png"
+
+    command = _legacy_fit_command(args, output_line_plot=output_line_plot)
+    print("\nMaintained full legacy fit command:")
+    print(" ".join(str(item) for item in command))
+
+    if not args.run_legacy_fit:
+        print(
+            "\nNot running the optimizer by default. Add --run-legacy-fit after "
+            "PHOENIX is configured to create the model-overlaid diagnostic grid."
+        )
+        return
+
+    print("\nRunning full PEPSI legacy regression fit...", flush=True)
+    subprocess.run(command, check=True)
 
 
 def main(argv=None):
@@ -257,18 +290,13 @@ def main(argv=None):
     _input_segments, collection = _build_collection(args)
     _print_collection_summary(collection)
     _plot_collection(collection, plot_dir=args.plot_dir)
+    _maybe_run_legacy_fit(args)
     _maybe_show(args.no_show)
-
-    print("\nTo run the maintained full legacy PHOENIX fit:")
-    print(
-        "  python scripts/pepsi_fit_smoketest.py --preset pepsi_legacy_red_fast "
-        "examples/data/pepsir.20230603.009.dxt.nor "
-        "examples/data/pepsir.20230603.010.dxt.nor"
-    )
     print(
         "\nInterpretation: this example validates PEPSI window preparation and "
-        "points to the shared regression runner. Do not infer wavelength frame "
-        "or stellar-rest corrections from the .dxt.nor suffix alone."
+        "can call the shared regression runner for a compact model/data grid. "
+        "Do not infer wavelength frame or stellar-rest corrections from the "
+        ".dxt.nor suffix alone."
     )
     return 0
 

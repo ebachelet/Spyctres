@@ -1,4 +1,5 @@
 import json
+import warnings
 
 import numpy as np
 import pytest
@@ -409,6 +410,10 @@ def test_xsl_dr3_reader_splits_effective_lsf_regions(tmp_path):
     ]
     primary = fits.PrimaryHDU()
     primary.header["REST_COR"] = (True, "stellar rest correction applied")
+    primary.header["REST_UVB"] = (-3.5, "UVB cz value in km/s")
+    primary.header["REST_VIS"] = (-14.2, "VIS cz value in km/s")
+    primary.header["REST_NIR"] = (-10.2, "NIR cz value in km/s")
+    primary.header["BARY_COR"] = (-28.0, "Barycentric radial velocity correction value")
     table = fits.BinTableHDU.from_columns(columns)
     table.header["S_U_VAL"] = (1.23, "UVB scale relative to VIS")
     fits.HDUList([primary, table]).writeto(path)
@@ -420,12 +425,47 @@ def test_xsl_dr3_reader_splits_effective_lsf_regions(tmp_path):
     assert [segment.resolution.value for segment in collection] == [13.0, 11.0, 16.0]
     assert all(segment.resolution.quantity == "sigma_kms" for segment in collection)
     assert all(segment.stellar_rest_status == "corrected" for segment in collection)
+    assert all(segment.observer_frame == "not_applicable" for segment in collection)
     assert all(segment.wave_medium == "air" for segment in collection)
+    assert collection.wavelength_medium == "air"
+    assert collection.stellar_rest is True
+    assert collection.needs_barycentric_correction is False
     assert np.array_equal(collection[0].wave, [5000.0, 5890.0])
     assert np.all(collection[0].flux == 2.0)
     provenance = collection.meta["xsl_header_provenance"]
     assert provenance["REST_COR"]["value"] is True
     assert "stellar rest" in provenance["REST_COR"]["comment"]
+    assert provenance["BARY_COR"]["value"] == pytest.approx(-28.0)
     assert provenance["S_U_VAL"]["value"] == pytest.approx(1.23)
+    assert collection.meta["rest_frame_correction_applied"] is True
+    assert collection.meta["needs_barycentric_correction"] is False
+    assert (
+        collection.meta["barycentric_correction_status"]
+        == "included_in_released_stellar_rest_wavelength_grid"
+    )
+    assert collection.meta["barycentric_correction_value"] == pytest.approx(-28.0)
+    assert collection.meta["barycentric_correction_unit"] == "km/s"
+    assert collection.meta["barycorr_kms"] == pytest.approx(-28.0)
+    assert collection.meta["velocity_corrections"]["bary_cor_kms"] == pytest.approx(-28.0)
+    assert collection.meta["velocity_corrections"]["rest_corrections_kms"] == {
+        "REST_UVB": pytest.approx(-3.5),
+        "REST_VIS": pytest.approx(-14.2),
+        "REST_NIR": pytest.approx(-10.2),
+    }
     assert collection.meta["xsl_arm_scaling_applied_by_spyctres"] is False
     assert collection.meta["xsl_rv_correction_applied_by_spyctres"] is False
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        from_dispatch = read_spectrum(path, reader="xsl_dr3")
+    messages = [str(item.message) for item in caught]
+    assert not any("observer frame is unknown" in message for message in messages)
+    assert from_dispatch.summary()["observer_frames"] == ["not_applicable"]
+    assert from_dispatch.summary()["stellar_rest_status"] == ["corrected"]
+    assert from_dispatch.meta["needs_barycentric_correction"] is False
+    assert from_dispatch.wavelength_medium == "air"
+    assert from_dispatch.stellar_rest is True
+    assert from_dispatch.needs_barycentric_correction is False
+    released_wave_A = wave_nm * 10.0
+    read_wave_A = np.concatenate([segment.wave for segment in from_dispatch])
+    np.testing.assert_allclose(read_wave_A, released_wave_A, rtol=0.0, atol=0.0)

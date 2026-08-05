@@ -11,6 +11,7 @@ from Spyctres.plotting import (
     plot_fit_referee,
     plot_line_fit_comparison,
     plot_model_line_windows,
+    plot_prepared_line_window_diagnostics,
     plot_spectrum,
     plot_spectrum_audit,
     plot_spectrum_line_windows,
@@ -343,6 +344,58 @@ def test_plot_model_line_windows_accepts_fit_result_directly():
 
     labels = [line.get_label() for line in axes[0, 0].lines]
     assert "continuum-adjusted model" in labels
+    fig.clf()
+
+
+def test_plot_prepared_line_window_diagnostics_saves_model_grid(tmp_path):
+    first_wave = np.linspace(6490.0, 6500.0, 25)
+    second_wave = np.linspace(6556.0, 6566.0, 31)
+    first = SpectrumSegment(
+        first_wave,
+        1.0 - 0.10 * np.exp(-0.5 * ((first_wave - 6495.0) / 0.35) ** 2),
+        err=np.full(first_wave.size, 0.02),
+        mask=np.ones(first_wave.size, dtype=bool),
+        name="legacy_6495.0",
+        meta={"legacy_window_air": ("legacy_6495.0", 6485.0, 6505.0)},
+    )
+    second_mask = np.ones(second_wave.size, dtype=bool)
+    second_mask[:4] = False
+    second_flux = 1.0 - 0.30 * np.exp(-0.5 * ((second_wave - 6561.0) / 1.5) ** 2)
+    second_flux[0] = 9.0
+    second = SpectrumSegment(
+        second_wave,
+        second_flux,
+        err=np.full(second_wave.size, 0.03),
+        mask=second_mask,
+        name="legacy_6561.0",
+        meta={"legacy_window_air": ("legacy_6561.0", 6551.0, 6571.0)},
+    )
+    models = [first.flux * 0.99, second.flux * 1.01]
+    path = tmp_path / "prepared" / "pepsi_grid.png"
+
+    fig, axes = plot_prepared_line_window_diagnostics(
+        SpectrumCollection([first, second]),
+        models=models,
+        used_masks=[first.mask, second.mask],
+        footer="PEPSI legacy line-window validation: synthetic test.",
+        savepath=path,
+        ncols=2,
+    )
+
+    assert path.exists()
+    assert fig.spyctres_generated_files == {
+        "prepared_line_window_plot": str(path)
+    }
+    assert axes.shape == (1, 2)
+    assert axes[0, 0].get_title() == "6495.0"
+    assert axes[0, 1].get_title() == "6561.0"
+    assert axes[0, 0].get_ylim() == axes[0, 1].get_ylim()
+    assert axes[0, 0].get_ylim()[1] < 2.0
+    labels = [line.get_label() for line in axes[0, 0].lines]
+    assert "Model" in labels
+    legend = axes[0, 0].get_legend()
+    legend_labels = [text.get_text() for text in legend.get_texts()]
+    assert "Data" in legend_labels
     fig.clf()
 
 
