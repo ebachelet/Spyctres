@@ -130,3 +130,13 @@ def test_example_documentation_uses_current_reader_and_example_names():
     assert "examples/xsl_figure1_validation.ipynb" not in text
     assert "examples/pepsi_legacy_linefit_validation.ipynb" not in text
     assert "examples/reviewed_xshooter_uvb_analysis.py" not in text
+
+
+def test_quick_example_points_to_maintained_workflows():
+    text = (REPO_ROOT / "quick_example.py").read_text(encoding="utf-8")
+
+    assert "examples/simple_phoenix_fit.py" not in text
+    assert "--instrument" not in text
+    assert "example1_quickstart.py" in text
+    assert "example5_batch_fitting.py" in text
+    assert 'reader="xshooter_merge1d"' in text
