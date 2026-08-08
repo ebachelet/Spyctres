@@ -5,10 +5,10 @@ numbered example has a Python script and a matching no-output notebook with the
 same stem.  The scripts are convenient for command-line checks; the notebooks
 are the preferred teaching format.
 
-All maintained examples use spectra bundled under `examples/data/`.  External
-SDSS, UVES-POP, PEPSI, XSL, or local spectra can still be read by Spyctres, but
-they should be passed explicitly by the user and are not assumed by the
-reproducible examples.
+All maintained examples use curated spectra or validation payloads bundled
+under `examples/data/`.  User-supplied external SDSS, UVES-POP, PEPSI, XSL, or
+local spectra can still be read by Spyctres, but they should be passed
+explicitly by the user and are not assumed by the reproducible examples.
 
 ## Recommended order
 

@@ -303,7 +303,8 @@ sp.plot_diagnostic_windows(spec, windows)
 
 line_results = sp.fit_lines(spec, ["Hgamma", "Mg II 4481"])
 line_summary = sp.compare_line_fits(line_results)
-sp.plot_line_fit_comparison(line_summary)
+print(line_summary.summary_text())
+sp.plot_line_fit_comparison(line_results, labels=["Hgamma", "Mg II 4481"])
 sp.plot_line_fit(line_results[0])
 
 result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)
@@ -313,9 +314,14 @@ sp.plot_fit_referee(result)
 For explicit mask review, keep warning and masking choices visible:
 
 ```python
-mask = sp.build_mask(spec, archive=True, tellurics="warn")
-sp.plot_spectrum(spec, mask=mask, show_nonstellar=True)
-result_masked = sp.fit_stellar_spectrum(spec, exclude_masks=mask, resolution_R=6200)
+mask_bundle = sp.build_mask(spec, archive=True, tellurics="warn")
+print(mask_bundle.summary_text())
+sp.plot_spectrum(spec, mask=mask_bundle, show_nonstellar=True)
+result_masked = sp.fit_stellar_spectrum(
+    spec,
+    valid_mask=mask_bundle.valid_mask,
+    resolution_R=6200,
+)
 comparison = sp.compare_fits(result, result_masked, labels=("baseline", "masked"))
 ```
 
@@ -345,8 +351,9 @@ alpha, but the recommended beginner route is the grouped one-import path above.
 classification; it should not be read as a formal MK-classification engine or
 as a substitute for reviewed atmospheric-parameter fitting.
 
-Older unnumbered examples are retained only as advanced, validation, or
-compatibility material; smoke tests live under `scripts/`. See
+The maintained learning path is the numbered example set. The unnumbered
+`examples/batch_quickscan_then_refine.py` file is an operational helper used by
+Example 5, while smoke tests and validation runners live under `scripts/`. See
 `examples/README.md` for data paths, PHOENIX configuration, caveats, and the
 same recommended order with more detail.
 
@@ -804,7 +811,7 @@ PHOENIX support should still be treated as alpha.
 
 In particular:
 
-- the example notebook is a first-pass classification workflow, not a final precision analysis
+- the quickstart and example workflows are alpha demonstrations, not automatic final precision analyses
 - some workflows still require user judgment for wavelength windows, masking, resolving power, and continuum treatment
 - instrument-specific metadata quality varies across input formats
 - packaging and documentation are still being stabilized
