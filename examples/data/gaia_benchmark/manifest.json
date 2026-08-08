@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "description": "Small bundled Gaia FGK Benchmark Stars Library subset for Spyctres validation examples. These are public GBSv3 R=42000 normalized HARPS spectra over 480-680 nm.",
+  "source_page": "https://www.blancocuaresma.com/s/benchmarkstars",
+  "source_release": "2025/GBSv3",
+  "reader": "gaia_benchmark",
+  "product": {
+    "format": "gzip-compressed whitespace text",
+    "columns": [
+      "waveobs",
+      "flux",
+      "err"
+    ],
+    "wave_unit": "nm",
+    "spyctres_wave_unit": "Angstrom",
+    "flux_state": "continuum-normalized",
+    "resolution_R": 42000.0,
+    "wavelength_range_nm": [
+      480.0,
+      680.0
+    ],
+    "observer_frame": "barycentric",
+    "stellar_rest_status": "corrected",
+    "wave_medium": "air",
+    "wave_medium_source": "Spyctres GBSv3 R42KNorm reader profile; verified for bundled examples by optical line-center checks because the web table does not state air/vacuum explicitly",
+    "mask_policy": "No separate mask files are bundled. Spyctres uses finite wavelength/flux and positive finite error values, then records any later diagnostic masks explicitly."
+  },
+  "citations": [
+    "blanco_cuaresma2014_gbs_spectral_library",
+    "casamiquela2026_gbs_v3_spectral_library"
+  ],
+  "spectra": [
+    {
+      "file": "HIP37279_HARPS_1_R42KNorm.txt.gz",
+      "sha256": "b71186c314309b8763f7752158d177407d0658240f79ea5423c048daa96748d5",
+      "source_url": "https://www.blancocuaresma.com/s/repository/gaia_benchmark_stars_library/2025/all/HIP37279_HARPS_1_R42KNorm.txt.gz",
+      "hip": "HIP37279",
+      "hd": "HD61421",
+      "name": "Procyon",
+      "spectral_type": "F Subgiant (IV)",
+      "source_instrument": "HARPS",
+      "teff_ref": 6582.0,
+      "logg_ref": 3.98,
+      "feh_ref": -0.03,
+      "snr": 728.0,
+      "source_quality_flag": "-",
+      "validation_role": "standard",
+      "notes": "F-type subgiant benchmark; useful for ordinary FGK recovery checks."
+    },
+    {
+      "file": "HIP69673_HARPS_1_R42KNorm.txt.gz",
+      "sha256": "43b7d40dc5d4fb34740509c49af3053d6ca61c0912843832e32065d78b908ce3",
+      "source_url": "https://www.blancocuaresma.com/s/repository/gaia_benchmark_stars_library/2025/all/HIP69673_HARPS_1_R42KNorm.txt.gz",
+      "hip": "HIP69673",
+      "hd": "HD124897",
+      "name": "Arcturus",
+      "spectral_type": "K Giant (III)",
+      "source_instrument": "HARPS",
+      "teff_ref": 4277.0,
+      "logg_ref": 1.58,
+      "feh_ref": -0.55,
+      "snr": 382.0,
+      "source_quality_flag": "-",
+      "validation_role": "standard",
+      "notes": "K giant benchmark; useful for testing gravity and cool-star optical-metal behaviour."
+    },
+    {
+      "file": "HIP76976_HARPS_1_R42KNorm.txt.gz",
+      "sha256": "064b69e0969c2c77c94f7c806eed2213f4fe45e868a85609f72a963a38b96071",
+      "source_url": "https://www.blancocuaresma.com/s/repository/gaia_benchmark_stars_library/2025/all/HIP76976_HARPS_1_R42KNorm.txt.gz",
+      "hip": "HIP76976",
+      "hd": "HD140283",
+      "name": "HD140283",
+      "spectral_type": "G Subgiant (IV)",
+      "source_instrument": "HARPS",
+      "teff_ref": 5788.0,
+      "logg_ref": 3.75,
+      "feh_ref": -2.41,
+      "snr": 419.0,
+      "source_quality_flag": "-",
+      "validation_role": "metal_poor_stress",
+      "notes": "Very metal-poor benchmark. Include in diagnostics, but report separately from ordinary recovery statistics until alpha-enhancement/composition handling is validated."
+    },
+    {
+      "file": "HIP79672_HARPS_1_R42KNorm.txt.gz",
+      "sha256": "105bba101f84d813169dbefdbd41986126a77960192b22905757493293240469",
+      "source_url": "https://www.blancocuaresma.com/s/repository/gaia_benchmark_stars_library/2025/all/HIP79672_HARPS_1_R42KNorm.txt.gz",
+      "hip": "HIP79672",
+      "hd": "HD146233",
+      "name": "18 Sco",
+      "spectral_type": "G Dwarf (V)",
+      "source_instrument": "HARPS",
+      "teff_ref": 5824.0,
+      "logg_ref": 4.42,
+      "feh_ref": 0.06,
+      "snr": 1040.0,
+      "source_quality_flag": "-",
+      "validation_role": "standard",
+      "notes": "Solar-analog dwarf benchmark; useful as the cleanest ordinary FGK recovery check."
+    }
+  ]
+}

@@ -1,0 +1,499 @@
+{
+  "schema_version": 1,
+  "description": "Validated scientific literature relevant to algorithms and scientific data products implemented or maintained in Spyctres. Links are checked before entries are added; affected_code identifies where each reference informs behavior.",
+  "references": [
+    {
+      "id": "cappellari2017_accurate_convolution",
+      "citation": "Cappellari, M. (2017), Improving the full spectrum fitting method: accurate convolution with Gauss-Hermite functions, Monthly Notices of the Royal Astronomical Society, 466, 798-811.",
+      "doi": "10.1093/mnras/stw3020",
+      "url": "https://doi.org/10.1093/mnras/stw3020",
+      "validated_via": "Crossref metadata and DOI resolution",
+      "validated_on": "2026-07-04",
+      "description": "Develops an analytic Fourier-domain treatment of line-of-sight and instrumental broadening that remains accurate near the Nyquist sampling limit. Spyctres uses this rationale for its Gaussian log-wavelength FFT convolution, including an analytic kernel transform rather than a directly sampled narrow kernel.",
+      "affected_code": [
+        "Spyctres/phoenix_forward.py:convolve_to_resolution_loglam"
+      ]
+    },
+    {
+      "id": "husser2013_phoenix_library",
+      "citation": "Husser, T.-O. et al. (2013), A new extensive library of PHOENIX stellar atmospheres and synthetic spectra, Astronomy & Astrophysics, 553, A6.",
+      "doi": "10.1051/0004-6361/201219058",
+      "url": "https://doi.org/10.1051/0004-6361/201219058",
+      "validated_via": "Publisher article and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Describes the PHOENIX synthetic spectral library used by the template backend, including its 2300-12000 K parameter coverage, LTE assumptions, and wavelength conventions. It is the primary scientific reference for the model spectra loaded, interpolated, and fitted by the PHOENIX workflow, and supports the hard guard against using this grid above 12000 K.",
+      "affected_code": [
+        "Spyctres/phoenix.py",
+        "Spyctres/phoenix_forward.py",
+        "Spyctres/waveutils.py"
+      ]
+    },
+    {
+      "id": "ciddor1996_refractive_index",
+      "citation": "Ciddor, P. E. (1996), Refractive index of air: new equations for the visible and near infrared, Applied Optics, 35, 1566-1573.",
+      "doi": "10.1364/AO.35.001566",
+      "url": "https://doi.org/10.1364/AO.35.001566",
+      "validated_via": "Optica DOI resolution and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Provides the refractive-index relation currently used by Spyctres for explicit air-to-vacuum and vacuum-to-air wavelength conversion. Centralizing this citation makes the adopted wavelength-medium convention auditable and distinguishes it from alternative Edlen or Morton formulations.",
+      "affected_code": [
+        "Spyctres/waveutils.py:_ciddor_factor_from_vacuum_angstrom",
+        "Spyctres/waveutils.py:vacuum_to_air_ciddor",
+        "Spyctres/waveutils.py:air_to_vacuum_ciddor"
+      ]
+    },
+    {
+      "id": "carnall2017_spectres",
+      "citation": "Carnall, A. C. (2017), SpectRes: A Fast Spectral Resampling Tool in Python, arXiv:1705.05165.",
+      "arxiv": "1705.05165",
+      "url": "https://arxiv.org/abs/1705.05165",
+      "validated_via": "arXiv abstract and metadata API",
+      "validated_on": "2026-07-04",
+      "description": "Presents a flux-conserving method for resampling spectral flux densities and uncertainties on arbitrary wavelength grids. The legacy Spyctres binning routine cites this work; its conservation principle also informs validation of modern resampling paths, although the production LSF implementation uses its own tested log-grid rebinning algorithm.",
+      "affected_code": [
+        "Spyctres/Spyctres.py:bin_spectrum",
+        "Spyctres/Spyctres_old.py:bin_spectrum",
+        "Spyctres/phoenix_forward.py:_rebin_flux_density_piecewise_constant"
+      ]
+    },
+    {
+      "id": "morton2000_atomic_wavelengths",
+      "citation": "Morton, D. C. (2000), Atomic Data for Resonance Absorption Lines. II. Wavelengths Longward of the Lyman Limit for Heavy Elements, The Astrophysical Journal Supplement Series, 130, 403-436.",
+      "doi": "10.1086/317349",
+      "url": "https://doi.org/10.1086/317349",
+      "validated_via": "IOP DOI resolution and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Documents the vacuum-to-air refractive-index convention adopted by VALD3 for wavelengths above 2000 Angstrom. Spyctres exposes this convention as the vacuum-to-air half of the explicitly selected vald3 conversion method rather than silently mixing it with the Ciddor implementation.",
+      "affected_code": [
+        "Spyctres/waveutils.py:vacuum_to_air_vald",
+        "Spyctres/waveutils.py:convert_wavelength_medium"
+      ]
+    },
+    {
+      "id": "birch_downs1994_refractive_index",
+      "citation": "Birch, K. P. & Downs, M. J. (1994), Correction to the Updated Edlen Equation for the Refractive Index of Air, Metrologia, 31, 315-316.",
+      "doi": "10.1088/0026-1394/31/4/006",
+      "url": "https://doi.org/10.1088/0026-1394/31/4/006",
+      "validated_via": "IOP DOI resolution and Crossref metadata",
+      "validated_on": "2026-07-04",
+      "description": "Provides the corrected refractive-index basis cited by Morton and the VALD3 wavelength-conversion documentation. It establishes the physical dry-air conditions underlying the vald3 conversion, which are distinct from the separately available Ciddor method.",
+      "affected_code": [
+        "Spyctres/waveutils.py:vacuum_to_air_vald"
+      ]
+    },
+    {
+      "id": "vald3_air_vacuum_documentation",
+      "citation": "VALD3 Documentation, Wavelength conversion air <-> vacuum, including the reversible air-to-vacuum inverse derived by N. Piskunov.",
+      "url": "https://www.astro.uu.se/valdwiki/Air-to-vacuum%20conversion",
+      "validated_via": "Official VALD documentation page and coefficient comparison",
+      "validated_on": "2026-07-04",
+      "description": "This is the authoritative technical source for the exact Piskunov inverse coefficients historically embedded in the legacy get_element_lines implementation. The formula is paired with the Morton vacuum-to-air relation, is defined only above 2000 Angstrom, and is retained as an explicitly named compatibility method.",
+      "affected_code": [
+        "Spyctres/waveutils.py:air_to_vacuum_vald",
+        "Spyctres/Spyctres.py:get_element_lines"
+      ]
+    },
+    {
+      "id": "nasa_exoplanet_archive_pets_pepsi",
+      "citation": "NASA Exoplanet Archive, PEPSI Exoplanet Transit Survey (PETS) Data at the Exoplanet Archive.",
+      "url": "https://exoplanetarchive.ipac.caltech.edu/docs/PEPSIMission.html",
+      "validated_via": "Official NASA Exoplanet Archive page; product description and FITS-column documentation inspected",
+      "validated_on": "2026-07-04",
+      "description": "Documents PETS Arg as air wavelength in microns and states that the wavelength array has already been shifted to the stellar centre-of-mass rest frame using RADVEL and OBSVEL. This is the authority for the opt-in PETS reader profile and its guard against applying an observer correction a second time.",
+      "affected_code": [
+        "Spyctres/io.py:read_pepsi_nor",
+        "Spyctres/io.py:pepsi_ssbvel_correction_kms",
+        "scripts/pepsi_fit_smoketest.py"
+      ]
+    },
+    {
+      "id": "pepsi_sds_reduction_manual_v1",
+      "citation": "Ilyin, I. (2020), PEPSI Spectroscopic Data Systems: Data Reduction User Manual, Version 1.0.",
+      "url": "https://pepsi.aip.de/wp-content/uploads/2022/11/PEPSI_DR_User_Manual_V1.0.pdf",
+      "validated_via": "Official PEPSI PDF; pipeline, wavelength-calibration, slice-merging, and DXT naming sections inspected",
+      "validated_on": "2026-07-04",
+      "description": "Describes PEPSI SDS reduction stages and identifies DXT as a slicer/side designation. It supports the rule that a .dxt.nor filename is not evidence for a wavelength reference frame, so release-specific semantics must be selected from documentation or headers.",
+      "affected_code": [
+        "Spyctres/io.py:read_pepsi_nor"
+      ]
+    },
+    {
+      "id": "cds_pepsi_aanda_671_a7",
+      "citation": "CDS ReadMe for A&A 671, A7 (2023), PEPSI spectra data-product description.",
+      "url": "https://cdsarc.cds.unistra.fr/viz-bin/ReadMe/J/A%2BA/671/A7?format=html&tex=true",
+      "validated_via": "Official CDS ReadMe; Arg column unit and Solar-System-barycentric scale inspected",
+      "validated_on": "2026-07-04",
+      "description": "Documents a PEPSI release whose Arg column is in Angstrom and on the Solar System barycentric wavelength scale. It demonstrates why PEPSI release profiles must remain explicit and why PETS microns/stellar-rest semantics cannot be inferred for arbitrary .nor files.",
+      "affected_code": [
+        "Spyctres/io.py:read_pepsi_nor",
+        "Spyctres/io.py:pepsi_ssbvel_correction_kms"
+      ]
+    },
+    {
+      "id": "blanco_cuaresma2014_gbs_spectral_library",
+      "citation": "Blanco-Cuaresma, S., Soubiran, C., Jofre, P., & Heiter, U. (2014), The Gaia FGK benchmark stars. High resolution spectral library, Astronomy & Astrophysics, 566, A98.",
+      "doi": "10.1051/0004-6361/201323153",
+      "url": "https://doi.org/10.1051/0004-6361/201323153",
+      "validated_via": "CDS ReadMe J/A+A/566/A98, DOI metadata, and official benchmark-stars archive page",
+      "validated_on": "2026-07-24",
+      "description": "Introduces the Gaia FGK Benchmark Stars high-resolution spectral library as a homogeneous calibration set for testing stellar-analysis methods and cross-calibrating spectroscopic surveys. Spyctres uses this work as the historical reference for treating benchmark-star spectra as external validation data rather than training or hidden-prior inputs.",
+      "affected_code": [
+        "Spyctres/io.py:read_gaia_benchmark_ascii",
+        "examples/data/gaia_benchmark/manifest.json"
+      ]
+    },
+    {
+      "id": "casamiquela2026_gbs_v3_spectral_library",
+      "citation": "Casamiquela, L. et al. (2026), Gaia FGK benchmark stars: Spectral library and abundances of alpha and Fe-peak elements of the third version, Astronomy & Astrophysics, 705, A167.",
+      "doi": "10.1051/0004-6361/202555211",
+      "url": "https://doi.org/10.1051/0004-6361/202555211",
+      "validated_via": "A&A/DOI metadata, official benchmark-stars page, and downloaded file headers/links",
+      "validated_on": "2026-07-24",
+      "description": "Provides the current GBSv3 high-S/N visual spectral library and reference parameters/abundances for FGK benchmark stars. The bundled Spyctres example subset uses its public 480-680 nm HARPS spectra degraded to common R=42000 and normalized flux, with reference parameters recorded only for validation comparison. Spyctres treats the R42KNorm wavelength scale as air in its reader profile based on bundled optical line-center checks, while preserving that this is an empirical product-profile convention because the public web table does not explicitly state air/vacuum.",
+      "affected_code": [
+        "Spyctres/io.py:read_gaia_benchmark_ascii",
+        "examples/data/gaia_benchmark/manifest.json",
+        "examples/data/gaia_benchmark/README.md"
+      ]
+    },
+    {
+      "id": "verro2022_xsl_dr3",
+      "citation": "Verro, K. et al. (2022), The X-shooter Spectral Library (XSL): Data Release 3, Astronomy & Astrophysics, 660, A34.",
+      "doi": "10.1051/0004-6361/202142388",
+      "url": "https://doi.org/10.1051/0004-6361/202142388",
+      "validated_via": "Publisher metadata, official XSL DR3 site, and CDS catalogue description",
+      "validated_on": "2026-07-05",
+      "description": "Defines the XSL DR3 combined-arm, air-wavelength, stellar-rest-frame spectral products and their effective arm-dependent velocity resolutions. It also supplies the Figure 1 reference-star sequence and the adopted parameters for the added M dwarfs. Spyctres uses these semantics for ingestion and empirical PHOENIX classification validation.",
+      "affected_code": [
+        "Spyctres/io.py:read_xsl_dr3",
+        "tests/test_io_canonical.py:test_xsl_dr3_reader_splits_effective_lsf_regions",
+        "examples/xsl_figure1_validation.ipynb",
+        "examples/xsl_validation_manifest.csv"
+      ]
+    },
+    {
+      "id": "xsl_dr3_format_documentation",
+      "citation": "X-shooter Spectral Library, XSL DR3 Data Format documentation.",
+      "url": "https://xsl.astro.unistra.fr/page_dr3_format.html",
+      "validated_via": "Official XSL project data-format page",
+      "validated_on": "2026-07-05",
+      "description": "Documents the DR3 FITS table columns, wavelength unit in nm, logarithmic sampling, stellar-rest-frame status, corrected-flux variants, and Gaussian velocity sigma for each effective arm/overlap region. The companion DR3 paper establishes that the wavelengths are in air.",
+      "affected_code": [
+        "Spyctres/io.py:read_xsl_dr3"
+      ]
+    },
+    {
+      "id": "arentsen2019_xsl_parameters",
+      "citation": "Arentsen, A. et al. (2019), Stellar atmospheric parameters for 754 spectra from the X-shooter Spectral Library, Astronomy & Astrophysics, 627, A138.",
+      "doi": "10.1051/0004-6361/201834273",
+      "url": "https://doi.org/10.1051/0004-6361/201834273",
+      "validated_via": "A&A publisher article and CDS catalogue J/A+A/627/A138",
+      "validated_on": "2026-07-05",
+      "description": "Provides homogeneous effective temperatures, surface gravities, metallicities, and uncertainties derived from XSL UVB/VIS spectra. These adopted values form the primary comparison set for seven of the Figure 1 stars; the paper's precision estimates and carbon-star flag prevent the benchmark from treating every reference value as equally secure.",
+      "affected_code": [
+        "examples/xsl_validation_manifest.csv",
+        "examples/xsl_figure1_validation.ipynb",
+        "scripts/xsl_validation.py"
+      ]
+    },
+    {
+      "id": "gonneau2017_xsl_carbon_models",
+      "citation": "Gonneau, A. et al. (2017), Carbon stars in the X-Shooter Spectral Library: II. Comparison with models, Astronomy & Astrophysics, 601, A141.",
+      "doi": "10.1051/0004-6361/201629750",
+      "url": "https://doi.org/10.1051/0004-6361/201629750",
+      "validated_via": "A&A publication metadata, arXiv 1702.00819, and the published model-comparison tables",
+      "validated_on": "2026-07-05",
+      "description": "Derives separate optical and near-infrared atmospheric-parameter ranges for XSL carbon stars using carbon-rich models with C/O as an explicit dimension. For X0013 it favors temperatures near 3400 K, log(g) near 0, and [Fe/H] near -0.5. Because the present Spyctres PHOENIX grid does not fit C/O, X0013 is retained as a deliberate model-mismatch stress test rather than an ordinary accuracy benchmark.",
+      "affected_code": [
+        "examples/xsl_validation_manifest.csv",
+        "examples/xsl_figure1_validation.ipynb"
+      ]
+    },
+    {
+      "id": "lancon2021_xsl_phoenix_comparison",
+      "citation": "Lançon, A. et al. (2021), A comparison between X-shooter spectra and PHOENIX models across the HR-diagram, Astronomy & Astrophysics, 649, A97.",
+      "doi": "10.1051/0004-6361/202039371",
+      "url": "https://doi.org/10.1051/0004-6361/202039371",
+      "validated_via": "A&A publisher PDF, DOI metadata, and official XSL papers index",
+      "validated_on": "2026-07-05",
+      "description": "Directly compares XSL spectra with PHOENIX-based Göttingen models. It finds wavelength-arm-dependent parameter offsets and increasingly structured residuals below about 5000 K, especially in the UVB, providing the scientific basis for reporting individual-star residuals and model-stress categories instead of reducing this validation to a single pass/fail statistic.",
+      "affected_code": [
+        "examples/xsl_figure1_validation.ipynb",
+        "scripts/xsl_validation.py"
+      ]
+    },
+    {
+      "id": "kunder2017_rave_dr5",
+      "citation": "Kunder, A. et al. (2017), The Radial Velocity Experiment (RAVE): Fifth Data Release, The Astronomical Journal, 153, 75.",
+      "doi": "10.3847/1538-3881/153/2/75",
+      "url": "https://doi.org/10.3847/1538-3881/153/2/75",
+      "validated_via": "Journal DOI metadata and publisher-version PDF",
+      "validated_on": "2026-07-05",
+      "description": "Supplies the external RAVE atmospheric parameters used by the XSL DR3 study when assessing LTT 2544. The validation manifest uses the XSL DR3 adopted fit for this star, while this reference records the independent provenance against which that M-dwarf estimate was checked.",
+      "affected_code": [
+        "examples/xsl_validation_manifest.csv",
+        "examples/xsl_figure1_validation.ipynb"
+      ]
+    },
+    {
+      "id": "cappellari2023_ppxf_optimization",
+      "citation": "Cappellari, M. (2023), Full spectrum fitting with photometry in pPXF: stellar population versus dynamical masses, non-parametric star formation history and metallicity for 3200 LEGA-C galaxies at redshift z approximately 0.8, Monthly Notices of the Royal Astronomical Society, 526, 3273-3300.",
+      "doi": "10.1093/mnras/stad2597",
+      "url": "https://doi.org/10.1093/mnras/stad2597",
+      "validated_via": "MNRAS publisher paper, arXiv 2208.14974, and CapFit documentation",
+      "validated_on": "2026-07-06",
+      "description": "Describes pPXF's separable optimization architecture and CapFit nonlinear least-squares method. It supports Spyctres' decision to solve multiplicative continuum coefficients exactly as a linear subproblem inside each nonlinear atmospheric-parameter evaluation while retaining SciPy's bounded least-squares optimizer for the small nonlinear parameter set. The pPXF implementation also provides a useful precedent for keeping good-pixel masks explicit and for plotting the best-fitting model without implying masked pixels were used in the fit.",
+      "affected_code": [
+        "Spyctres/fitting.py:_solve_multiplicative_legendre",
+        "Spyctres/fitting.py:fit_phoenix_full_spectrum",
+        "Spyctres/plotting.py:plot_fit_referee"
+      ]
+    },
+    {
+      "id": "hobbs2008_dib_catalog_hd204827",
+      "citation": "Hobbs, L. M. et al. (2008), A Catalog of Diffuse Interstellar Bands in the Spectrum of HD 204827, The Astrophysical Journal, 680, 1256-1270.",
+      "arxiv": "0804.2094",
+      "url": "https://arxiv.org/abs/0804.2094",
+      "validated_via": "arXiv abstract and metadata; optical diffuse-interstellar-band catalogue scope inspected",
+      "validated_on": "2026-07-12",
+      "description": "Presents a high-resolution optical catalogue of diffuse interstellar bands between 3900 and 8100 Angstrom. Spyctres uses this as a general literature basis for treating DIBs as non-photospheric absorption that should be annotated or optionally masked rather than interpreted as missing PHOENIX stellar-atmosphere opacity.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/preprocessing.py:find_known_nonstellar_features",
+        "Spyctres/diagnostics.py:KNOWN_RESIDUAL_WINDOWS",
+        "examples/simple_phoenix_fit.py"
+      ]
+    },
+    {
+      "id": "garcia_hernandez2013_fullerene_pn_dibs",
+      "citation": "García-Hernández, D. A. & Díaz-Luis, J. J. (2013), Diffuse interstellar bands in fullerene planetary nebulae: the fullerenes - diffuse interstellar bands connection, Astronomy & Astrophysics, 550, L6.",
+      "doi": "10.1051/0004-6361/201220617",
+      "arxiv": "1301.0242",
+      "url": "https://arxiv.org/abs/1301.0242",
+      "validated_via": "arXiv abstract, DOI metadata, and paper summary mentioning the very broad 4428 Angstrom DIB",
+      "validated_on": "2026-07-12",
+      "description": "Discusses the very broad 4428 Angstrom diffuse interstellar band and its unusually intense appearance in fullerene-bearing planetary nebulae. Spyctres uses this reference for the explicit DIB 4428 non-stellar feature annotation and optional masking guardrail.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/preprocessing.py:find_known_nonstellar_features",
+        "Spyctres/diagnostics.py:KNOWN_RESIDUAL_WINDOWS",
+        "Spyctres/plotting.py:plot_fit_referee",
+        "examples/simple_phoenix_fit.py"
+      ]
+    },
+    {
+      "id": "galazutdinov2020_very_broad_dibs",
+      "citation": "Galazutdinov, G. et al. (2020), Survey of very broad Diffuse Interstellar Bands, Monthly Notices of the Royal Astronomical Society, 494, 3091-3097.",
+      "arxiv": "2003.02328",
+      "url": "https://arxiv.org/abs/2003.02328",
+      "validated_via": "arXiv abstract and metadata; paper summary explicitly identifies the very broad 4882 Angstrom DIB",
+      "validated_on": "2026-07-12",
+      "description": "Studies very broad diffuse interstellar bands, including features at approximately 4430 and 4882 Angstrom. Spyctres uses this reference for the DIB 4882 catalog entry and for warning that absorption near the H-beta red wing may be non-stellar contamination rather than missing PHOENIX stellar opacity.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES",
+        "Spyctres/preprocessing.py:find_known_nonstellar_features",
+        "Spyctres/diagnostics.py:KNOWN_RESIDUAL_WINDOWS",
+        "examples/simple_phoenix_fit.py"
+      ]
+    },
+    {
+      "id": "kimeswenger2020_o2_aband_telluric",
+      "citation": "Kimeswenger, S. et al. (2020), Refined Telluric Absorption Correction for Low-Resolution Ground-Based Spectroscopy: Resolution and Radial Velocity Effects in the O2 A-Band for Exoplanets and K I Emission Lines, arXiv:2011.10845.",
+      "arxiv": "2011.10845",
+      "url": "https://arxiv.org/abs/2011.10845",
+      "validated_via": "arXiv abstract and metadata; paper summary inspected for O2 A-band telluric correction context",
+      "validated_on": "2026-07-12",
+      "description": "Discusses telluric correction for the molecular oxygen A-band and shows that low-resolution correction errors can depend on target radial velocity and line profiles. Spyctres uses this as a reference for treating O2 A-band absorption as a topocentric known-feature warning rather than a stellar or interstellar feature.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES"
+      ]
+    },
+    {
+      "id": "ulmer_moll2019_telluric_correction",
+      "citation": "Ulmer-Moll, S. et al. (2019), Telluric correction in the near-infrared: Standard star or synthetic transmission?, arXiv:1811.08915.",
+      "arxiv": "1811.08915",
+      "url": "https://arxiv.org/abs/1811.08915",
+      "validated_via": "arXiv abstract and metadata; paper summary inspected for O2 and H2O telluric correction context",
+      "validated_on": "2026-07-12",
+      "description": "Compares telluric correction methods and highlights oxygen and water-vapour residuals as important limits in ground-based spectra. Spyctres uses this as a general reference for topocentric O2/H2O known-feature catalog entries and future unified telluric/non-stellar provenance.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES"
+      ]
+    },
+    {
+      "id": "maier2011_h2ccc_dib_candidates",
+      "citation": "Maier, J. P. et al. (2011), Identification of H2CCC as a diffuse interstellar band carrier, arXiv:1011.0401.",
+      "arxiv": "1011.0401",
+      "url": "https://arxiv.org/abs/1011.0401",
+      "validated_via": "arXiv abstract and metadata; paper summary inspected for the 6150-6330 Angstrom region and telluric O2 alpha-band contamination note",
+      "validated_on": "2026-07-12",
+      "description": "Discusses DIB candidate structure in the 6150-6330 Angstrom region and notes telluric O2 alpha-band obscuration. Spyctres uses this as support for cross-referencing the DIB 6284 region with nearby topocentric telluric oxygen absorption rather than treating all apparent absorption there as interstellar.",
+      "affected_code": [
+        "Spyctres/preprocessing.py:NONSTELLAR_FEATURES"
+      ]
+    },
+    {
+      "id": "garcia_perez2016_aspcap",
+      "citation": "Garcia Perez, A. E. et al. (2016), ASPCAP: The APOGEE Stellar Parameter and Chemical Abundances Pipeline, The Astronomical Journal, 151, 144.",
+      "doi": "10.3847/0004-6256/151/6/144",
+      "url": "https://doi.org/10.3847/0004-6256/151/6/144",
+      "validated_via": "Published Astronomical Journal paper and SDSS ASPCAP documentation",
+      "validated_on": "2026-07-06",
+      "description": "Documents ASPCAP/FERRE's use of 12 dispersed initial searches across stellar-parameter space and selection of the lowest-chi-square solution; the SDSS pipeline documentation also records the surrounding practice of masking bad/sky-contaminated pixels and applying a small systematic error floor. Spyctres adopts the multistart lesson with a compact sparse-node coarse scan followed by shared-cache local multistart, and adopts the masking/error-floor lesson as explicit provenance rather than hidden preprocessing.",
+      "affected_code": [
+        "Spyctres/fitting.py:_coarse_physical_start_native_interp",
+        "Spyctres/fitting.py:_build_local_multistarts",
+        "scripts/xsl_validation.py",
+        "examples/reviewed_xshooter_uvb_analysis.py"
+      ]
+    },
+    {
+      "id": "mashonkina2008_balmer_core_exclusion",
+      "citation": "Mashonkina, L. et al. (2008), Non-LTE line formation for heavy elements in four very metal-poor stars, Astronomy & Astrophysics, 478, 529-541.",
+      "doi": "10.1051/0004-6361:20078060",
+      "url": "https://doi.org/10.1051/0004-6361:20078060",
+      "validated_via": "A&A publisher page and DOI metadata; Balmer H-alpha/H-beta core-exclusion discussion inspected",
+      "validated_on": "2026-07-20",
+      "description": "Uses Balmer-line wings for stellar-parameter work while excluding the central core because classical model atmospheres do not reliably reproduce the core/inner-wing region; the excluded core half-width is reported as parameter dependent, with examples near 0.7-1.5 Angstrom at high spectral resolution. Spyctres uses this as scientific provenance for treating Balmer-core masks as explicit sensitivity choices and for penalizing overly large masks that discard useful wing information.",
+      "affected_code": [
+        "Spyctres/recipes.py:make_balmer_core_exclude_mask",
+        "examples/reviewed_xshooter_uvb_analysis.py"
+      ]
+    },
+    {
+      "id": "nist_asd_v512",
+      "citation": "Kramida, A., Ralchenko, Y., Reader, J., and NIST ASD Team, NIST Atomic Spectra Database, Version 5.12, NIST Standard Reference Database 78.",
+      "doi": "10.18434/T4W30F",
+      "url": "https://www.nist.gov/pml/atomic-spectra-database",
+      "validated_via": "Official NIST Atomic Spectra Database page; version, DOI, and wavelength/transition scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Provides critically evaluated atomic wavelengths and transition data used as provenance for broad diagnostic windows around H, He, Ca, Mg, Na, K, and Si features. Spyctres uses these wavelengths only for approximate feature-window selection and diagnostics, not as a replacement for detailed line measurement.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "gray_corbally2009_spectral_classification",
+      "citation": "Gray, R. O. & Corbally, C. J. (2009), Stellar Spectral Classification, Princeton University Press.",
+      "doi": "10.1515/9781400833368",
+      "url": "https://doi.org/10.1515/9781400833368",
+      "validated_via": "Crossref DOI record and publisher DOI landing page",
+      "validated_on": "2026-07-20",
+      "description": "A standard reference for MK stellar spectral classification and the use of hydrogen, helium, metal, and molecular features across spectral types. Spyctres uses it as broad scientific provenance for tagging diagnostic windows by hot-star, cool-star, temperature, gravity, metallicity, and molecular roles.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "riddick2007_m_dwarf_optical_indices",
+      "citation": "Riddick, F. C., Roche, P. F. & Lucas, P. W. (2007), Optical spectroscopic classification and membership of young M dwarfs in star-forming regions, Monthly Notices of the Royal Astronomical Society, 381, 1067-1076.",
+      "doi": "10.1111/j.1365-2966.2007.12309.x",
+      "url": "https://academic.oup.com/mnras/article/381/3/1067/1063343",
+      "validated_via": "MNRAS publisher page and Oxford repository metadata; TiO, VO, CaH, FeH, and Na optical index definitions inspected",
+      "validated_on": "2026-07-21",
+      "description": "Defines and uses optical molecular and alkali indices for young M-dwarf classification, including TiO, VO, CaH, FeH, and Na regions. Spyctres uses this as provenance for advisory cool-star red-optical diagnostic windows; the windows are broad classification aids and are not treated as calibrated spectral indices by default.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "mcgovern2004_brown_dwarf_gravity_features",
+      "citation": "McGovern, M. R., Kirkpatrick, J. D., McLean, I. S., Burgasser, A. J., Prato, L. & Lowrance, P. J. (2004), Identifying Young Brown Dwarfs Using Gravity-Sensitive Spectral Features, The Astrophysical Journal, 600, 1020-1024.",
+      "doi": "10.1086/379849",
+      "url": "https://doi.org/10.1086/379849",
+      "validated_via": "DOI metadata and accessible abstract/full-text summary; optical and near-IR TiO, VO, K I, Na I, CaH, and FeH gravity-sensitive-feature discussion inspected",
+      "validated_on": "2026-07-21",
+      "description": "Shows that TiO, VO, K I, Na I, CaH, and FeH features in low-resolution optical/J-band spectra are useful gravity diagnostics for very young late-type objects. Spyctres uses this as provenance for tagging cool-star alkali and molecular windows as useful but model-sensitive diagnostics rather than unquestioned fit drivers.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "luhman_rieke1998_kband_classification",
+      "citation": "Luhman, K. L. & Rieke, G. H. (1998), The low-mass initial mass function in young clusters: L1495E, The Astrophysical Journal, 497, 354-369.",
+      "doi": "10.1086/305447",
+      "url": "https://doi.org/10.1086/305447",
+      "validated_via": "DOI metadata and institutional publication page; K-band late-type spectral-classification scope inspected",
+      "validated_on": "2026-07-21",
+      "description": "Uses K-band spectra to derive spectral types and continuum veilings for young late-type stars and compares those classifications with optical results. Spyctres uses this as provenance for advisory K-band Na I and Ca I windows when classifying late-type spectra with near-IR coverage.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "hubrig2007_kband_companion_classification",
+      "citation": "Hubrig, S., Marco, O., Stelzer, B., Schöller, M. & Huélamo, N. (2007), Establishing the nature of companion candidates to X-ray-emitting late B-type stars, Monthly Notices of the Royal Astronomical Society, 381, 1569-1574.",
+      "doi": "10.1111/j.1365-2966.2007.12325.x",
+      "url": "https://academic.oup.com/mnras/article/381/4/1569/972154",
+      "validated_via": "MNRAS publisher page; K-band classification section and feature table listing Br gamma, Na I, Ca I, Mg I, and CO inspected",
+      "validated_on": "2026-07-21",
+      "description": "Lists strong K-band features used for low-resolution spectral classification of late-type companion candidates, including Br gamma, Na I, Ca I, Mg I, and CO. Spyctres uses this as pragmatic provenance for exposing K-band metal and CO windows as diagnostics while retaining telluric/continuum caution tags.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "cenarro2001_ca_triplet_indices",
+      "citation": "Cenarro, A. J. et al. (2001), Empirical calibration of the near-infrared Ca II triplet. I. The stellar library and index definition, Monthly Notices of the Royal Astronomical Society, 326, 959-980.",
+      "doi": "10.1046/j.1365-8711.2001.04688.x",
+      "url": "https://doi.org/10.1046/j.1365-8711.2001.04688.x",
+      "validated_via": "MNRAS publisher article; abstract and Ca II/Paschen index discussion inspected",
+      "validated_on": "2026-07-20",
+      "description": "Defines and calibrates near-IR Ca II triplet indices and explicitly discusses Paschen contamination and stellar-parameter sensitivity. Spyctres uses this as provenance for treating the Ca II triplet/Paschen region as a valuable but blended diagnostic window rather than a simple isolated Ca feature.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "meyer1998_hband_classification",
+      "citation": "Meyer, M. R., Edwards, S., Hinkle, K. H. & Strom, S. E. (1998), Near-Infrared Classification Spectroscopy: H-Band Spectra of Fundamental MK Standards, The Astrophysical Journal, 508, 397-409.",
+      "doi": "10.1086/306402",
+      "url": "https://doi.org/10.1086/306402",
+      "validated_via": "Publisher DOI metadata and institutional article page; H-band MK-standard classification scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Shows how H-band atomic and molecular features, including hydrogen-series diagnostics, can support spectral classification across MK standards. Spyctres uses this as provenance for the optional H-band Brackett diagnostic window in near-IR spectra.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "rayner2009_irtf_cool_stars",
+      "citation": "Rayner, J. T., Cushing, M. C. & Vacca, W. D. (2009), The Infrared Telescope Facility (IRTF) Spectral Library: Cool Stars, The Astrophysical Journal Supplement Series, 185, 289-432.",
+      "doi": "10.1088/0067-0049/185/2/289",
+      "url": "https://doi.org/10.1088/0067-0049/185/2/289",
+      "validated_via": "IRSA IRTF library overview and DOI metadata; wavelength coverage and cool-star classification scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Presents 0.8-5.0 micron spectra of cool stars with well-established MK classifications and preserved continuum shapes. Spyctres uses this as provenance for near-IR cool-star diagnostics, especially molecular TiO/CO windows that help separate late-type spectra from hot-star hydrogen-dominated cases.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "kleinmann_hall1986_kband_atlas",
+      "citation": "Kleinmann, S. G. & Hall, D. N. B. (1986), Spectra of late-type standard stars in the region 2.0-2.5 microns, The Astrophysical Journal Supplement Series, 62, 501.",
+      "doi": "10.1086/191149",
+      "url": "https://doi.org/10.1086/191149",
+      "validated_via": "IRTF-hosted atlas data page and DOI metadata; K-band late-type-star spectral-atlas scope inspected",
+      "validated_on": "2026-07-20",
+      "description": "Provides a classic K-band atlas of late-type standard stars covering the CO first-overtone bandhead region. Spyctres uses this as provenance for treating the 2.3 micron CO bandhead as a cool-star molecular diagnostic window.",
+      "affected_code": [
+        "Spyctres/diagnostic_windows.py:DIAGNOSTIC_WINDOW_CATALOG"
+      ]
+    },
+    {
+      "id": "arxiv2503_22331_pepsi_line_windows",
+      "citation": "arXiv:2503.22331 (2025), PEPSI line-window model/data diagnostic figure.",
+      "doi": null,
+      "url": "https://arxiv.org/abs/2503.22331",
+      "validated_via": "arXiv abstract and PDF endpoints returned HTTP 200; Figure 4-style PEPSI line-window layout inspected from user-provided figure.",
+      "validated_on": "2026-08-04",
+      "description": "Provides the visual precedent for a compact PEPSI legacy diagnostic grid with one panel per fitted line window, normalized observed data with uncertainties, and a model overlay. Spyctres uses this reference only for the Example 8/PEPSI regression plot presentation; it does not change the likelihood, wavelength convention, or fitting algorithm.",
+      "affected_code": [
+        "Spyctres/plotting.py:plot_prepared_line_window_diagnostics",
+        "scripts/pepsi_fit_smoketest.py",
+        "examples/example8_pepsi_legacy_linefit_validation.py",
+        "examples/example8_pepsi_legacy_linefit_validation.ipynb"
+      ]
+    }
+  ]
+}

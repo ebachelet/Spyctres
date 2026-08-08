@@ -1,0 +1,977 @@
+"""PHOENIX HiRes template loading, interpolation, and caching.
+
+Scientific model reference: Husser et al. (2013),
+https://doi.org/10.1051/0004-6361/201219058
+"""
+
+import os
+import hashlib
+import json
+import time
+import numpy as np
+from astropy.io import fits
+
+from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.interpolate import RegularGridInterpolator
+from .waveutils import convert_wavelength_medium
+
+
+PHOENIX_MAX_TEFF_K = 12000.0
+
+
+def validate_phoenix_teff(teff):
+    """Reject temperatures outside the supported PHOENIX HiRes LTE grid.
+
+    The Husser et al. (2013) library ends at 12,000 K and is an LTE grid; using
+    it above that limit would silently omit important hot-star physics.
+    https://doi.org/10.1051/0004-6361/201219058
+    """
+    value = float(teff)
+    if not np.isfinite(value) or value > PHOENIX_MAX_TEFF_K:
+        raise ValueError(
+            "PHOENIX HiRes supports finite Teff <= {0:.0f} K; got {1}. "
+            "Use a hot-star atmosphere backend with appropriate physics instead.".format(
+                PHOENIX_MAX_TEFF_K,
+                teff,
+            )
+        )
+    return value
+
+
+def _as_float_array(x):
+    x = np.asarray(x, dtype=float)
+    if x.ndim != 1:
+        raise ValueError("Expected a 1D wavelength array.")
+    return x
+
+
+def _format_feh_dir(feh):
+    # PHOENIX uses Z-0.0 (not Z+0.0). Keep + for other positive metallicities.
+    feh = float(feh)
+    s = "{:+.1f}".format(feh)
+    if abs(feh) < 1e-12:
+        s = "-0.0"
+    return "Z{0}".format(s)
+
+
+def _format_feh_file(feh):
+    feh = float(feh)
+    s = "{:+.1f}".format(feh)
+    if abs(feh) < 1e-12:
+        s = "-0.0"
+    return s
+
+
+def _format_logg(logg):
+    return "{:.2f}".format(float(logg))
+
+
+def _same_float_array(a, b):
+    """
+    Exact array equality for 1D float-like grids used in cache validation.
+    """
+    if a is None or b is None:
+        return False
+
+    a = _as_float_array(a)
+    b = _as_float_array(b)
+
+    if len(a) != len(b):
+        return False
+
+    return np.allclose(a, b, rtol=0.0, atol=0.0)
+
+
+def _stable_array_digest(values):
+    """Return a stable SHA256 digest for a numeric 1D array."""
+    arr = np.ascontiguousarray(np.asarray(values, dtype="<f8").reshape(-1))
+    h = hashlib.sha256()
+    h.update(str(arr.shape).encode("ascii"))
+    h.update(arr.tobytes(order="C"))
+    return h.hexdigest()
+
+
+def _stable_json_digest(payload):
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _axis_manifest(values):
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    return {
+        "n": int(arr.size),
+        "min": None if arr.size == 0 else float(np.nanmin(arr)),
+        "max": None if arr.size == 0 else float(np.nanmax(arr)),
+        "sha256": _stable_array_digest(arr),
+    }
+ 
+def _normalize_cache_string(x):
+    """
+    Normalize scalar strings loaded from npz cache entries.
+    """
+    if x is None:
+        return None
+
+    if isinstance(x, np.ndarray):
+        if x.shape == ():
+            x = x.item()
+        else:
+            raise ValueError("Expected a scalar cache string entry.")
+
+    if isinstance(x, bytes):
+        x = x.decode("utf-8")
+
+    return str(x)
+    
+
+def phoenix_relpath(teff, logg, feh, model_tag="PHOENIX-ACES-AGSS-COND-2011-HiRes"):
+    """
+    Return relative path from the template root to a PHOENIX template.
+
+    Layout supported here (your install):
+      <base_dir>/
+        WAVE_PHOENIX-ACES-AGSS-COND-2011.fits
+        Z-0.0/
+          lte05000-4.00-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits
+        Z-1.0/
+          ...
+
+    If you later want to support the alternative nested layout, we can add it,
+    but for now we match your PHOENIXv2 tree.
+    """
+    teff_i = int(round(float(teff)))
+    logg_s = _format_logg(logg)
+    feh_s = _format_feh_file(feh)
+    zdir = _format_feh_dir(feh)
+
+    fname = "lte{0}-{1}{2}.{3}.fits".format(
+        str(teff_i).zfill(5), logg_s, feh_s, model_tag
+    )
+    return os.path.join(zdir, fname)
+
+
+class PhoenixLibrary(object):
+    """
+    Minimal PHOENIX template backend.
+
+    Typical base_dir layout (HiResFITS):
+      base_dir/
+        WAVE_PHOENIX-ACES-AGSS-COND-2011.fits
+        PHOENIX-ACES-AGSS-COND-2011/
+          Z-0.0/
+            lte05000-4.00-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits
+          Z-1.0/
+            ...
+
+    Wavelength-grid state:
+    
+    self.phoenix_wave
+         Immutable native PHOENIX wavelength grid loaded from the PHOENIX wavelength
+         file. This is the high-resolution template grid on disk and should be used
+         whenever a native-grid forward model needs to be constructed.
+    
+    self.wave
+         Current interpolator/evaluation grid. This is set by build_interpolator().
+         It may be an observed support grid for interp_observed, or a clipped
+         model-space grid for native_interp. It should not be treated as the native
+         PHOENIX grid.
+
+    This class supports:
+      - Loading a single template (and optionally resampling to a target wave grid)
+      - Building a cached regular-grid interpolator on (Teff, [Fe/H], logg)
+    """
+
+    DEFAULT_TEFF_GRID = np.array([
+        2300., 2400., 2500., 2600., 2700., 2800., 2900., 3000.,
+        3100., 3200., 3300., 3400., 3500., 3600., 3700., 3800.,
+        3900., 4000., 4100., 4200., 4300., 4400., 4500., 4600.,
+        4700., 4800., 4900., 5000., 5100., 5200., 5300., 5400.,
+        5500., 5600., 5700., 5800., 5900., 6000., 6100., 6200.,
+        6300., 6400., 6500., 6600., 6700., 6800., 6900., 7000.,
+        7200., 7400., 7600., 7800., 8000., 8200., 8400., 8600.,
+        8800., 9000., 9200., 9400., 9600., 9800., 10000., 10200.,
+        10400., 10600., 10800., 11000., 11200., 11400., 11600., 11800.,
+        12000.
+    ], dtype=float)
+
+    DEFAULT_LOGG_GRID = np.array([0., 0.5, 1., 1.5, 2., 2.5, 3., 3.5, 4., 4.5, 5., 5.5, 6.], dtype=float)
+    DEFAULT_FEH_GRID = np.array([-3.0, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5], dtype=float)
+
+    def __init__(self, base_dir,
+             wave_filename="WAVE_PHOENIX-ACES-AGSS-COND-2011.fits",
+             model_tag="PHOENIX-ACES-AGSS-COND-2011-HiRes",
+             phoenix_wave_medium="vacuum",
+             verbose=True):
+        self._flux_grid = None
+        self._observed_wave_medium = None
+        self.base_dir = os.path.abspath(os.path.expanduser(base_dir))
+        self.wave_filename = wave_filename
+        self.model_tag = model_tag
+        self.phoenix_wave_medium = str(phoenix_wave_medium).lower()
+        self.verbose = bool(verbose)
+
+        wave_path = os.path.join(self.base_dir, self.wave_filename)
+        if not os.path.exists(wave_path):
+            raise FileNotFoundError("PHOENIX wavelength file not found: {0}".format(wave_path))
+
+        self.phoenix_wave = fits.getdata(wave_path).astype(float)
+        self._interp = None
+        self._grid = None
+        self._interp_grid = None
+        self._grid_scale_origin = None
+        self._grid_scale = None
+        self.wave = None  # the wave grid of the interpolator, usually observed_wave
+
+    def template_path(self, teff, logg, feh):
+        rel = phoenix_relpath(teff, logg, feh, model_tag=self.model_tag)
+        return os.path.join(self.base_dir, rel)
+
+    def scan_available_points(self):
+        """
+        Scan the local PHOENIX directory tree and return the available grid
+        points as a sorted list of (teff, feh, logg) tuples.
+        """
+        import glob
+        import re
+
+        pat = re.compile(
+            r"lte(?P<teff>\d+)-(?P<logg>\d+\.\d+)(?P<feh>[+-]\d+\.\d+)\.PHOENIX"
+        )
+
+        points = []
+        for zdir in sorted(glob.glob(os.path.join(self.base_dir, "Z*"))):
+            for path in sorted(glob.glob(os.path.join(zdir, "lte*.fits"))):
+                name = os.path.basename(path)
+                m = pat.search(name)
+                if m is None:
+                    continue
+
+                teff = float(m.group("teff"))
+                logg = float(m.group("logg"))
+                feh = float(m.group("feh"))
+                points.append((teff, feh, logg))
+
+        if len(points) == 0:
+            raise RuntimeError(
+                "No PHOENIX templates found under {0}".format(self.base_dir)
+            )
+
+        return sorted(set(points))
+
+    def available_axes(self):
+        """
+        Return the actually installed Teff / [Fe/H] / logg axes.
+        """
+        pts = self.scan_available_points()
+        teff = np.unique([p[0] for p in pts]).astype(float)
+        feh = np.unique([p[1] for p in pts]).astype(float)
+        logg = np.unique([p[2] for p in pts]).astype(float)
+        return teff, feh, logg   
+        
+    def has_template(self, teff, logg, feh):
+        """
+        Return True if the requested PHOENIX template exists on disk.
+        """
+        return os.path.exists(self.template_path(teff, logg, feh))
+
+    def complete_subgrid(self, teff_grid, feh_grid, logg_grid, max_iter=20):
+        """
+        Trim candidate Teff / [Fe/H] / logg axes to a complete rectangular
+        subgrid that actually exists on disk.
+
+        This is conservative: it iteratively removes axis values that do not
+        have templates for all combinations with the current remaining axes.
+        """
+        teff_grid = np.unique(_as_float_array(teff_grid))
+        feh_grid = np.unique(_as_float_array(feh_grid))
+        logg_grid = np.unique(_as_float_array(logg_grid))
+
+        for _ in range(int(max_iter)):
+            changed = False
+
+            teff_new = np.array([
+                t for t in teff_grid
+                if all(self.has_template(t, g, z) for g in logg_grid for z in feh_grid)
+            ], dtype=float)
+            if len(teff_new) != len(teff_grid):
+                teff_grid = teff_new
+                changed = True
+
+            feh_new = np.array([
+                z for z in feh_grid
+                if all(self.has_template(t, g, z) for t in teff_grid for g in logg_grid)
+            ], dtype=float)
+            if len(feh_new) != len(feh_grid):
+                feh_grid = feh_new
+                changed = True
+
+            logg_new = np.array([
+                g for g in logg_grid
+                if all(self.has_template(t, g, z) for t in teff_grid for z in feh_grid)
+            ], dtype=float)
+            if len(logg_new) != len(logg_grid):
+                logg_grid = logg_new
+                changed = True
+
+            if len(teff_grid) == 0 or len(feh_grid) == 0 or len(logg_grid) == 0:
+                raise ValueError("No complete PHOENIX subgrid remains after availability filtering.")
+
+            if not changed:
+                break
+        else:
+            raise RuntimeError("complete_subgrid did not converge within max_iter.")
+
+        return teff_grid, feh_grid, logg_grid
+    
+    def load_template(self, teff, logg, feh, wave=None, wave_medium=None):
+        """
+        Load a single PHOENIX template flux array.
+
+        If `wave` is provided, resample the template onto that wavelength grid.
+        The PHOENIX wavelength grid is first converted from `self.phoenix_wave_medium`
+        into `wave_medium` when needed.
+        """
+        teff = validate_phoenix_teff(teff)
+        path = self.template_path(teff, logg, feh)
+        if not os.path.exists(path):
+            raise FileNotFoundError("PHOENIX template not found: {0}".format(path))
+
+        flux = fits.getdata(path).astype(float)
+
+        template_wave = self.phoenix_wave.copy()
+        target_medium = self.phoenix_wave_medium if wave_medium is None else str(wave_medium).lower()
+
+        if target_medium != self.phoenix_wave_medium:
+            template_wave = convert_wavelength_medium(
+                template_wave,
+                from_medium=self.phoenix_wave_medium,
+                to_medium=target_medium,
+            )
+
+        if wave is None:
+            return template_wave, flux
+
+        wave = _as_float_array(wave)
+
+        wmin, wmax = float(wave.min()), float(wave.max())
+        mask = (template_wave >= wmin) & (template_wave <= wmax)
+        if mask.sum() < 4:
+            raise ValueError("Requested wave range does not overlap PHOENIX wave grid.")
+
+        spline = InterpolatedUnivariateSpline(template_wave[mask], flux[mask], k=3, ext=1)
+        return wave, spline(wave)
+
+    def _prepare_resampling_grid(self, observed_wave, observed_wave_medium):
+        """
+        Precompute the PHOENIX wavelength grid transformed into the requested
+        observed wavelength medium, along with the overlap mask used for all
+        templates in this interpolator build.
+        """
+        observed_wave = _as_float_array(observed_wave)
+        observed_wave_medium = (
+            self.phoenix_wave_medium
+            if observed_wave_medium is None
+            else str(observed_wave_medium).lower()
+        )
+
+        template_wave = self.phoenix_wave
+        if observed_wave_medium != self.phoenix_wave_medium:
+            template_wave = convert_wavelength_medium(
+                template_wave,
+                from_medium=self.phoenix_wave_medium,
+                to_medium=observed_wave_medium,
+            )
+
+        wmin, wmax = float(observed_wave.min()), float(observed_wave.max())
+        mask = (template_wave >= wmin) & (template_wave <= wmax)
+        if mask.sum() < 4:
+            raise ValueError("Requested wave range does not overlap PHOENIX wave grid.")
+
+        return template_wave[mask], mask
+
+    def _resample_template_fast(self, path, wave_clip, mask, observed_wave):
+        """
+        Fast path for build_interpolator(): read flux, apply precomputed overlap
+        mask, and resample onto observed_wave without repeating wavelength-medium
+        conversion or overlap calculations for every template.
+        """
+        flux = fits.getdata(path).astype(float)[mask]
+        spline = InterpolatedUnivariateSpline(wave_clip, flux, k=3, ext=1)
+        return spline(observed_wave)
+        
+    @staticmethod
+    def _default_cache_name(teff_grid, feh_grid, logg_grid, wave):
+        h = hashlib.md5()
+        h.update(np.asarray(teff_grid, dtype=float).tobytes())
+        h.update(np.asarray(feh_grid, dtype=float).tobytes())
+        h.update(np.asarray(logg_grid, dtype=float).tobytes())
+        h.update(np.asarray(wave, dtype=float).tobytes())
+        return "phoenix_cache_{0}.npz".format(h.hexdigest()[:12])
+
+    @staticmethod
+    def _scaled_parameter_grid(grid):
+        """Return normalized interpolation axes and the affine scaling.
+
+        The physical PHOENIX axes have very different numerical scales
+        (thousands of K for Teff, dex-level values for [Fe/H] and log g).
+        For the current linear RegularGridInterpolator this affine rescaling is
+        mathematically neutral for interpolation weights, while giving a stable
+        normalized coordinate representation for optimizer-facing evaluation
+        and future interpolation methods. Physical axes remain the cache and
+        provenance contract.
+        """
+        axes = tuple(np.asarray(axis, dtype=float) for axis in grid)
+        origins = []
+        scales = []
+        scaled_axes = []
+        for axis in axes:
+            if axis.ndim != 1 or axis.size < 1:
+                raise ValueError("PHOENIX interpolation axes must be non-empty 1D arrays.")
+            origin = float(axis[0])
+            span = float(axis[-1] - axis[0]) if axis.size > 1 else 0.0
+            scale = span if np.isfinite(span) and span != 0.0 else 1.0
+            origins.append(origin)
+            scales.append(scale)
+            scaled_axes.append((axis - origin) / scale)
+        return tuple(scaled_axes), np.asarray(origins, dtype=float), np.asarray(scales, dtype=float)
+
+    def _set_interpolator_from_flux_grid(self, grid, flux_grid):
+        """Install a flux cube and scaled RegularGridInterpolator."""
+        self._grid = tuple(np.asarray(axis, dtype=float) for axis in grid)
+        self._flux_grid = np.asarray(flux_grid, dtype=float)
+        (
+            self._interp_grid,
+            self._grid_scale_origin,
+            self._grid_scale,
+        ) = self._scaled_parameter_grid(self._grid)
+        self._interp = RegularGridInterpolator(
+            self._interp_grid,
+            self._flux_grid,
+            method="linear",
+            bounds_error=True,
+        )
+        return self._interp
+
+    def _scale_parameter_point(self, point):
+        """Scale a physical PHOENIX parameter tuple for interpolation."""
+        if self._grid_scale_origin is None or self._grid_scale is None:
+            raise RuntimeError("Interpolator scaling is not initialized.")
+        point = np.asarray(point, dtype=float)
+        scaled = (point - self._grid_scale_origin) / self._grid_scale
+        return tuple(float(value) for value in scaled)
+
+    def build_interpolator(self,
+                       observed_wave,
+                       teff_grid=None,
+                       feh_grid=None,
+                       logg_grid=None,
+                       observed_wave_medium=None,
+                       cache_path=None,
+                       allow_missing=False,
+                       progress_callback=None):
+        """
+        Build or load a RegularGridInterpolator on (Teff, [Fe/H], logg).
+
+        The interpolator is defined on `observed_wave`, i.e. an observed-grid
+        backend. For performance, the PHOENIX wavelength grid is transformed into
+        the requested wavelength medium and clipped to the observed wavelength
+        range once per build, then each template flux array is resampled using
+        that precomputed support.
+
+        If `cache_path` exists and matches the requested wavelength grid, parameter
+        axes, and wavelength-medium metadata, the cached flux cube is loaded.
+        Otherwise the cube is rebuilt and optionally written back to disk.
+
+        Parameters
+        ----------
+        observed_wave : array-like
+            Target wavelength grid for the interpolator.
+        teff_grid, feh_grid, logg_grid : array-like or None
+            Parameter axes for the PHOENIX cube. If None, use the default axes.
+        observed_wave_medium : {"air", "vacuum"} or None
+            Wavelength medium of `observed_wave`. If None, assume the PHOENIX
+            native wavelength medium.
+        cache_path : str or None
+            Optional path to an on-disk cache of the resampled flux cube.
+        allow_missing : bool
+            If True, missing templates are skipped and left as NaN in the flux cube.
+            If False, missing templates raise immediately.
+        progress_callback : callable, optional
+            Called with lightweight progress dictionaries during cache
+            load/rebuild, template-grid construction, and cache save steps.
+            Plain-string callbacks remain supported by callers through
+            ``event["message"]``.
+
+        Returns
+        -------
+        scipy.interpolate.RegularGridInterpolator
+            Interpolator returning flux on `observed_wave`.
+        """
+        build_start = time.monotonic()
+
+        def report(
+            message,
+            stage="prepare_interpolator",
+            current=None,
+            total=None,
+            unit=None,
+            detail=None,
+            **payload,
+        ):
+            if progress_callback is not None:
+                event = {
+                    "stage": str(stage),
+                    "message": str(message),
+                    "elapsed_s": float(time.monotonic() - build_start),
+                }
+                if current is not None:
+                    event["current"] = int(current)
+                if total is not None:
+                    event["total"] = int(total)
+                if unit is not None:
+                    event["unit"] = str(unit)
+                if detail is not None:
+                    event["detail"] = detail
+                event.update(payload)
+                progress_callback(event)
+
+        observed_wave = _as_float_array(observed_wave)
+        observed_wave_medium = (
+            self.phoenix_wave_medium
+            if observed_wave_medium is None
+            else str(observed_wave_medium).lower()
+        )
+        self.wave = observed_wave.copy()
+        self._observed_wave_medium = observed_wave_medium
+        
+        teff_grid = self.DEFAULT_TEFF_GRID if teff_grid is None else _as_float_array(teff_grid)
+        feh_grid = self.DEFAULT_FEH_GRID if feh_grid is None else _as_float_array(feh_grid)
+        logg_grid = self.DEFAULT_LOGG_GRID if logg_grid is None else _as_float_array(logg_grid)
+        for teff in teff_grid:
+            validate_phoenix_teff(teff)
+         
+        if cache_path is not None:
+            cache_path = os.path.abspath(os.path.expanduser(cache_path))
+            if os.path.exists(cache_path):
+                report(
+                    "Loading PHOENIX interpolator cache: {0}".format(cache_path),
+                    stage="load_cache",
+                    cache_path=cache_path,
+                )
+                try:
+                    load_start = time.monotonic()
+                    self.load_cache(
+                        cache_path,
+                        expected_wave=observed_wave,
+                        expected_teff_grid=teff_grid,
+                        expected_feh_grid=feh_grid,
+                        expected_logg_grid=logg_grid,
+                        expected_observed_wave_medium=observed_wave_medium,
+                    )
+                    report(
+                        "Loaded PHOENIX interpolator cache in {0:.2f} s.".format(
+                            time.monotonic() - load_start
+                        ),
+                        stage="load_cache",
+                        cache_path=cache_path,
+                    )
+                    return self._interp
+                except ValueError as e:
+                    report(
+                        "PHOENIX cache mismatch; rebuilding: {0}".format(str(e)),
+                        stage="cache_mismatch",
+                        detail=str(e),
+                        cache_path=cache_path,
+                    )
+                    if self.verbose:
+                        print("Cache mismatch, rebuilding:", cache_path)
+                        print(str(e))
+            else:
+                report(
+                    "No PHOENIX interpolator cache found; building a new one.",
+                    stage="load_cache",
+                    cache_path=cache_path,
+                )
+        else:
+            report(
+                "Building PHOENIX interpolator without an on-disk cache.",
+                stage="prepare_interpolator",
+            )
+
+        # Precompute the PHOENIX support grid in the requested wavelength medium
+        # and its overlap with the observed wavelength grid once, outside the
+        # template loop.                                
+        report(
+            "Preparing PHOENIX wavelength support grid.",
+            stage="build_support_grid",
+        )
+        wave_clip, mask = self._prepare_resampling_grid(
+            observed_wave=observed_wave,
+            observed_wave_medium=observed_wave_medium,
+        )
+
+        flux_grid = np.full(
+            (len(teff_grid), len(feh_grid), len(logg_grid), len(observed_wave)),
+            np.nan,
+            dtype=float,
+        )
+
+        # Fast observed-grid build: read only the template flux array for each
+        # grid point, then resample using the precomputed wavelength support.
+        n_total = int(len(teff_grid) * len(feh_grid) * len(logg_grid))
+        n_done = 0
+        loop_start = time.monotonic()
+        last_emit = loop_start
+        report(
+            "Building PHOENIX flux cube ({0} Teff x {1} [Fe/H] x {2} logg).".format(
+                len(teff_grid),
+                len(feh_grid),
+                len(logg_grid),
+            ),
+            stage="build_flux_cube",
+            current=0,
+            total=n_total,
+            unit="templates",
+            flux_grid_shape=tuple(int(x) for x in flux_grid.shape),
+            flux_grid_nbytes=int(flux_grid.nbytes),
+        )
+        for it, teff in enumerate(teff_grid):
+            for iz, feh in enumerate(feh_grid):
+                for ig, logg in enumerate(logg_grid):
+                    try:
+                        path = self.template_path(teff, logg, feh)
+                        if not os.path.exists(path):
+                            raise FileNotFoundError("PHOENIX template not found: {0}".format(path))
+
+                        f = self._resample_template_fast(
+                            path=path,
+                            wave_clip=wave_clip,
+                            mask=mask,
+                            observed_wave=observed_wave,
+                        )
+                        flux_grid[it, iz, ig, :] = f
+                    except (FileNotFoundError, OSError, ValueError) as e:
+                        if not allow_missing:
+                            raise
+                        if self.verbose:
+                            print(
+                                "Skipping missing template teff={0} feh={1} logg={2}: {3}".format(
+                                    teff, feh, logg, str(e)
+                                )
+                            )
+                    n_done += 1
+                    now = time.monotonic()
+                    if n_done == n_total or now - last_emit >= 0.5:
+                        report(
+                            "Building PHOENIX flux cube: {0}/{1} templates.".format(
+                                n_done,
+                                n_total,
+                            ),
+                            stage="build_flux_cube",
+                            current=n_done,
+                            total=n_total,
+                            unit="templates",
+                            detail={
+                                "teff": float(teff),
+                                "feh": float(feh),
+                                "logg": float(logg),
+                            },
+                        )
+                        last_emit = now
+
+        report(
+            "Finished PHOENIX flux cube in {0:.2f} s.".format(
+                time.monotonic() - loop_start
+            ),
+            stage="build_flux_cube",
+            current=n_total,
+            total=n_total,
+            unit="templates",
+            flux_grid_shape=tuple(int(x) for x in flux_grid.shape),
+            flux_grid_nbytes=int(flux_grid.nbytes),
+        )
+        
+        self._flux_grid = flux_grid
+        
+        if np.isnan(flux_grid).any() and not allow_missing:
+            raise RuntimeError("NaNs present in flux_grid but allow_missing=False.")
+
+        # Keep physical axes for cache identity/provenance, but build the
+        # interpolator on normalized axes to avoid incommensurate-coordinate
+        # numerical artifacts.
+        self._set_interpolator_from_flux_grid(
+            (teff_grid, feh_grid, logg_grid),
+            flux_grid,
+        )
+
+        if cache_path is not None:
+            save_start = time.monotonic()
+            report(
+                "Saving PHOENIX interpolator cache to {0}. This can take a while.".format(
+                    cache_path
+                ),
+                stage="save_cache",
+                cache_path=cache_path,
+                cache_array_shape=tuple(int(x) for x in flux_grid.shape),
+                cache_nbytes=int(flux_grid.nbytes),
+            )
+            self.save_cache(cache_path, observed_wave_medium=observed_wave_medium)
+            report(
+                "Finished saving PHOENIX interpolator cache in {0:.2f} s.".format(
+                    time.monotonic() - save_start
+                ),
+                stage="save_cache",
+                cache_path=cache_path,
+                cache_array_shape=tuple(int(x) for x in flux_grid.shape),
+                cache_nbytes=int(flux_grid.nbytes),
+            )
+
+        report("PHOENIX interpolator is ready.", stage="done")
+        return self._interp
+
+    def evaluate(self, teff, feh, logg):
+        """
+        Evaluate the interpolated spectrum on self.wave.
+        build_interpolator() must have been called first.
+        """
+        if self._interp is None or self.wave is None:
+            raise RuntimeError("Interpolator not built. Call build_interpolator() first.")
+        p = (validate_phoenix_teff(teff), float(feh), float(logg))
+        return self._interp(self._scale_parameter_point(p))
+    
+    CACHE_SCHEMA_VERSION = 2
+
+    def interpolator_matches(
+        self, wave, teff_grid, feh_grid, logg_grid, observed_wave_medium=None
+    ):
+        """Return whether the in-memory interpolator exactly matches a request."""
+        if self.wave is None or self._grid is None:
+            return False
+        requested = (teff_grid, feh_grid, logg_grid)
+        medium_matches = (
+            observed_wave_medium is None
+            or self._observed_wave_medium == str(observed_wave_medium).lower()
+        )
+        return medium_matches and _same_float_array(self.wave, wave) and all(
+            _same_float_array(actual, expected)
+            for actual, expected in zip(self._grid, requested)
+        )
+
+    def ensure_interpolator(
+        self,
+        wave,
+        teff_grid,
+        feh_grid,
+        logg_grid,
+        observed_wave_medium,
+        cache_path=None,
+        progress_callback=None,
+    ):
+        """Build/load an interpolator only when its scientific grid changed."""
+        if not self.interpolator_matches(
+            wave,
+            teff_grid,
+            feh_grid,
+            logg_grid,
+            observed_wave_medium=observed_wave_medium,
+        ):
+            self.build_interpolator(
+                observed_wave=wave,
+                teff_grid=teff_grid,
+                feh_grid=feh_grid,
+                logg_grid=logg_grid,
+                observed_wave_medium=observed_wave_medium,
+                cache_path=cache_path,
+                progress_callback=progress_callback,
+            )
+        return self._interp
+
+    def interpolator_manifest(self, *, hash_flux_grid=False):
+        """Return a stable manifest for the currently built interpolator.
+
+        The manifest intentionally avoids local absolute paths so it can be
+        copied into web-ready fit reports.  By default it hashes only the model
+        tag, wavelength/interpolation grid, and parameter axes.  Hashing the
+        full flux cube is available for expert audits but is off by default
+        because production grids can be large.
+        """
+        payload = {
+            "schema_version": 1,
+            "status": "not_built",
+            "model_tag": str(self.model_tag),
+            "wave_filename": str(self.wave_filename),
+            "phoenix_wave_medium": str(self.phoenix_wave_medium),
+            "observed_wave_medium": self._observed_wave_medium,
+            "cache_schema_version": int(self.CACHE_SCHEMA_VERSION),
+            "hash_policy": {
+                "parameter_axes_hashed": False,
+                "interpolator_wave_grid_hashed": False,
+                "flux_grid_hashed": False,
+            },
+        }
+        if self._grid is None or self.wave is None:
+            payload["manifest_hash"] = _stable_json_digest(payload)
+            return payload
+
+        teff_grid, feh_grid, logg_grid = self._grid
+        wave = np.asarray(self.wave, dtype=float)
+        payload.update(
+            {
+                "status": "built",
+                "parameter_axes": {
+                    "teff": _axis_manifest(teff_grid),
+                    "feh": _axis_manifest(feh_grid),
+                    "logg": _axis_manifest(logg_grid),
+                },
+                "interpolator_wave_grid": {
+                    "n": int(wave.size),
+                    "min_A": None if wave.size == 0 else float(np.nanmin(wave)),
+                    "max_A": None if wave.size == 0 else float(np.nanmax(wave)),
+                    "sha256": _stable_array_digest(wave),
+                },
+            }
+        )
+        payload["hash_policy"]["parameter_axes_hashed"] = True
+        payload["hash_policy"]["interpolator_wave_grid_hashed"] = True
+        if hash_flux_grid and self._flux_grid is not None:
+            payload["flux_grid"] = {
+                "shape": [int(x) for x in np.shape(self._flux_grid)],
+                "sha256": _stable_array_digest(np.ravel(self._flux_grid)),
+            }
+            payload["hash_policy"]["flux_grid_hashed"] = True
+        payload["manifest_hash"] = _stable_json_digest(payload)
+        return payload
+
+    def save_cache(self, cache_path, observed_wave_medium):
+        """Save an interpolator cache keyed to this installation path.
+
+        Cache identity does not hash every template file. Delete caches after
+        mutating or replacing a PHOENIX tree in place at the same source path.
+        """
+        if self._grid is None or self.wave is None or self._flux_grid is None:
+            raise RuntimeError("Nothing to save. Build interpolator first.")
+
+        teff_grid, feh_grid, logg_grid = self._grid
+        flux = self._flux_grid.astype(float, copy=False)
+
+        np.savez_compressed(
+            cache_path,
+            teff_grid=np.asarray(teff_grid, dtype=float),
+            feh_grid=np.asarray(feh_grid, dtype=float),
+            logg_grid=np.asarray(logg_grid, dtype=float),
+            wave=np.asarray(self.wave, dtype=float),
+            flux_grid=flux,
+            model_tag=self.model_tag,
+            wave_filename=self.wave_filename,
+            phoenix_wave_medium=np.asarray(self.phoenix_wave_medium),
+            observed_wave_medium=np.asarray(observed_wave_medium),
+            cache_schema_version=np.asarray(self.CACHE_SCHEMA_VERSION),
+            source_root=np.asarray(os.path.realpath(self.base_dir)),
+        )
+        if self.verbose:
+            print("Saved PHOENIX cache to {0}".format(cache_path))
+    
+    def load_cache(
+        self,
+        cache_path,
+        expected_wave=None,
+        expected_teff_grid=None,
+        expected_feh_grid=None,
+        expected_logg_grid=None,
+        expected_observed_wave_medium=None,
+    ):
+        d = np.load(cache_path, allow_pickle=False)
+
+        cached_schema = int(d["cache_schema_version"]) if "cache_schema_version" in d.files else None
+        if cached_schema != self.CACHE_SCHEMA_VERSION:
+            raise ValueError(
+                "Cached schema version does not match: {0} != {1}".format(
+                    cached_schema, self.CACHE_SCHEMA_VERSION
+                )
+            )
+        cached_source_root = (
+            _normalize_cache_string(d["source_root"])
+            if "source_root" in d.files
+            else None
+        )
+        if cached_source_root != os.path.realpath(self.base_dir):
+            raise ValueError("Cached PHOENIX source root does not match current library.")
+
+        teff_grid = d["teff_grid"].astype(float)
+        for teff in teff_grid:
+            validate_phoenix_teff(teff)
+        feh_grid = d["feh_grid"].astype(float)
+        logg_grid = d["logg_grid"].astype(float)
+        wave = d["wave"].astype(float)
+        flux_grid = d["flux_grid"]
+        cached_model_tag = _normalize_cache_string(d["model_tag"]) if "model_tag" in d.files else None
+        cached_wave_filename = _normalize_cache_string(d["wave_filename"]) if "wave_filename" in d.files else None
+        cached_phoenix_wave_medium = _normalize_cache_string(d["phoenix_wave_medium"]) if "phoenix_wave_medium" in d.files else None
+        cached_observed_wave_medium = _normalize_cache_string(d["observed_wave_medium"]) if "observed_wave_medium" in d.files else None   
+            
+        if expected_wave is not None:
+            if not _same_float_array(expected_wave, wave):
+                raise ValueError("Cached wavelength grid does not match requested observed_wave.")
+
+        if expected_teff_grid is not None:
+            if not _same_float_array(expected_teff_grid, teff_grid):
+                raise ValueError("Cached teff_grid does not match requested teff_grid.")
+
+        if expected_feh_grid is not None:
+            if not _same_float_array(expected_feh_grid, feh_grid):
+                raise ValueError("Cached feh_grid does not match requested feh_grid.")
+
+        if expected_logg_grid is not None:
+            if not _same_float_array(expected_logg_grid, logg_grid):
+                raise ValueError("Cached logg_grid does not match requested logg_grid.")
+        
+        if cached_model_tag is None:
+            raise ValueError("Cached model_tag is missing.")
+
+        if cached_model_tag != str(self.model_tag):
+            raise ValueError(
+                "Cached model_tag does not match current PhoenixLibrary.model_tag: "
+                "{0} != {1}".format(cached_model_tag, self.model_tag)
+            )
+        
+        if cached_wave_filename is None:
+            raise ValueError("Cached wave_filename is missing.")
+
+        if cached_wave_filename != str(self.wave_filename):
+            raise ValueError(
+                "Cached wave_filename does not match current PhoenixLibrary.wave_filename: "
+                "{0} != {1}".format(cached_wave_filename, self.wave_filename)
+            )
+            
+        if cached_phoenix_wave_medium is None:
+            raise ValueError("Cached phoenix_wave_medium is missing.")
+        if cached_phoenix_wave_medium != str(self.phoenix_wave_medium):
+            raise ValueError(
+                "Cached phoenix_wave_medium does not match current PhoenixLibrary.phoenix_wave_medium: "
+                "{0} != {1}".format(cached_phoenix_wave_medium, self.phoenix_wave_medium)
+            )
+
+        if expected_observed_wave_medium is not None:
+            if cached_observed_wave_medium is None:
+                raise ValueError("Cached observed_wave_medium is missing.")
+            if cached_observed_wave_medium != str(expected_observed_wave_medium):
+                raise ValueError(
+                    "Cached observed_wave_medium does not match requested observed_wave_medium: "
+                    "{0} != {1}".format(cached_observed_wave_medium, expected_observed_wave_medium)
+                )     
+                   
+        self.wave = wave
+        self._observed_wave_medium = cached_observed_wave_medium
+        self._set_interpolator_from_flux_grid(
+            (teff_grid, feh_grid, logg_grid),
+            flux_grid,
+        )
+
+        if self.verbose:
+            print("Loaded PHOENIX cache from {0}".format(cache_path))
+
+        return self._interp

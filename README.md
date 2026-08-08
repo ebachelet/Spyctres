@@ -1,42 +1,817 @@
 # Spyctres
 
-Spyctres is a tool for analysing stellar spectra.  It can compare a measured spectrum with publicly-available 
-libraries of spectral templates in order to find the closest match.  
+Spyctres is a Python package for stellar spectral fitting and spectral typing from reduced spectra. It can compare a measured spectrum with publicly available spectral-template libraries to find the closest match.
 
-Developer: Etienne Bachelet
+Developers: Etienne Bachelet and Yiannis Tsapras
 
-Please note that Spyctres is still under development.  
+Spyctres is still under active development. It includes core fitting utilities, instrument I/O helpers, plotting tools, and example workflows. Recent additions include PHOENIX template-based fitting and a clearer separation between generic fitting code, workflow recipes, examples, and smoke tests.
+The current beginner path focuses on PHOENIX-backed spectral classification
+from reduced spectra. Historical microlensing-source SED functionality, where
+physical fluxes and photometry can constrain `theta_s`, extinction, and
+magnification-related terms, is being preserved as a separate expert workflow
+rather than used as a hidden fallback for normalized spectra.
+
+## Features
+
+- spectral fitting utilities in `Spyctres/Spyctres.py`
+- generic spectrum containers and reader dispatch in `Spyctres/io.py`
+- PHOENIX template support in `Spyctres/phoenix.py`
+- PHOENIX forward modelling in `Spyctres/phoenix_forward.py`
+- fitting helpers in `Spyctres/fitting.py`
+- workflow recipes in `Spyctres/recipes.py`
+- plotting helpers in `Spyctres/plotting.py`
 
 ## Installation
-For the time being, the best way to install Spyctres is to clone its [Github repository](https://github.com/ebachelet/Spyctres), 
-and run the setup.py.  It is recommended that you create and activate a virtual environment before proceeding with this
-installation. 
 
-```commandline
-venv> git clone https://github.com/ebachelet/Spyctres.git
-venv> cd Spyctres/
-venv> python setpy.py install
+Spyctres is currently intended for local editable installs during development. Creating and activating a virtual environment first is recommended.
+
+Spyctres requires Python 3.12 or later.
+
+```bash
+git clone https://github.com/ebachelet/Spyctres.git
+cd Spyctres
+pip install -e .
 ```
 
-Spyctres makes use of ```pysynphot``` and its successor package ```stsynphot``` as dependencies.  
-These can both be installed via pip:
+For a fresh Conda-based development environment:
 
-```commandline
-venv> pip install pysynphot
-venv> pip install stsynphot
+```bash
+conda create -n spyctres-dev-py312 python=3.12
+conda activate spyctres-dev-py312
+pip install -e .
 ```
 
-Lastly, you will need to download the stellar spectrum library used as templates in Spyctres fitting 
-process.  Tarballs of these libraries are linked from the [```pysynphot``` ReadTheDocs page](https://pysynphot.readthedocs.io/en/latest/index.html#pysynphot-installation-setup)
- in the second table.
+Some legacy workflows use `pysynphot` and its successor package `stsynphot`:
 
-Download and unpack these files into a local directory.  In order to tell Spyctres where to find this library, 
-the path to it should be declared as an environment variable in any script or shell where the software is 
-run, e.g. 
+```bash
+pip install pysynphot stsynphot
+```
+
+Those workflows also require the stellar template libraries linked from the [pysynphot installation documentation](https://pysynphot.readthedocs.io/en/latest/index.html#pysynphot-installation-setup). After downloading and unpacking them, set `PYSYN_CDBS` to their local root directory:
+
+```bash
+export PYSYN_CDBS=/path/to/cdbs
+```
+
+PHOENIX workflows require additional scientific Python dependencies and a local PHOENIX template directory.
+
+The PHOENIX templates may be downloaded from the Goettingen Spectral Library:
+
+- PHOENIX archive: `https://phoenix.astro.physik.uni-goettingen.de/`
+- PHOENIX v2 HiResFITS directory: `https://phoenix.astro.physik.uni-goettingen.de/data/v2.0/HiResFITS/PHOENIX-ACES-AGSS-COND-2011/`
+- PHOENIX v2 wavelength file: `https://phoenix.astro.physik.uni-goettingen.de/data/v2.0/HiResFITS/WAVE_PHOENIX-ACES-AGSS-COND-2011.fits`
+
+The wavelength file must be placed in the root directory of the PHOENIX v2 models.
+
+## PHOENIX template path and config file
+
+The local PHOENIX path is resolved in this order:
+
+1. explicit command-line value
+2. environment variable `SPYCTRES_PHOENIX_DIR`
+3. config file `~/.config/spyctres/config.toml`
+
+The config file is the most convenient place for stable local paths that should
+apply to notebooks, examples, and scripts. Create it like this:
+
+```bash
+mkdir -p ~/.config/spyctres
+$EDITOR ~/.config/spyctres/config.toml
+```
+
+Minimal config:
+
+```toml
+[paths]
+phoenix_dir = "/path/to/PHOENIXv2"
+```
+
+If you use a nonstandard XDG config root, Spyctres follows
+`$XDG_CONFIG_HOME/spyctres/config.toml` instead. Use command-line
+`--phoenix-dir` for one-off experiments, `SPYCTRES_PHOENIX_DIR` for temporary
+shell sessions, and the config file for everyday use. Check what Spyctres sees
+with:
+
+```bash
+python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
+```
+
+## Quick start
+
+Use this checklist for a first local run from a source checkout.
+
+1. Activate the Python 3.12 environment and install Spyctres in editable mode:
+
+   ```bash
+   conda activate spyctres-dev-py312
+   pip install -e .
+   ```
+
+2. Configure the local PHOENIX path, preferably in
+   `~/.config/spyctres/config.toml`:
+
+   ```toml
+   [paths]
+   phoenix_dir = "/path/to/PHOENIXv2"
+   ```
+
+3. Check that the environment, package import, PHOENIX path, and bundled
+   example spectrum are visible:
+
+   ```bash
+   spyctres doctor \
+     --spectrum examples/data/gaia_benchmark/HIP79672_HARPS_1_R42KNorm.txt.gz \
+     --reader gbs_v3_ascii
+   ```
+
+   If PHOENIX is not configured yet, the checker reports the missing path as a
+   warning unless `--require-phoenix` is supplied. For a stricter setup check,
+   use:
+
+   ```bash
+   spyctres doctor --require-phoenix --skip-phoenix-scan
+   ```
+
+4. Run the numbered quickstart. The default run is intentionally cheap: it
+   reads and plots the bundled spectrum, then prints the reviewed setup without
+   loading PHOENIX:
+
+   ```bash
+   python examples/example1_quickstart.py --no-show
+   ```
+
+5. After PHOENIX is configured, opt in to the fit using exactly that reviewed
+   setup:
+
+   ```bash
+   python examples/example1_quickstart.py \
+     --run-fit \
+     --output-json /tmp/spyctres_example1_fit.json \
+     --output-plot /tmp/spyctres_example1_fit.png \
+     --no-show
+   ```
+
+   This example reads the spectrum, suggests conservative first-pass fit
+   defaults from the loaded wavelength coverage and metadata, runs the
+   native-grid PHOENIX fit, prints a compact result and quality report, and
+   opens a wide observed/model/residual diagnostic plot. It is a first-contact
+   classification example, not a precision line-width or abundance analysis.
+   It also prints a pre-fit spectrum-readiness audit: missing wavelength-frame
+   metadata, missing uncertainty or resolution assumptions, obvious artifact
+   signatures, and the number of pixels actually entering the chosen fit
+   window. This audit does not repair the spectrum; it tells you whether the
+   result should be treated as a normal first-pass fit or as quicklook triage.
+   Expert users can override the suggested values with flags such as `--wmin`,
+   `--wmax`, `--teff`, `--teff-min`, or `--no-auto-defaults`.
+
+6. If you want to inspect diagnostic windows, explicit warning/mask regions,
+   and one local line fit before PHOENIX fitting:
+
+   ```bash
+   python examples/example2_lines_windows_and_masks.py \
+     --output-json /tmp/spyctres_example2.json \
+     --output-plot /tmp/spyctres_example2_windows.png \
+     --no-show
+   ```
+
+7. If you want to see how setup choices change a PHOENIX result before
+   committing to a stronger analysis, run Example 3. The default pass is cheap
+   and does not load PHOENIX unless you explicitly add `--run-fits`:
+
+   ```bash
+   python examples/example3_improving_a_phoenix_fit.py --no-show
+   ```
+
+8. For many spectra, first run a cheap quicklook batch to identify sensible
+   local parameter ranges:
+
+   ```bash
+   python examples/example5_batch_fitting.py \
+     --quicklook \
+     --output-json /tmp/spyctres_batch_quick.json \
+     --summary-csv /tmp/spyctres_batch_quick.csv \
+     --plot-dir /tmp/spyctres_batch_plots \
+     --max-plots 2 \
+     --resume
+   ```
+
+9. Then rerun with focused refinement. The script reuses the quick-pass result
+   to build local Teff/[Fe/H]/logg/RV bounds, rather than blindly searching the
+   broad classification box for every spectrum:
+
+   ```bash
+   python examples/example5_batch_fitting.py \
+     --output-json /tmp/spyctres_batch_refined.json \
+     --summary-csv /tmp/spyctres_batch_refined.csv \
+     --resume
+   ```
+
+   For heterogeneous folders, use a CSV manifest instead of relying on one
+   global reader/resolution assumption. This example uses only spectra
+   bundled under `examples/data/`; replace the paths only when you intentionally
+   supply your own external spectra:
+
+   ```csv
+   target_id,path,reader,R
+   xshooter_uvb,examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits,xshooter_merge1d,
+   floyds_blue,examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv,floyds_csv,500
+   ```
+
+   Save that CSV, for example as `examples/my_batch_manifest.csv`, then run:
+
+   ```bash
+   python examples/batch_quickscan_then_refine.py \
+     --manifest examples/my_batch_manifest.csv \
+     --output-json /tmp/spyctres_batch_manifest.json \
+     --summary-csv /tmp/spyctres_batch_manifest.csv \
+     --resume
+   ```
+
+   The batch example defaults to `--archive-mask-policy apply` and
+   `--refine-quality-policy skip-risky`: recognized archive/product bad regions
+   are applied as named masks with provenance, and the expensive focused-refine
+   stage is skipped when readiness or quick-result quality flags still require
+   human review. Use `--archive-mask-policy warn` to leave archive regions
+   fitted but flagged, `--archive-mask-policy ignore` only as an explicit expert
+   override, and `--refine-quality-policy always` only for developer-style
+   stress testing.
+
+Recommended example order:
+
+| If you want to... | Start with |
+| --- | --- |
+| Get one clean first success | Example 1 |
+| Understand windows, masks, and local line checks | Example 2 |
+| See how fit assumptions change a PHOENIX result | Example 3 |
+| Move from exploratory fitting toward reviewed analysis | Examples 4A and 4B |
+| Fit many spectra without blindly searching the whole grid | Example 5 |
+| Combine UVB/VIS/NIR evidence without hidden arm rescaling | Advanced Example 6 |
+| Validate against XSL DR3 reference-star products | Advanced Example 7 |
+| Preserve/check PEPSI legacy line-window behavior | Advanced Example 8 |
+
+The numbered examples are the maintained learning path:
+
+1. `examples/example1_quickstart.py` /
+   `examples/example1_quickstart.ipynb` for reading, plotting, setup review,
+   and one optional PHOENIX fit.
+2. `examples/example2_lines_windows_and_masks.py` /
+   `examples/example2_lines_windows_and_masks.ipynb` for diagnostic windows,
+   warning/mask overlays, and one local line fit.
+3. `examples/example3_improving_a_phoenix_fit.py` /
+   `examples/example3_improving_a_phoenix_fit.ipynb` for comparing quicklook
+   and stronger reviewed setup choices.
+4A. `examples/example4_reviewed_balmer_analysis.py` /
+   `examples/example4_reviewed_balmer_analysis.ipynb` for reviewed-analysis
+   UVB/Balmer preparation, baseline fitting, residual checks, and
+   optional individual-line consistency on the complex Gaia21ccu UVB spectrum.
+4B. `examples/example4b_balmer_stability_checks.py` /
+   `examples/example4b_balmer_stability_checks.ipynb` for the bounded
+   follow-up checks recommended at the end of Example 4A: continuum degree,
+   Balmer-core mask width, line selection, and resolution/LSF sensitivity on
+   the same spectrum.
+5. `examples/example5_batch_fitting.py` /
+   `examples/example5_batch_fitting.ipynb` for the quickscan-then-refine batch
+   pattern, including representative fit-inspection plots for sample targets.
+6. `examples/example6_multiarm_classification.py` /
+   `examples/example6_multiarm_classification.ipynb` for multi-arm X-SHOOTER
+   classification/consistency checks across UVB, VIS, and NIR.
+7. `examples/example7_xsl_reference_validation.py` /
+   `examples/example7_xsl_reference_validation.ipynb` for XSL DR3
+   reference-star validation and ordinary/stress/unsupported target
+   separation.
+8. `examples/example8_pepsi_legacy_linefit_validation.py` /
+   `examples/example8_pepsi_legacy_linefit_validation.ipynb` for PEPSI
+   legacy line-window compatibility validation and an optional compact
+   per-line data/model diagnostic grid.
+
+The same beginner workflow is available from one Python import:
 
 ```python
-os.environ['PYSYN_CDBS'] =  '/my/path/cdbs/'
+import Spyctres as sp
+
+spec = sp.read_spectrum(
+    "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
+    reader="xshooter_merge1d",
+)
+sp.plot_spectrum(spec)
+
+setup = sp.suggest_fit_setup(spec)  # inspect suggested windows, risks, and assumptions
+setup.summary()
+audit = sp.audit_spectrum_for_fit(spec)
+windows = sp.select_diagnostic_windows(spec)
+sp.plot_diagnostic_windows(spec, windows)
+
+line_results = sp.fit_lines(spec, ["Hgamma", "Mg II 4481"])
+line_summary = sp.compare_line_fits(line_results)
+print(line_summary.summary_text())
+sp.plot_line_fit_comparison(line_results, labels=["Hgamma", "Mg II 4481"])
+sp.plot_line_fit(line_results[0])
+
+result = sp.fit_stellar_spectrum(spec, model="phoenix", setup=setup)
+sp.plot_fit_referee(result)
 ```
 
-## Running Spyctres
-The ```quick_example.py``` script in this repository provides a worked demonstration of the fitting process. 
+For explicit mask review, keep warning and masking choices visible:
+
+```python
+mask_bundle = sp.build_mask(spec, archive=True, tellurics="warn")
+print(mask_bundle.summary_text())
+sp.plot_spectrum(spec, mask=mask_bundle, show_nonstellar=True)
+result_masked = sp.fit_stellar_spectrum(
+    spec,
+    valid_mask=mask_bundle.valid_mask,
+    resolution_R=6200,
+)
+comparison = sp.compare_fits(result, result_masked, labels=("baseline", "masked"))
+```
+
+The short calls use conservative quicklook defaults. They do not hide
+wavelength medium, observer frame, stellar-rest status, uncertainty source,
+resolution assumptions, or mask policy; those remain in audit output, fit
+provenance, quality flags, and plots.
+
+The numbered path intentionally uses both clean and difficult spectra. Example
+1 uses a bundled benchmark-star spectrum for a cleaner first success. Examples
+4A/4B continue with Gaia21ccu because a complex real spectrum is better for
+teaching reviewed-analysis blockers, exploratory overrides, and stability checks.
+
+If you are unsure which public call to use, ask Spyctres for the curated API
+guide rather than browsing internal modules:
+
+```python
+sp.format_public_api_guide()
+sp.list_public_function_groups()
+sp.list_public_functions("beginner")
+sp.format_public_function_help("fit_stellar_spectrum")
+```
+
+The top-level namespace still exposes advanced and compatibility helpers during
+alpha, but the recommended beginner route is the grouped one-import path above.
+`classify_spectrum()` is retained as a friendly alias for exploratory PHOENIX
+classification; it should not be read as a formal MK-classification engine or
+as a substitute for reviewed atmospheric-parameter fitting.
+
+The maintained learning path is the numbered example set. The unnumbered
+`examples/batch_quickscan_then_refine.py` file is an operational helper used by
+Example 5, while smoke tests and validation runners live under `scripts/`. See
+`examples/README.md` for data paths, PHOENIX configuration, caveats, and the
+same recommended order with more detail.
+
+The maintained project roadmap is in
+[`docs/development_plan.md`](docs/development_plan.md). In particular,
+reviewed-analysis parameter fitting is tracked as a separate expert workflow:
+quick classification remains lightweight, while reviewed-analysis use must
+pass stricter metadata, uncertainty, mask, LSF, residual, and recovery checks.
+The same roadmap also tracks a planned microlensing-source physical-flux/SED
+layer that will modernize the legacy `k93models`/`stsynphot` `theta_s` workflow
+behind explicit data and provenance requirements.
+
+For batches, start with the X-SHOOTER UVB throughput example:
+
+```bash
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --reader xshooter_merge1d \
+  --output-json /tmp/spyctres_batch_xshooter_uvb.json \
+  --summary-csv /tmp/spyctres_batch_xshooter_uvb.csv \
+  --resume
+```
+
+Replace the single example file with a list or shell-expanded directory of
+spectra when processing many observations. The script loads PHOENIX once,
+runs a cheap quicklook fit, narrows the local Teff/[Fe/H]/logg/RV bounds, runs
+a focused refinement, and checkpoints after each spectrum. The optional CSV is
+only a compact table for sorting/filtering; the JSON keeps the full auditable
+per-spectrum provenance and quality reports.
+
+Minimal copy/paste sequence, assuming PHOENIX is already configured:
+
+```bash
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --reader xshooter_merge1d \
+  --quicklook \
+  --output-json /tmp/spyctres_batch_quick.json \
+  --summary-csv /tmp/spyctres_batch_quick.csv \
+  --plot-dir /tmp/spyctres_batch_plots \
+  --max-plots 2 \
+  --resume
+
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --reader xshooter_merge1d \
+  --output-json /tmp/spyctres_batch_refined.json \
+  --summary-csv /tmp/spyctres_batch_refined.csv \
+  --resume
+
+python -m json.tool /tmp/spyctres_batch_refined.json
+```
+
+After a small pilot batch, summarize the timing before launching hundreds of
+spectra:
+
+```bash
+python scripts/throughput_summary.py /tmp/spyctres_batch_refined.json --project 100
+```
+
+The summary reports quick-scan, focused-refine, and total per-spectrum timing,
+then projects an approximate wall time for the requested number of spectra.
+When `--plot-dir` is supplied, the batch runner also writes a small number of
+representative line-window plots so users can inspect sample fits without
+opening every spectrum in a large batch.
+
+To open the maintained first-contact notebook:
+
+```bash
+jupyter lab examples/example1_quickstart.ipynb
+```
+
+## Supported readers
+
+Current reader coverage includes:
+
+- X-SHOOTER 1D products
+- PEPSI `.dxt.nor`
+- FLOYDS ASCII/CSV exports
+- Gemini/GMOS ASCII exports
+- UVES-POP ASCII spectra
+- Gaia FGK Benchmark Stars R=42,000 normalized ASCII spectra
+- SDSS/SEGUE `spec-PLATE-MJD-FIBER` FITS spectra
+
+Readers return a generic `SpectrumSegment` object so that fitting code can remain instrument-agnostic.
+You can inspect the registered reader assumptions from Python:
+
+```python
+from Spyctres import get_reader_info, list_readers
+
+print(list_readers())
+print(get_reader_info("xshooter_merge1d").to_metadata())
+```
+
+This is a discoverability layer only: it documents what each reader accepts and
+records, but it does not silently apply wavelength-frame corrections or invent a
+precision LSF.
+
+The installed package also provides a deliberately read-only CLI for discovery
+and ingestion checks:
+
+```bash
+spyctres readers
+spyctres reader-info xshooter_merge1d
+spyctres inspect-spectrum examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --reader xshooter_merge1d
+```
+
+If `spyctres` is not found after pulling a newer checkout, rerun
+`pip install -e .` inside the active environment so the console script is
+refreshed. The same read-only commands can always be run as
+`python -m Spyctres.cli ...` from a source checkout.
+
+There is intentionally no general `spyctres fit` command yet. Fitting remains
+Python-first until the public batch defaults and reporting are stable enough
+for a command-line fitting interface.
+
+Inside Python, public entry points also carry lightweight call help. If a user
+calls one without enough information, Spyctres reports the minimal call pattern
+and a one-line fix. The same records are available directly:
+
+```python
+from Spyctres import (
+    describe_public_function,
+    format_public_function_help,
+    list_public_functions,
+)
+
+print(list_public_functions())
+print(format_public_function_help("fit_stellar_spectrum"))
+help_record = describe_public_function("read_spectrum")
+```
+
+The structured `describe_public_function()` output is intended for notebooks
+and a future GUI; the formatted helper is meant for terminal use.
+
+PEPSI wavelength semantics are release-specific and are not inferred from the
+`.dxt.nor` suffix. Use `product_profile="pets_stellar_rest"` for documented
+NASA Exoplanet Archive PETS products (air wavelengths supplied in microns and
+already shifted to the stellar rest frame), or
+`product_profile="cds_aanda_671_a7"` for that CDS release's Angstrom,
+Solar-System-barycentric products. The default `product_profile="generic"`
+preserves the historical assumption that Arg is numerically in Angstrom and
+leaves its medium and frame unknown. An explicit
+`--use-ssbvel` correction is rejected for profiles whose wavelengths are
+already barycentric or stellar-rest corrected.
+
+All `read_spectrum()` results pass through a versioned common-format boundary.
+
+Reader support means "Spyctres can ingest the product into a common
+`SpectrumSegment`/`SpectrumCollection` shape." It does not always mean the file
+is immediately ready for a precision PHOENIX fit. Use:
+
+```python
+from Spyctres import audit_spectrum_for_fit, read_spectrum
+
+spec = read_spectrum("my_spectrum.fits", reader="sdss_spec")
+audit = audit_spectrum_for_fit(
+    spec,
+    fit_windows=[(3800.0, 5200.0)],
+    assumed_resolution={"quantity": "R", "value": 2000, "source": "quicklook"},
+)
+```
+
+The audit records whether wavelength medium, observer frame, stellar-rest
+status, uncertainties, resolution, sampling, and obvious artifact signatures are
+adequate for the intended fit. Native data-quality masks supplied by a reader
+are preferred. For products without such flags, Spyctres also provides an
+explicit same-grid fallback artifact mask, but it is opt-in and recorded as a
+quicklook/product assumption rather than applied silently.
+
+For stricter work, use `analysis_readiness_audit()` around the same spectrum
+and masks. It deliberately treats some quicklook assumptions as blockers, for
+example assumed-but-unvalidated resolution, missing formal errors, unknown
+wavelength/frame metadata, unapplied archive bad-region overlap, SDSS tabulated
+LSF provenance that is not yet applied by the fitter, or too few usable pixels.
+This is a guardrail for expert workflows, not a replacement for real validation
+on benchmark spectra.
+
+UVES-POP and SDSS are currently best treated as ingestion plus quicklook
+classification inputs unless the user supplies or validates the missing fit
+assumptions. In particular, SDSS spectra are read as vacuum/heliocentric with
+`resolution=None`; `--R 2000` is only an explicit quicklook approximation, not
+precision SDSS LSF modelling. PHOENIX fitting examples recommend
+`--sdss-mask-policy stellar_strict`, while the generic reader default remains
+`and_mask_conservative`. Programmatic workflows can use
+`sdss_quicklook_resolution_assumption()` to package that approximation as
+provenance. If a standard SDSS `wdisp` column is present, Spyctres preserves it
+with `lsf_source="sdss_wdisp_not_applied"` and can attach an opt-in tabulated
+`sigma_kms` descriptor via `read_sdss_spec(..., attach_wdisp_resolution=True)`.
+The current PHOENIX fitter still requires constant LSF broadening, so the
+readiness audit warns when SDSS tabulated LSF is present but the likelihood is
+using a constant-R assumption. UVES-POP spectra carry a nominal `R=80000`
+descriptor with cautionary metadata; wavelength medium and frame remain
+unknown unless supplied by the user or external provenance. Gaia FGK Benchmark
+Stars Library spectra are separate validation products: the bundled examples
+use the public common-resolution, normalized, R=42,000 HARPS files over
+480-680 nm. Spyctres treats the bundled GBSv3 R42KNorm wavelength scale as air
+based on line-center validation of the example files, while recording that this
+is a reader-profile convention rather than a hidden archive correction. The
+literature parameters are recorded for comparison rather than used as hidden
+fit priors. Run
+`python scripts/gaia_benchmark_validation.py --output-json /tmp/gbs.json --output-csv /tmp/gbs.csv --output-summary-plot /tmp/gbs.png`
+for the audit-only benchmark summary; add `--run-fits` only when you want the
+PHOENIX recovery comparison. Failure diagnosis should use explicit options
+such as `--window-set broad_metal_forest` or `--error-floor-fraction 0.01`;
+these choices are recorded in JSON/CSV and are diagnostic checks, not silent
+ordinary validation defaults. For reviewer-friendly local line views, add
+`--line-plot-dir /tmp/gbs_line_plots`; the runner uses the generic
+`plot_model_line_windows()` helper with a Gaia-benchmark preset list of
+diagnostic windows. Add `--line-plot-reference-model` only when you want a
+diagnostic PHOENIX overlay at the manifest Teff/logg/[Fe/H]; those reference
+values are still not used as fit priors.
+Wavelengths are represented in Angstrom, uncertainties as 1-sigma standard
+deviations, and masks use `True` to mean a valid/usable pixel. Observer-motion
+frame and stellar-rest correction status are tracked independently. Instrumental
+resolution is represented explicitly as constant or wavelength-dependent
+`R`, Gaussian FWHM, or Gaussian sigma. Ingestion sorts but never resamples,
+normalizes, coadds, or merges overlapping orders; use a `SpectrumCollection`
+for separate arms or orders.
+
+Scientific references supporting implemented algorithms are maintained in
+`references.json`, together with their affected code paths and validation
+notes.
+
+## Public fitting API
+
+For the shortest out-of-the-box PHOENIX workflow, pass a spectrum file plus the
+reader name:
+
+```python
+from Spyctres import fit_stellar_spectrum
+
+result = fit_stellar_spectrum(
+    "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
+    reader="xshooter_merge1d",
+    phoenix_dir="/path/to/PHOENIXv2",
+)
+print(result["teff"], result["rv_kms"])
+print(result.quality_report_text())
+```
+
+`classify_spectrum()` is an alias for the same workflow. It reads the spectrum
+when given a path, asks `prepare_phoenix_fit_kwargs()` for conservative
+first-pass PHOENIX defaults, runs the native-grid PHOENIX fit, reconstructs the
+best-fit model, and returns a structured `PhoenixFitResult`. Expert users can
+override any fitting keyword directly, for example `regions`, `p0`, `bounds`,
+`rv_grid_n`, or `mdeg`.
+
+The lower-level PHOENIX API accepts a `SpectrumSegment`, `SpectrumCollection`,
+or any input supported by the canonical ingestion layer:
+
+```python
+from Spyctres import fit_phoenix_spectrum, suggest_phoenix_fit_defaults
+
+defaults = suggest_phoenix_fit_defaults(spectrum, mode="quicklook")
+result = fit_phoenix_spectrum(
+    spectrum,
+    phoenix_dir="/path/to/PHOENIXv2",
+    **defaults.fit_kwargs,
+)
+print(result["teff"], result["rv_kms"])
+print(result.quality_report_text())
+result.to_json()
+result.save_report_json("fit_report.json")
+```
+
+`PhoenixFitResult` retains dictionary-style access while also carrying model
+arrays, actual fit masks, continuum coefficients, parameter covariance, and
+auditable velocity/cache provenance. The compact `quality_report` and
+`quality_report_text()` summaries surface the main warnings, mask fraction,
+dropped segments, and per-segment fit-pixel counts without requiring users to
+inspect the full nested diagnostics block. `describe_quality_flags()` provides
+short explanations for individual warning strings, and `quality_report`
+includes descriptions for the flags present in that result.
+`save_json()`/`to_json()` keep the compact direct-result payload for existing
+scripts. `save_report_json()`/`to_report_dict()` wrap that payload in a
+versioned report envelope that records the Spyctres version/git commit when
+available, path-sanitization policy, generated plot paths, PHOENIX
+interpolator-grid hashes, checksum policy, and a small provenance summary for
+reviewer-facing, web, or Django hand-off products. File-content checksums are
+opt-in: call `fit_stellar_spectrum(path, reader=..., record_input_checksum=True)`
+when you want the input-file SHA256 recorded for reproducibility.
+Existing low-level fitting functions keep returning dictionaries for backward
+compatibility.
+The scientific default forward model is `native_interp`, which keeps the model
+on a dense PHOENIX wavelength grid until after RV shifting and LSF convolution.
+The older `interp_observed` path remains available only as an explicit
+legacy/fast compatibility option.
+`suggest_phoenix_fit_defaults()` chooses a conservative first-pass wavelength
+window, parameter bounds, coarse grid, and RV scan budget from spectrum coverage
+and metadata. It returns provenance, reasons, and warnings; it does not hide
+air/vacuum, frame, or stellar-type assumptions, and every suggested keyword can
+be overridden by expert users. The provenance also includes an
+`interpretation` block for examples and future GUIs, naming the intended
+quicklook/standard/diagnostic use, how to interpret `rv_kms`, any metadata-risk
+flags, and the recommended next step before treating a result as scientific.
+That provenance now also includes advisory diagnostic-window candidates selected
+from the loaded wavelength coverage. These are broad windows around features
+such as Balmer, Paschen, Brackett, He/Mg/Si hot-star checks, CH G-band,
+Ca I/Ca II, Mg/Na/K alkali and metal lines, TiO/VO/CaH/FeH molecular bands,
+and K-band Na I/Ca I/CO; they help decide which quick follow-up checks are
+sensible for hot, intermediate, or cool stars without launching an expensive
+blind all-combinations fit. The catalog is
+defined in canonical vacuum Angstrom, stellar-rest-frame coordinates; selection
+converts those broad windows to each segment's declared wavelength medium and
+records the operational window, RV padding, score components, risk policies,
+and contiguous-coverage diagnostics in provenance.
+When you want to compare the influence of different feature families, start
+with the maintained setup-comparison and reviewed-analysis examples. They use
+the same package-level diagnostic-window selectors without requiring users to
+learn a separate historical script:
+
+```bash
+python examples/example3_improving_a_phoenix_fit.py --no-show
+python examples/example4b_balmer_stability_checks.py --no-show
+```
+
+The comparison policy remains deliberately conservative: raw χ² alone should
+not be used as a calibrated spectral-type decision, and held-out/common-window
+residual checks are diagnostics rather than final-analysis likelihoods.
+For reviewed-analysis Balmer-window work, Spyctres treats line-core masking
+as an explicit sensitivity choice rather than a hidden fit parameter. The
+reviewed-analysis scaffold records the retained-pixel fraction and an
+information-loss penalty for each tested core-mask width. This penalty is not
+added to the spectral χ²; it exists to discourage choosing an overly wide mask
+just because discarded Balmer-wing pixels made the apparent fit easier.
+The X-SHOOTER UVB reviewed-analysis scaffold defaults to a 4 A Balmer-core mask,
+matching its own conservative information-retention recommendation for the
+bundled example; users should still run mask-width sensitivity checks before
+making scientific claims.
+The scaffold also writes a bounded systematic-variant plan covering continuum
+degree, preparation normalization, Balmer-core mask width, resolution
+assumptions, and single-line/leave-one-line-out Balmer window sets. These
+variants are reported for review but are not run by default, keeping the public
+workflow lightweight and avoiding hidden fit grids. After a successful baseline
+fit, `--run-systematic-variants` executes a small priority subset with atomic
+JSON checkpoints after each variant; use `--systematic-variant-ids` to run a
+specific reviewer-requested subset.
+The same scaffold can also run a bounded same-model synthetic
+injection/recovery check with `--run-injection-recovery`. This creates noisy
+synthetic Balmer-window spectra from the reconstructed baseline model, refits
+them, and reports parameter deltas against the injected baseline truth. It is
+an optimizer/masking/noise-response sanity check, not external validation of
+PHOENIX physics against real reference stars.
+It also records cheap observed-profile diagnostics for each Balmer line:
+sideband coverage, mask fractions, line-depth and equivalent-width proxies,
+wing asymmetry, and DIB overlaps. These identify lines needing review before
+running expensive variants; they are not calibrated line measurements. When an
+opt-in baseline PHOENIX fit is run, the scaffold adds per-line model-residual
+diagnostics that keep fitted-pixel residuals separate from masked/core overplot
+checks.
+For review handoff, the same reviewed-analysis checkpoint can now be summarized into
+compact Markdown, CSV, and PNG artifacts with `--output-review-summary-md`,
+`--output-review-summary-csv`, and `--output-review-summary-plot`.
+These reports are post-processing only: they compare the baseline, any executed
+systematic variants, and any injection/recovery trials already present in the
+JSON without launching extra PHOENIX fits.
+The summary also contains a conservative calibration-interpretation table. It
+labels readiness, Balmer-core mask sensitivity, window-set sensitivity, and
+same-model recovery as acceptable, borderline, blocking, or not yet evaluated.
+These labels are triage aids with explicit thresholds, not final calibrated
+uncertainties.
+It also includes a plain-language reviewed-analysis stability verdict so users can
+tell when the scaffold has produced a diagnostic/exploratory result rather
+than a reviewed-analysis parameter estimate.
+The Markdown/JSON summary also includes bounded suggested next commands. These
+commands write fresh follow-up checkpoints derived from the current
+`--output-json` path rather than mutating a previously reviewed checkpoint.
+Broad telluric catalog regions are used for warning/provenance only by default.
+They are intentionally coarser than Spyctres' legacy high-resolution telluric
+transmission template. When you explicitly want to mask telluric absorption,
+prefer the provenance-aware wrapper:
+
+```python
+from Spyctres import telluric_transmission_exclusion_mask
+
+telluric_mask = telluric_transmission_exclusion_mask(threshold=0.90)
+```
+
+This returns an `ExclusionMaskSpec` compatible with `exclude_masks=` and records
+`method="transmission_threshold"` in mask provenance. Broad catalog telluric
+masks are still available as explicit coarse fallbacks through
+`known_feature_masks()` / `nonstellar_feature_masks()`.
+Long-running fits accept a `progress_callback`; callbacks now receive a
+`FitProgressEvent` with fields such as `phase`, `message`, `fraction`, and
+`elapsed_s`, while `str(event)` remains the printable status message.
+For exploratory fits with outliers that are not yet fully masked, the PHOENIX
+fitters expose SciPy's robust least-squares losses through `loss` and
+`loss_f_scale`; the default `loss="linear"` preserves ordinary least squares.
+Because residuals are already normalized by their 1-sigma uncertainties,
+`loss_f_scale=1.0` is the natural starting point. Prefer `loss="soft_l1"` or
+`loss="huber"` for exploratory outlier-robust fits; `cauchy` and `arctan` are
+more aggressive and can make optimization less well behaved.
+For spectra whose formal uncertainties are unrealistically small, an optional
+`error_floor_fraction` adds a per-segment fractional uncertainty floor in
+quadrature and records the applied floor in the fit diagnostics. This floor is
+a median-flux proxy for the local continuum level; use it cautiously for
+heavily line-blanketed spectra where the median may sit below the continuum.
+When robust loss or an error floor is active, results explicitly record the
+optimizer cost, raw nominal-error chi-square, effective-error chi-square, and
+quality flags so these diagnostic modes are not mistaken for ordinary Gaussian
+least-squares fits.
+
+## Local line diagnostics
+
+Local Gaussian measurements provide quick RV, width, equivalent-width, and
+residual checks without replacing the physical PHOENIX fit:
+
+```python
+import Spyctres as sp
+
+diagnostic = sp.fit_line(segment, "Halpha")
+fig, axes = sp.plot_line_fit(diagnostic)
+```
+
+Results report laboratory and segment wavelength media, observed line width,
+instrumental FWHM when available, uncertainty estimates, and quality flags.
+Positive equivalent width denotes absorption; emission-line area is reported
+as positive `line_flux` in flux-times-Angstrom units.
+For expert control, pass a `LineSpec` and `LineFitConfig` explicitly.
+
+Air/vacuum conversion conventions are explicit. `ciddor1996` remains the
+PHOENIX workflow default, while `vald3` preserves the historical Spyctres line-
+list conversion. Both leave wavelengths at or below 2000 Angstrom unchanged
+and record the selected method when converting a `SpectrumSegment`.
+
+```python
+from Spyctres import convert_wavelength_medium, convert_segment_wavelength_medium
+
+wave_vac = convert_wavelength_medium(
+    wave_air, from_medium="air", to_medium="vacuum", method="ciddor1996"
+)
+segment_vac = convert_segment_wavelength_medium(segment_air, "vacuum")
+```
+
+## Project structure
+
+Spyctres is organized around four layers:
+
+- generic fitting core
+- workflow recipes
+- user-facing examples
+- developer smoke tests
+
+Notable files:
+
+- `Spyctres/recipes.py`
+- `examples/example1_quickstart.ipynb`
+- `scripts/xshooter_fit_smoketest.py`
+
+## Current limitations
+
+PHOENIX support should still be treated as alpha.
+
+In particular:
+
+- the quickstart and example workflows are alpha demonstrations, not automatic final precision analyses
+- some workflows still require user judgment for wavelength windows, masking, resolving power, and continuum treatment
+- instrument-specific metadata quality varies across input formats
+- packaging and documentation are still being stabilized

@@ -1,0 +1,1303 @@
+import hashlib
+import json
+
+import numpy as np
+import pytest
+
+from Spyctres.api import (
+    classify_spectrum,
+    fit_phoenix_spectrum,
+    fit_stellar_spectrum,
+    input_checksum_provenance,
+)
+from Spyctres.defaults import suggest_fit_setup
+from Spyctres.io import SpectrumSegment
+from Spyctres.results import (
+    QUALITY_FLAG_CLASSIFICATION,
+    QUALITY_FLAG_DESCRIPTIONS,
+    PhoenixFitDiagnostics,
+    PhoenixFitResult,
+    compare_fits,
+    compare_fit_results,
+    classify_quality_flag,
+    describe_quality_flags,
+    format_fit_comparison_table,
+    format_fit_quality_report,
+    quality_flag_actions,
+    summarize_quality_flags,
+)
+
+
+def test_structured_result_is_mapping_and_json_serializable():
+    result = PhoenixFitResult(
+        summary={
+            "teff": 5772.0,
+            "p_best": np.array([5772.0, 0.0, 4.44, 0.0]),
+            "diagnostics": {"reduced_chi2": np.float64(1.0)},
+            "quality_flags": ["ok"],
+        },
+        models=(np.array([1.0, 0.9]),),
+        used_masks=(np.array([True, False]),),
+        provenance={"api": "test"},
+    )
+
+    assert result["teff"] == 5772.0
+    assert "diagnostics" in list(result)
+    assert "quality_flags" in list(result)
+    assert "provenance" in list(result)
+    assert isinstance(result.diagnostics, PhoenixFitDiagnostics)
+    assert result.quality_flags == ("ok",)
+    payload = json.loads(result.to_json())
+    assert payload["p_best"] == [5772.0, 0.0, 4.44, 0.0]
+    assert payload["models"] == [[1.0, 0.9]]
+    assert payload["diagnostics"]["reduced_chi2"] == 1.0
+    assert payload["quality_flags"] == ["ok"]
+    assert payload["quality_report"]["quality_flags"] == ["ok"]
+    assert payload["quality_report"]["reduced_chi2"] == 1.0
+
+
+def test_structured_result_has_notebook_friendly_summary_text():
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": 5772.0,
+            "feh": 0.0,
+            "logg": 4.44,
+            "rv_kms": 0.0,
+            "chi2_red": 1.2,
+            "quality_flags": ["ok"],
+            "fit_setup": {
+                "setup_hash": "abc123456789",
+                "readiness": {
+                    "intent": "quicklook_classification",
+                    "ready_for_intent": True,
+                },
+            },
+        },
+        diagnostics={
+            "n_pixels": 123,
+            "parameter_uncertainty": {"status": "local_covariance"},
+        },
+        provenance={"reader": "gbs_v3_ascii", "resolution_source": "segment_metadata"},
+    )
+
+    compact = result.compact_summary()
+
+    assert compact["fit_intent"] == "quicklook_classification"
+    assert compact["interpretation_status"] == "reviewed_first_pass"
+    assert compact["reader"] == "gbs_v3_ascii"
+    assert compact["setup_hash"] == "abc123456789"
+    assert compact["fitted_pixels"] == 123
+    assert "Spyctres PHOENIX fit" in result.summary_text()
+    assert "reader=gbs_v3_ascii" in result.summary_text()
+    assert "setup_hash=" not in result.summary_text(include_hash=False)
+    assert "PhoenixFitResult(" in repr(result)
+
+
+def test_structured_result_quality_report_summarizes_fit_selection():
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "chi2_red": np.float64(2.0),
+            "n_points": np.int64(42),
+            "quality_flags": ["segment_mask_fraction_high"],
+        },
+        diagnostics={
+            "n_parameters": np.int64(6),
+            "degrees_of_freedom": np.int64(36),
+            "mask_fraction": np.float64(0.25),
+            "outside_fit_window_fraction": np.float64(0.20),
+            "rejected_inside_fit_window_fraction": np.float64(0.0625),
+            "n_input_segments": 2,
+            "n_retained_segments": 1,
+            "n_dropped_segments": 1,
+            "segment_diagnostics": [
+                {
+                    "name": "VIS",
+                    "input_index": 1,
+                    "n_fit": np.int64(42),
+                    "n_support": np.int64(80),
+                    "mask_fraction": np.float64(0.475),
+                    "outside_fit_window_fraction": np.float64(0.20),
+                    "rejected_inside_fit_window_fraction": np.float64(0.34375),
+                    "mask_summary": {
+                        "n_outside_fit_window": np.int64(16),
+                        "outside_fit_window_fraction": np.float64(0.20),
+                        "n_inside_fit_window": np.int64(64),
+                        "n_rejected_inside_fit_window": np.int64(22),
+                        "rejected_inside_fit_window_fraction": np.float64(0.34375),
+                        "n_rejected_by_explicit_union": np.int64(10),
+                        "explicit_exclusion_fraction": np.float64(0.125),
+                        "n_rejected_by_data_invalid": np.int64(4),
+                        "data_invalid_fraction": np.float64(0.05),
+                        "n_rejected_by_multiple_reasons": np.int64(2),
+                        "multiple_rejection_fraction": np.float64(0.025),
+                    },
+                    "lsf_fwhm_kms": np.float64(5.0),
+                    "resolution_R_effective": np.float64(59958.0),
+                }
+            ],
+        },
+    )
+
+    report = result.quality_report()
+
+    assert report["success"] is True
+    assert report["quality_flags"] == ["segment_mask_fraction_high"]
+    assert (
+        "more than half"
+        in report["quality_flag_descriptions"]["segment_mask_fraction_high"]
+    )
+    assert report["quality_flag_summary"]["headline_status"] == "needs_review"
+    assert report["quality_flag_actions"][0]["flag"] == "segment_mask_fraction_high"
+    assert report["reduced_chi2"] == 2.0
+    assert report["mask_fraction"] == 0.25
+    assert report["outside_fit_window_fraction"] == 0.20
+    assert report["rejected_inside_fit_window_fraction"] == 0.0625
+    assert report["n_dropped_segments"] == 1
+    assert report["segments"][0]["name"] == "VIS"
+    assert report["segments"][0]["outside_fit_window_fraction"] == 0.20
+    assert report["segments"][0]["rejected_inside_fit_window_fraction"] == 0.34375
+    assert report["segments"][0]["explicit_exclusion_count"] == 10
+    assert report["segments"][0]["explicit_exclusion_fraction"] == 0.125
+    assert report["segments"][0]["data_invalid_count"] == 4
+    assert report["segments"][0]["data_invalid_fraction"] == 0.05
+    assert report["segments"][0]["multiple_rejection_count"] == 2
+    assert report["segments"][0]["multiple_rejection_fraction"] == 0.025
+
+    text = result.quality_report_text()
+    assert "Quality report:" in text
+    assert "flags: segment_mask_fraction_high" in text
+    assert "flag status: needs_review" in text
+    assert "top actions:" in text
+    assert "chi2_red: 2" in text
+    assert "masked fraction: 25.0%" in text
+    assert "mask split: outside fit window=20.0%, rejected inside fit window=6.2%" in text
+    assert "dropped segments: 1" in text
+    assert "VIS; Nfit=42/80" in text
+    assert "outside_window=20.0%" in text
+    assert "rejected_inside=34.4%" in text
+
+    text_from_dict = format_fit_quality_report(result.to_dict(include_arrays=False))
+    assert "Quality report:" in text_from_dict
+    assert "VIS; Nfit=42/80" in text_from_dict
+
+
+def test_quality_report_includes_known_feature_and_residual_windows():
+    text = format_fit_quality_report(
+        {
+            "success": True,
+            "quality_flags": [
+                "nonstellar_feature_overlap",
+                "known_line_region_residual",
+                "dib_overlap_balmer_wing",
+            ],
+            "chi2_red": 4.2,
+            "nonstellar_features": {
+                "show_dibs": True,
+                "mask_dibs": False,
+                "policy": "warn",
+                "features": [{"name": "DIB 4428"}, {"name": "DIB 4882"}],
+                "overlap_diagnostics": [
+                    {
+                        "feature": "DIB 4882",
+                        "diagnostic_line": "Hbeta",
+                        "origin_hypothesis": "catalog_overlap_only",
+                    }
+                ],
+            },
+            "known_residual_windows": {
+                "flagged_windows": [
+                    {
+                        "name": "DIB 4882 / Hβ red wing",
+                        "median_sigma": -3.1,
+                        "rms_sigma": 4.2,
+                        "origin_hypothesis": "ambiguous",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert "non-stellar features: DIB 4428, DIB 4882" in text
+    assert "policy=warn" in text
+    assert (
+        "contaminated diagnostics: DIB 4882 -> Hbeta (catalog_overlap_only)"
+        in text
+    )
+    assert "DIB 4882 / Hβ red wing median=-3.1σ rms=4.2σ origin=ambiguous" in text
+
+
+def test_compare_fit_results_reports_parameter_and_quality_deltas():
+    reference = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": np.float64(9800.0),
+            "feh": np.float64(-0.1),
+            "logg": np.float64(2.7),
+            "rv_kms": np.float64(-5.0),
+            "chi2_red": np.float64(12.0),
+            "quality_flags": ["high_chi2", "dib_candidate_detected"],
+            "nonstellar_features": {
+                "features": [{"name": "DIB 4882"}],
+            },
+            "known_residual_windows": {
+                "flagged_windows": [{"name": "DIB 4882 / Hβ red wing"}],
+            },
+        },
+        diagnostics={"mask_fraction": np.float64(0.45), "n_pixels": np.int64(100)},
+    )
+    masked = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": np.float64(9600.0),
+            "feh": np.float64(-0.05),
+            "logg": np.float64(2.9),
+            "rv_kms": np.float64(-4.0),
+            "chi2_red": np.float64(9.0),
+            "quality_flags": ["high_chi2", "nonstellar_mask_applied"],
+            "nonstellar_features": {
+                "features": [{"name": "DIB 4882"}, {"name": "DIB 4428"}],
+            },
+            "known_residual_windows": {"flagged_windows": []},
+        },
+        diagnostics={
+            "mask_fraction": np.float64(0.5),
+            "n_pixels": np.int64(90),
+            "grid_edge_flags": {"teff_high": True},
+        },
+    )
+
+    comparison = compare_fit_results(
+        reference,
+        masked,
+        labels=("unmasked", "masked"),
+        thresholds={"teff": 100.0, "chi2_red": 1.0},
+    )
+
+    assert comparison["labels"] == ["unmasked", "masked"]
+    assert comparison["parameters"]["teff"]["delta"] == -200.0
+    assert comparison["parameters"]["teff"]["exceeds_threshold"] is True
+    assert comparison["metrics"]["chi2_red"]["delta"] == -3.0
+    assert comparison["metrics"]["mask_fraction"]["delta"] == pytest.approx(0.05)
+    assert comparison["metrics"]["n_points"]["reference"] == 100.0
+    assert comparison["metrics"]["n_points"]["comparison"] == 90.0
+    assert comparison["quality_flags"]["changed"] is True
+    assert comparison["quality_flags"]["only_unmasked"] == ["dib_candidate_detected"]
+    assert comparison["quality_flags"]["only_masked"] == ["nonstellar_mask_applied"]
+    assert comparison["known_features"]["only_masked"] == ["DIB 4428"]
+    assert comparison["known_residual_windows"]["only_unmasked"] == [
+        "DIB 4882 / Hβ red wing"
+    ]
+    assert comparison["result_summaries"]["comparison"]["teff"] == 9600.0
+    assert (
+        comparison["result_summaries"]["comparison"]["quality_status"]
+        == "needs_review"
+    )
+    assert comparison["result_summaries"]["comparison"]["boundary_flags"] == [
+        "grid_edge_teff_high"
+    ]
+    json.dumps(comparison)
+
+
+def test_compare_fit_results_is_top_level_public_api():
+    import Spyctres
+
+    reference = {"teff": 6000.0, "quality_flags": ["ok"]}
+    comparison = {"teff": 6100.0, "quality_flags": ["high_chi2"]}
+
+    out = Spyctres.compare_fit_results(reference, comparison)
+
+    assert out["parameters"]["teff"]["delta"] == 100.0
+    assert out["quality_flags"]["only_reference"] == ["ok"]
+    assert out["quality_flags"]["only_comparison"] == ["high_chi2"]
+
+
+def test_compare_fit_results_uses_reviewed_analysis_exploratory_status():
+    reference = {"teff": 6000.0, "quality_flags": ["ok"]}
+    comparison = {
+        "teff": 6100.0,
+        "quality_flags": ["ok"],
+        "fit_setup": {"exploratory_override": {"reason": "diagnostic review"}},
+    }
+
+    out = compare_fit_results(reference, comparison)
+
+    assert (
+        out["result_summaries"]["comparison"]["interpretation_status"]
+        == "exploratory_review_only"
+    )
+
+
+def test_compare_fits_facade_compares_multiple_results():
+    baseline = {"teff": 6000.0, "chi2_red": 2.0, "quality_flags": ["ok"]}
+    masked = {"teff": 6100.0, "chi2_red": 1.5, "quality_flags": ["ok"]}
+    refined = {"teff": 6200.0, "chi2_red": 1.2, "quality_flags": ["high_chi2"]}
+
+    direct = compare_fits(baseline, masked, labels=("baseline", "masked"))
+    bundle = compare_fits(
+        baseline,
+        masked,
+        refined,
+        labels=("baseline", "masked", "refined"),
+    )
+
+    assert direct["labels"] == ["baseline", "masked"]
+    assert bundle["operation"] == "compare_fits"
+    assert bundle["baseline_label"] == "baseline"
+    assert len(bundle["comparisons"]) == 2
+    assert (
+        bundle["comparisons"][1]["comparison"]["parameters"]["teff"]["delta"]
+        == 200.0
+    )
+
+
+def test_format_fit_comparison_table_summarizes_fit_deltas():
+    baseline = {
+        "teff": 6000.0,
+        "logg": 4.0,
+        "feh": 0.0,
+        "rv_kms": 0.0,
+        "chi2_red": 2.0,
+        "quality_flags": ["ok"],
+    }
+    masked = {
+        "teff": 6100.0,
+        "logg": 4.1,
+        "feh": -0.1,
+        "rv_kms": 3.0,
+        "chi2_red": 1.5,
+        "quality_flags": ["high_chi2", "grid_edge_teff_high"],
+    }
+    comparison = compare_fits(baseline, masked, labels=("baseline", "masked"))
+
+    text = format_fit_comparison_table(comparison)
+
+    assert "Spyctres fit-comparison table" in text
+    assert "Teff[K]" in text
+    assert "masked" in text
+    assert "6100" in text
+    assert "+100" in text
+    assert "-0.5" in text
+    assert "needs_review" in text
+    assert "edge:teff_high" in text
+    assert "high_chi2" in text
+    assert " ok" not in text
+
+
+def test_format_fit_comparison_table_is_top_level_public_api():
+    import Spyctres
+
+    comparison = Spyctres.compare_fits(
+        {"teff": 6000.0},
+        {"teff": 6100.0},
+        labels=("baseline", "variant"),
+    )
+
+    assert "variant" in Spyctres.format_fit_comparison_table(comparison)
+
+
+def test_quality_flag_descriptions_cover_static_and_grid_flags():
+    descriptions = describe_quality_flags(
+        [
+            "metadata_incomplete",
+            "grid_edge_teff_high",
+            "rv_interpretation_ambiguous",
+            "low_sampling_warning",
+            "parameter_errors_local_linearized",
+            "surprise_flag",
+        ]
+    )
+
+    assert "metadata" in descriptions["metadata_incomplete"]
+    assert "high edge" in descriptions["grid_edge_teff_high"]
+    assert "alignment" in descriptions["rv_interpretation_ambiguous"]
+    assert "pixels" in descriptions["low_sampling_warning"]
+    assert "Jacobian" in descriptions["parameter_errors_local_linearized"]
+    assert "No description" in descriptions["surprise_flag"]
+
+
+def test_quality_flag_classification_covers_static_flags_and_dynamic_families():
+    assert set(QUALITY_FLAG_CLASSIFICATION) == set(QUALITY_FLAG_DESCRIPTIONS)
+
+    high_chi2 = classify_quality_flag("high_chi2")
+    assert high_chi2["severity"] == "review"
+    assert high_chi2["needs_review"] is True
+    assert "residual" in high_chi2["action"]
+
+    optimizer = classify_quality_flag("optimizer_local_minimum_suspected")
+    assert optimizer["severity"] == "blocker"
+    assert optimizer["blocks_interpretation"] is True
+
+    edge = classify_quality_flag("grid_edge_teff_high")
+    assert edge["severity"] == "review"
+    assert edge["category"] == "model_grid"
+
+    proxy = classify_quality_flag("heldout_high_chi2_proxy")
+    assert proxy["severity"] == "review"
+    assert proxy["category"] == "comparison_proxy"
+
+    unknown = classify_quality_flag("new_future_flag")
+    assert unknown["severity"] == "review"
+    assert unknown["category"] == "unclassified"
+
+
+def test_quality_flag_actions_and_summary_are_sorted_and_actionable():
+    actions = quality_flag_actions(
+        [
+            "parameter_errors_local_linearized",
+            "high_chi2",
+            "optimizer_local_minimum_suspected",
+            "ok",
+        ]
+    )
+
+    assert [item["flag"] for item in actions[:2]] == [
+        "optimizer_local_minimum_suspected",
+        "high_chi2",
+    ]
+    assert all("action" in item for item in actions)
+
+    summary = summarize_quality_flags(
+        ["high_chi2", "structured_residuals", "error_floor_applied"]
+    )
+    assert summary["headline_status"] == "needs_review"
+    assert summary["counts_by_severity"]["review"] == 2
+    assert summary["counts_by_severity"]["advisory"] == 1
+    assert summary["top_actions"][0]["flag"] in {"high_chi2", "structured_residuals"}
+
+
+def test_wavelength_medium_helpers_are_top_level_public_api():
+    import Spyctres
+
+    wave_air = np.array([5000.0])
+    converted = Spyctres.convert_wavelength_medium(
+        wave_air,
+        from_medium="air",
+        to_medium="vacuum",
+        method="vald3",
+    )
+
+    assert converted[0] > wave_air[0]
+    assert callable(Spyctres.convert_segment_wavelength_medium)
+
+
+def test_exclusion_mask_helper_is_top_level_public_api():
+    import Spyctres
+
+    spec = Spyctres.exclusion_mask("demo", lambda wave: wave == wave)
+
+    assert isinstance(spec, Spyctres.ExclusionMaskSpec)
+    assert spec.name == "demo"
+
+    region_spec = Spyctres.wavelength_region_exclusion_mask(
+        "manual_region",
+        [(5000.0, 5001.0)],
+    )
+    assert isinstance(region_spec, Spyctres.ExclusionMaskSpec)
+    assert region_spec.metadata["regions_A"] == [[5000.0, 5001.0]]
+
+
+def test_build_mask_facade_is_top_level_and_iterable():
+    import Spyctres
+
+    segment = SpectrumSegment(
+        np.linspace(4400.0, 4450.0, 100),
+        np.ones(100),
+        meta={
+            "archive_mask_catalog": [
+                {
+                    "id": "demo_bad",
+                    "name": "demo bad region",
+                    "region_A": [4410.0, 4415.0],
+                }
+            ]
+        },
+    )
+
+    bundle = Spyctres.build_mask(
+        segment,
+        archive=True,
+        tellurics="warn",
+        dibs=True,
+    )
+
+    assert isinstance(bundle, Spyctres.MaskBundle)
+    assert len(bundle) >= 2
+    assert any(mask.name == "archive:demo_bad" for mask in bundle)
+    assert any(mask.name == "nonstellar:dib_4428" for mask in bundle)
+    assert bundle.warning_regions
+    assert bundle.to_metadata()["n_exclusion_masks"] == len(bundle)
+
+
+def test_nonstellar_feature_helpers_are_top_level_public_api():
+    import Spyctres
+
+    regions = Spyctres.nonstellar_feature_regions("dib_4428")
+    dib_4882 = Spyctres.nonstellar_feature_regions("dib_4882")
+    masks = Spyctres.known_feature_masks(["dib_4428", "dib_4882"])
+
+    assert "dib_4428" in Spyctres.NONSTELLAR_FEATURES
+    assert "dib_4882" in Spyctres.NONSTELLAR_FEATURES
+    assert "telluric_o2_gamma_6280" in Spyctres.OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES
+    assert "telluric_o2_a_7605" in Spyctres.OPTICAL_TELLURIC_DIAGNOSTIC_FEATURES
+    assert "dib_4882" in Spyctres.OPTICAL_DIB_DIAGNOSTIC_FEATURES
+    assert regions == [(4416.8, 4440.8)]
+    assert dib_4882 == [(4870.0, 4915.0)]
+    assert [mask.name for mask in masks] == [
+        "nonstellar:dib_4428",
+        "nonstellar:dib_4882",
+    ]
+    assert Spyctres.find_known_nonstellar_features((4415.0, 4445.0))[0][
+        "id"
+    ] == "dib_4428"
+    assert callable(Spyctres.annotate_nonstellar_features)
+    assert callable(Spyctres.diagnose_known_residual_windows)
+    assert callable(Spyctres.broad_telluric_catalog_fallback_mask)
+    assert callable(Spyctres.combine_exclusion_masks)
+    assert callable(Spyctres.dilate_boolean_mask)
+    assert callable(Spyctres.wavelength_region_exclusion_mask)
+    assert callable(Spyctres.telluric_transmission_exclusion_mask)
+    assert callable(Spyctres.find_known_nonstellar_features)
+    assert callable(Spyctres.plot_spectrum)
+    assert callable(Spyctres.plot_fit_comparison_line_windows)
+    assert callable(Spyctres.plot_model_line_windows)
+    assert callable(Spyctres.plot_spectrum_line_windows)
+    assert callable(Spyctres.plot_diagnostic_windows)
+    assert callable(Spyctres.compare_fits)
+    assert callable(Spyctres.format_fit_comparison_table)
+    assert callable(Spyctres.compare_line_fits)
+    assert callable(Spyctres.list_known_lines)
+    assert callable(Spyctres.plot_line_fit_comparison)
+    assert "Hgamma" in Spyctres.list_known_lines()
+    assert callable(Spyctres.example_data_path)
+    assert Spyctres.KNOWN_RESIDUAL_WINDOWS[0]["linked_feature"] == "dib_4882"
+
+
+def test_structured_result_can_save_compact_json(tmp_path):
+    result = PhoenixFitResult(
+        summary={"teff": np.float64(5772.0)},
+        models=(np.array([np.nan]),),
+        diagnostics={"residual_rms": np.float64(np.nan)},
+        quality_flags=("metadata_incomplete",),
+    )
+    path = tmp_path / "nested" / "products" / "result.json"
+
+    result.save_json(path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "models" not in payload
+    assert payload["diagnostics"]["residual_rms"] is None
+    assert payload["quality_flags"] == ["metadata_incomplete"]
+
+
+def test_example_data_path_resolves_bundled_example_and_rejects_escape():
+    import Spyctres
+
+    path = Spyctres.example_data_path("TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits")
+
+    assert path.exists()
+    assert "examples" in path.parts
+    with pytest.raises(ValueError, match="relative"):
+        Spyctres.example_data_path(path)
+    with pytest.raises(ValueError, match="parent-directory"):
+        Spyctres.example_data_path("../README.md", must_exist=False)
+
+
+def test_compact_json_sanitizes_local_paths_and_records_relative_plot(tmp_path):
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0},
+        provenance={
+            "phoenix_source_root": "/home/someone/PHOENIX",
+            "cache_path": "/tmp/spyctres_cache.npz",
+            "reader_path": "examples/data/spectrum.fits",
+        },
+    )
+    json_path = tmp_path / "products" / "result.json"
+    json_path.parent.mkdir()
+    plot_path = json_path.parent / "fit.png"
+
+    result.save_json(json_path, plot_paths={"referee_plot": plot_path})
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    text = json.dumps(payload)
+    assert "/home/" not in text
+    assert "/tmp/" not in text
+    assert payload["provenance"]["phoenix_source_root"] is None
+    assert payload["provenance"]["cache_path"] is None
+    assert payload["provenance"]["reader_path"] == "examples/data/spectrum.fits"
+    assert payload["generated_files"]["plots"]["referee_plot"] == "fit.png"
+
+
+def test_fit_report_envelope_records_schema_and_provenance():
+    result = PhoenixFitResult(
+        summary={
+            "success": True,
+            "teff": np.float64(5772.0),
+            "fit_setup_hash": "abc123",
+        },
+        models=(np.array([1.0, 0.9]),),
+        provenance={
+            "workflow_api": "fit_stellar_spectrum",
+            "workflow_model": "phoenix",
+            "instrument": "xshooter",
+            "input_was_path": True,
+            "phoenix_source_root": "/home/someone/PHOENIX",
+            "cache_path": "/tmp/spyctres_cache.npz",
+            "rv_convention": "positive rv_kms redshifts a receding stellar spectrum",
+            "rv_bary_explicit": True,
+        },
+        quality_flags=("ok",),
+    )
+
+    payload = result.to_report_dict(include_arrays=False)
+
+    assert payload["schema_name"] == "spyctres.fit_result_report"
+    assert payload["schema_status"] == "experimental"
+    assert payload["schema_version"] == 1
+    assert payload["report_type"] == "spyctres.fit_result_report"
+    assert payload["result_payload_schema_version"] == 1
+    assert payload["created_utc"].endswith("Z")
+    assert payload["path_policy"]["include_local_paths"] is False
+    assert payload["path_policy"]["local_paths_sanitized"] is True
+    assert payload["spyctres"]["version"] == "0.5.0a1"
+    assert "git_commit" in payload["spyctres"]
+    assert "result" in payload
+    assert "models" not in payload["result"]
+    assert payload["result"]["provenance"]["phoenix_source_root"] is None
+    assert payload["result"]["provenance"]["cache_path"] is None
+    summary = payload["provenance_summary"]
+    assert summary["workflow_api"] == "fit_stellar_spectrum"
+    assert summary["model_backend"] == "phoenix"
+    assert summary["fit_setup_hash"] == "abc123"
+    assert summary["instrument"] == "xshooter"
+    assert summary["input_was_path"] is True
+    assert (
+        summary["rv_convention"]
+        == "positive rv_kms redshifts a receding stellar spectrum"
+    )
+    assert summary["rv_bary_explicit"] is True
+    assert summary["quality_flags"] == ["ok"]
+    assert summary["phoenix_source_root"] is None
+    assert summary["cache_path"] is None
+    json.dumps(payload)
+
+
+def test_report_json_records_relative_artifacts_and_context(tmp_path):
+    result = PhoenixFitResult(
+        summary={
+            "teff": np.float64(5772.0),
+            "fit_setup": {"setup_hash": "setup123"},
+        },
+        provenance={"workflow_api": "fit_stellar_spectrum"},
+    )
+    json_path = tmp_path / "products" / "report.json"
+    plot_path = json_path.parent / "fit.png"
+
+    result.save_report_json(
+        json_path,
+        plot_paths={"referee_plot": plot_path},
+        report_context={"purpose": "regression"},
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["result"]["generated_files"]["plots"]["referee_plot"] == "fit.png"
+    assert payload["provenance_summary"]["fit_setup_hash"] == "setup123"
+    assert payload["report_context"] == {"purpose": "regression"}
+    assert payload["path_policy"]["include_local_paths"] is False
+    assert payload["path_policy"]["local_paths_sanitized"] is True
+    assert payload["path_policy"]["plot_paths_relative_to"] == "provided_relative_base"
+
+
+def test_report_json_can_include_local_paths_explicitly():
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0},
+        provenance={
+            "phoenix_source_root": "/home/someone/PHOENIX",
+            "cache_path": "/tmp/spyctres_cache.npz",
+        },
+    )
+
+    payload = result.to_report_dict(include_local_paths=True)
+
+    assert payload["path_policy"]["include_local_paths"] is True
+    assert payload["path_policy"]["local_paths_sanitized"] is False
+    assert payload["result"]["provenance"]["phoenix_source_root"] == "/home/someone/PHOENIX"
+    assert payload["result"]["provenance"]["cache_path"] == "/tmp/spyctres_cache.npz"
+    assert payload["provenance_summary"]["phoenix_source_root"] == "/home/someone/PHOENIX"
+    assert payload["provenance_summary"]["cache_path"] == "/tmp/spyctres_cache.npz"
+
+
+def test_report_provenance_summary_surfaces_setup_mask_resolution_and_phoenix():
+    result = PhoenixFitResult(
+        summary={
+            "teff": 6000.0,
+            "resolution_R": 6200.0,
+            "lsf_fwhm_kms": 48.35,
+            "wavelength_frame_assumption": "topocentric data; stellar RV fitted",
+            "fit_setup": {
+                "setup_hash": "setup456",
+                "readiness": {
+                    "intent": "quicklook_classification",
+                    "ready_for_intent": True,
+                    "fit_ready": False,
+                },
+                "provenance": {
+                    "assumed_resolution": {
+                        "quantity": "R",
+                        "value": 6200.0,
+                        "source": "user_override",
+                    }
+                },
+            },
+            "archive_mask_policy": {"policy": "warn", "applied": False},
+            "quality_flags": ["metadata_incomplete"],
+        },
+        provenance={
+            "workflow_api": "fit_stellar_spectrum",
+            "workflow_model": "phoenix",
+            "input_checksum_policy": {
+                "requested": True,
+                "algorithm": "sha256",
+                "scope": "input_file_bytes",
+                "computed": True,
+                "reason": "requested",
+            },
+            "input_checksum": {
+                "algorithm": "sha256",
+                "sha256": "deadbeef",
+                "size_bytes": 123,
+            },
+            "phoenix_model_tag": "PHOENIX-ACES-AGSS-COND-2011-HiRes",
+            "phoenix_wave_filename": "WAVE_PHOENIX-ACES-AGSS-COND-2011.fits",
+            "phoenix_wave_medium": "vacuum",
+            "phoenix_template_axis_counts": {"teff": 73, "feh": 7, "logg": 13},
+            "phoenix_interpolator_manifest_hash": "grid-hash",
+            "phoenix_interpolator_manifest": {
+                "schema_version": 1,
+                "status": "built",
+                "manifest_hash": "grid-hash",
+            },
+            "phoenix_composition_note": "not yet extracted from headers",
+        },
+    )
+
+    summary = result.to_report_dict(include_arrays=False)["provenance_summary"]
+
+    assert summary["fit_setup_hash"] == "setup456"
+    assert summary["readiness_intent"] == "quicklook_classification"
+    assert summary["ready_for_intent"] is True
+    assert summary["fit_ready"] is False
+    assert summary["mask_policy"] == "warn"
+    assert summary["archive_mask_policy"] == {"policy": "warn", "applied": False}
+    assert summary["input_checksum_policy"]["computed"] is True
+    assert summary["input_checksum"]["sha256"] == "deadbeef"
+    assert summary["resolution_source"] == "user_override"
+    assert summary["assumed_resolution_R"] == 6200.0
+    assert summary["resolution_R"] == 6200.0
+    assert summary["lsf_fwhm_kms"] == 48.35
+    assert summary["wavelength_frame_assumption"] == (
+        "topocentric data; stellar RV fitted"
+    )
+    assert summary["quality_flags"] == ["metadata_incomplete"]
+    assert summary["phoenix_model_tag"] == "PHOENIX-ACES-AGSS-COND-2011-HiRes"
+    assert summary["phoenix_wave_medium"] == "vacuum"
+    assert summary["phoenix_template_axis_counts"]["teff"] == 73
+    assert summary["phoenix_interpolator_manifest_hash"] == "grid-hash"
+    assert summary["phoenix_interpolator_manifest"]["status"] == "built"
+
+
+def test_report_provenance_summary_surfaces_uncertainty_scope():
+    uncertainty = {
+        "available": True,
+        "scope": "local_statistical_optimizer_diagnostic",
+        "method": "jacobian_pseudoinverse_scaled_by_reduced_chi2",
+        "includes_external_systematics": False,
+        "external_systematics_status": "not_estimated",
+    }
+    result = PhoenixFitResult(
+        summary={
+            "teff": 6000.0,
+            "parameter_uncertainty": uncertainty,
+        },
+    )
+
+    summary = result.to_report_dict(include_arrays=False)["provenance_summary"]
+
+    assert summary["parameter_uncertainty"] == uncertainty
+
+
+def test_to_dict_rejects_absolute_plot_paths_without_relative_base():
+    result = PhoenixFitResult(summary={"teff": 5772.0})
+    with pytest.raises(ValueError, match="Absolute/local paths"):
+        result.to_dict(plot_paths={"referee_plot": "/tmp/fit.png"})
+
+
+def test_compact_json_rejects_plot_paths_outside_product_directory(tmp_path):
+    result = PhoenixFitResult(summary={"teff": 5772.0})
+    product_dir = tmp_path / "products"
+    product_dir.mkdir()
+    with pytest.raises(ValueError, match="inside the JSON product directory"):
+        result.to_dict(
+            include_arrays=False,
+            plot_paths={"referee_plot": tmp_path / "fit.png"},
+            relative_to=product_dir,
+        )
+    with pytest.raises(ValueError, match="must not traverse"):
+        result.to_dict(
+            include_arrays=False,
+            plot_paths={"referee_plot": "../fit.png"},
+            relative_to=product_dir,
+        )
+
+
+def test_local_paths_can_be_included_explicitly():
+    result = PhoenixFitResult(
+        summary={"teff": 5772.0},
+        provenance={"phoenix_source_root": "/home/someone/PHOENIX"},
+    )
+    payload = result.to_dict(include_local_paths=True)
+    assert payload["provenance"]["phoenix_source_root"] == "/home/someone/PHOENIX"
+
+
+def test_public_api_canonicalizes_and_reconstructs(monkeypatch):
+    captured = {}
+
+    def fake_fit(spectrum, phoenix_lib, **kwargs):
+        captured["spectrum"] = spectrum
+        return {
+            "success": True,
+            "teff": 5000.0,
+            "feh": 0.0,
+            "logg": 4.5,
+            "rv_kms": 10.0,
+            "forward_model": "native_interp",
+            "model_margin_A": 20.0,
+        }
+
+    def fake_reconstruct(spectrum, phoenix_lib, fit_result, **kwargs):
+        captured["reconstruction_kwargs"] = kwargs
+        return [np.ones(2)], [np.array([1.0])], [np.ones(2, bool)], [np.zeros(2, bool)]
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_full_spectrum", fake_fit)
+    monkeypatch.setattr(
+        "Spyctres.api.reconstruct_phoenix_legendre_models_for_segments",
+        fake_reconstruct,
+    )
+    segment = SpectrumSegment(
+        [5001.0, 5000.0],
+        [1.0, 1.0],
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+    )
+
+    result = fit_phoenix_spectrum(
+        segment,
+        phoenix_lib=object(),
+        regions=[(5000.0, 5000.5)],
+        exclude_regions=[(5000.2, 5000.3)],
+    )
+
+    assert isinstance(result, PhoenixFitResult)
+    assert np.array_equal(captured["spectrum"].wave, [5000.0, 5001.0])
+    assert len(result.models) == 1
+    assert captured["reconstruction_kwargs"]["regions"] == [(5000.0, 5000.5)]
+    assert captured["reconstruction_kwargs"]["exclude_regions"] == [
+        (5000.2, 5000.3)
+    ]
+
+
+def test_public_api_records_phoenix_interpolator_manifest(monkeypatch):
+    class FakePhoenixLibrary:
+        base_dir = "/home/someone/PHOENIX"
+        CACHE_SCHEMA_VERSION = 2
+        model_tag = "fake-phoenix"
+        wave_filename = "fake-wave.fits"
+        phoenix_wave_medium = "vacuum"
+
+        def available_axes(self):
+            return (
+                np.array([5000.0, 6000.0]),
+                np.array([-0.5, 0.0]),
+                np.array([4.0, 4.5]),
+            )
+
+        def interpolator_manifest(self):
+            return {
+                "schema_version": 1,
+                "status": "built",
+                "manifest_hash": "manifest-123",
+            }
+
+    monkeypatch.setattr(
+        "Spyctres.api.fit_phoenix_full_spectrum",
+        lambda *args, **kwargs: {
+            "success": False,
+            "teff": 5000.0,
+            "feh": 0.0,
+            "logg": 4.0,
+            "rv_kms": 0.0,
+        },
+    )
+    segment = SpectrumSegment([5000.0], [1.0])
+
+    result = fit_phoenix_spectrum(
+        segment,
+        phoenix_lib=FakePhoenixLibrary(),
+        reconstruct=False,
+        warn_unknown=False,
+    )
+
+    assert result.provenance["phoenix_model_tag"] == "fake-phoenix"
+    assert result.provenance["phoenix_template_axis_counts"] == {
+        "teff": 2,
+        "feh": 2,
+        "logg": 2,
+    }
+    assert result.provenance["phoenix_interpolator_manifest_hash"] == "manifest-123"
+    assert (
+        result.to_report_dict(include_arrays=False)["provenance_summary"][
+            "phoenix_interpolator_manifest_hash"
+        ]
+        == "manifest-123"
+    )
+
+
+def test_public_api_rejects_two_library_sources():
+    segment = SpectrumSegment([5000.0], [1.0])
+    with pytest.raises(ValueError, match="not both"):
+        fit_phoenix_spectrum(
+            segment,
+            phoenix_lib=object(),
+            phoenix_dir="unused",
+            reconstruct=False,
+            warn_unknown=False,
+        )
+
+
+def test_public_api_skips_reconstruction_after_failed_fit(monkeypatch):
+    monkeypatch.setattr(
+        "Spyctres.api.fit_phoenix_full_spectrum",
+        lambda *args, **kwargs: {"success": False, "teff": 5000.0},
+    )
+    segment = SpectrumSegment([5000.0], [1.0])
+    result = fit_phoenix_spectrum(
+        segment, phoenix_lib=object(), warn_unknown=False
+    )
+
+    assert result.models == ()
+    assert result.provenance["reconstruction_performed"] is False
+
+
+def test_fit_stellar_spectrum_reads_path_and_applies_defaults(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 20),
+        np.ones(20),
+        err=np.full(20, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "XSHOOTER", "arm": "UVB"},
+        resolution=5000.0,
+    )
+
+    def fake_read(path, reader, warn_unknown=True, **kwargs):
+        captured["read"] = {
+            "path": path,
+            "reader": reader,
+            "warn_unknown": warn_unknown,
+            "kwargs": kwargs,
+        }
+        return segment
+
+    def fake_fit(spectrum, **kwargs):
+        captured["fit_spectrum"] = spectrum
+        captured["fit_kwargs"] = kwargs
+        return PhoenixFitResult(
+            summary={
+                "success": True,
+                "teff": 6000.0,
+                "feh": 0.0,
+                "logg": 4.0,
+                "rv_kms": 0.0,
+                "chi2_red": 1.0,
+            },
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.read_spectrum", fake_read)
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+    user_mask = [lambda wave: np.zeros_like(wave, dtype=bool)]
+
+    result = fit_stellar_spectrum(
+        "example.fits",
+        reader="xshooter_merge1d",
+        phoenix_lib=object(),
+        mode="standard",
+        exclude_masks=user_mask,
+        resolution_R=6200.0,
+        continuum_degree=3,
+        reader_kwargs={"product_profile": "demo"},
+        regions=[(4000.0, 5000.0)],
+        rv_grid_n=11,
+    )
+
+    assert captured["read"]["reader"] == "xshooter_merge1d"
+    assert captured["read"]["kwargs"] == {"product_profile": "demo"}
+    assert captured["fit_spectrum"] is segment
+    assert captured["fit_kwargs"]["regions"] == [(4000.0, 5000.0)]
+    assert captured["fit_kwargs"]["rv_grid_n"] == 11
+    assert captured["fit_kwargs"]["exclude_masks"] is user_mask
+    assert captured["fit_kwargs"]["R"] == 6200.0
+    assert captured["fit_kwargs"]["mdeg"] == 3
+    assert captured["fit_kwargs"]["forward_model"] == "native_interp"
+    assert "fit_default_suggestion" in result.summary
+    assert result.provenance["workflow_api"] == "fit_stellar_spectrum"
+    assert result.provenance["input_was_path"] is True
+    assert result.provenance["reader"] == "xshooter_merge1d"
+    assert result.provenance["instrument"] is None
+    assert result.provenance["defaults_mode"] == "standard"
+    assert result.provenance["input_checksum_policy"] == {
+        "requested": False,
+        "algorithm": "sha256",
+        "scope": "input_file_bytes",
+        "computed": False,
+        "reason": "not_requested",
+    }
+    assert result.provenance["input_checksum"] is None
+
+
+def test_fit_stellar_spectrum_can_record_input_checksum(monkeypatch, tmp_path):
+    path = tmp_path / "input.fits"
+    path.write_bytes(b"synthetic spectrum bytes\n")
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 20),
+        np.ones(20),
+        err=np.full(20, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+
+    monkeypatch.setattr(
+        "Spyctres.api.read_spectrum",
+        lambda *args, **kwargs: segment,
+    )
+    monkeypatch.setattr(
+        "Spyctres.api.fit_phoenix_spectrum",
+        lambda *args, **kwargs: PhoenixFitResult(
+            summary={"success": True, "teff": 6000.0},
+            provenance={"api": "fit_phoenix_spectrum"},
+        ),
+    )
+
+    result = fit_stellar_spectrum(
+        path,
+        reader="xshooter_merge1d",
+        phoenix_lib=object(),
+        record_input_checksum=True,
+    )
+
+    assert result.provenance["input_checksum_policy"]["computed"] is True
+    assert result.provenance["input_checksum"] == {
+        "algorithm": "sha256",
+        "sha256": hashlib.sha256(b"synthetic spectrum bytes\n").hexdigest(),
+        "size_bytes": len(b"synthetic spectrum bytes\n"),
+    }
+
+
+def test_fit_stellar_spectrum_valid_mask_is_usable_pixel_mask(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment(
+        np.linspace(4000.0, 4010.0, 4),
+        np.ones(4),
+        err=np.full(4, 0.1),
+        mask=[True, True, False, True],
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+
+    def fake_fit(spectrum, **kwargs):
+        captured["spectrum"] = spectrum
+        return PhoenixFitResult(
+            summary={"success": True, "teff": 6000.0},
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    fit_stellar_spectrum(
+        segment,
+        phoenix_lib=object(),
+        auto_defaults=False,
+        valid_mask=[True, False, True, True],
+        p0=(6000.0, 0.0, 4.0, 0.0),
+    )
+
+    assert np.array_equal(captured["spectrum"].mask, [True, False, False, True])
+    assert captured["spectrum"].meta["valid_mask_override"]["polarity"] == (
+        "True means usable"
+    )
+
+
+def test_fit_stellar_spectrum_rejects_valid_mask_and_legacy_mask():
+    segment = SpectrumSegment([5000.0, 5001.0], [1.0, 1.0])
+    with pytest.raises(ValueError, match="valid_mask or mask"):
+        fit_stellar_spectrum(
+            segment,
+            phoenix_lib=object(),
+            valid_mask=[True, True],
+            mask=[lambda wave: np.zeros_like(wave, dtype=bool)],
+        )
+
+
+def test_input_checksum_provenance_is_public_helper(tmp_path):
+    path = tmp_path / "input.fits"
+    path.write_bytes(b"standalone helper bytes\n")
+
+    policy, checksum = input_checksum_provenance(path)
+
+    assert policy == {
+        "requested": True,
+        "algorithm": "sha256",
+        "scope": "input_file_bytes",
+        "computed": True,
+        "reason": "requested",
+    }
+    assert checksum == {
+        "algorithm": "sha256",
+        "sha256": hashlib.sha256(b"standalone helper bytes\n").hexdigest(),
+        "size_bytes": len(b"standalone helper bytes\n"),
+    }
+
+
+def test_fit_stellar_spectrum_uses_reviewed_setup(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 120),
+        np.ones(120),
+        err=np.full(120, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        meta={"instrument": "XSHOOTER", "arm": "UVB"},
+        resolution=5000.0,
+    )
+    setup = suggest_fit_setup(segment, mode="standard")
+
+    def fake_fit(spectrum, **kwargs):
+        captured["spectrum"] = spectrum
+        captured["kwargs"] = kwargs
+        return PhoenixFitResult(
+            summary={
+                "success": True,
+                "teff": 6000.0,
+                "feh": 0.0,
+                "logg": 4.0,
+                "rv_kms": 0.0,
+                "chi2_red": 1.0,
+            },
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    valid_mask = np.ones(segment.wave.shape, dtype=bool)
+    valid_mask[5] = False
+    result = fit_stellar_spectrum(
+        segment,
+        setup=setup,
+        valid_mask=valid_mask,
+        phoenix_lib=object(),
+        progress_callback=lambda _event: None,
+    )
+
+    expected_fit_kwargs = setup.fit_kwargs
+    assert np.allclose(captured["spectrum"].wave, segment.wave)
+    assert not bool(captured["spectrum"].mask[5])
+    assert captured["spectrum"].meta["valid_mask_override"]["polarity"] == (
+        "True means usable"
+    )
+    assert captured["kwargs"]["regions"] == expected_fit_kwargs["regions"]
+    assert captured["kwargs"]["rv_grid_n"] == expected_fit_kwargs["rv_grid_n"]
+    assert captured["kwargs"]["forward_model"] == expected_fit_kwargs["forward_model"]
+    assert "valid_mask" not in captured["kwargs"]
+    assert "progress_callback" in captured["kwargs"]
+    assert result.summary["fit_setup_hash"] == setup.setup_hash
+    assert result.summary["fit_setup"]["setup_hash"] == setup.setup_hash
+    assert result.provenance["fit_setup_source"] == "explicit_setup"
+    assert result.provenance["fit_setup_hash"] == setup.setup_hash
+
+
+def test_fit_stellar_spectrum_rejects_setup_plus_fit_overrides():
+    segment = SpectrumSegment(
+        np.linspace(3900.0, 5300.0, 120),
+        np.ones(120),
+        err=np.full(120, 0.1),
+        wave_medium="vacuum",
+        observer_frame="barycentric",
+        stellar_rest_status="observed",
+        resolution=5000.0,
+    )
+    setup = suggest_fit_setup(segment)
+
+    with pytest.raises(ValueError, match="Pass setup or explicit fit-control"):
+        fit_stellar_spectrum(
+            segment,
+            setup=setup,
+            phoenix_lib=object(),
+            regions=[(4000.0, 5000.0)],
+        )
+
+    with pytest.raises(ValueError, match="Pass setup or explicit fit-control"):
+        fit_stellar_spectrum(
+            segment,
+            setup=setup,
+            phoenix_lib=object(),
+            mask=[lambda wave: np.zeros_like(wave, dtype=bool)],
+        )
+
+
+def test_classify_spectrum_alias_and_manual_defaults(monkeypatch):
+    captured = {}
+    segment = SpectrumSegment([5000.0, 5010.0], [1.0, 1.0])
+
+    def fake_fit(spectrum, **kwargs):
+        captured["kwargs"] = kwargs
+        return PhoenixFitResult(
+            summary={"success": True, "teff": 5750.0},
+            provenance={"api": "fit_phoenix_spectrum"},
+        )
+
+    monkeypatch.setattr("Spyctres.api.fit_phoenix_spectrum", fake_fit)
+
+    result = classify_spectrum(
+        segment,
+        phoenix_lib=object(),
+        auto_defaults=False,
+        p0=(5100.0, -0.2, 4.0, 3.0),
+        reconstruct=False,
+        warn_unknown=False,
+    )
+
+    assert captured["kwargs"]["p0"] == pytest.approx((5100.0, -0.2, 4.0, 3.0))
+    assert captured["kwargs"]["reconstruct"] is False
+    assert "fit_default_suggestion" not in result.summary
+    assert result.provenance["workflow_api"] == "fit_stellar_spectrum"
+    assert result.provenance["auto_defaults"] is False
+
+
+def test_fit_stellar_spectrum_rejects_missing_reader_for_paths():
+    with pytest.raises(ValueError, match="no spectrum reader was specified"):
+        fit_stellar_spectrum("example.fits", phoenix_lib=object())
+
+
+def test_fit_stellar_spectrum_rejects_non_phoenix_model():
+    segment = SpectrumSegment([5000.0], [1.0])
+    with pytest.raises(ValueError, match="model='phoenix'"):
+        fit_stellar_spectrum(segment, model="kurucz", phoenix_lib=object())
