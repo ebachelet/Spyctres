@@ -61,7 +61,23 @@ The PHOENIX templates may be downloaded from the Goettingen Spectral Library:
 - PHOENIX v2 HiResFITS directory: `https://phoenix.astro.physik.uni-goettingen.de/data/v2.0/HiResFITS/PHOENIX-ACES-AGSS-COND-2011/`
 - PHOENIX v2 wavelength file: `https://phoenix.astro.physik.uni-goettingen.de/data/v2.0/HiResFITS/WAVE_PHOENIX-ACES-AGSS-COND-2011.fits`
 
-The wavelength file must be placed in the root directory of the PHOENIX v2 models.
+Configure Spyctres with the `HiResFITS` directory that contains the wavelength
+file. A standard Göttingen installation is used in place; templates do not need
+to be moved or symlinked:
+
+```text
+HiResFITS/
+├── WAVE_PHOENIX-ACES-AGSS-COND-2011.fits
+└── PHOENIX-ACES-AGSS-COND-2011/
+    ├── Z-1.0/
+    └── Z-0.0/
+```
+
+The historical flat layout, with ordinary `Z-*` directories directly under
+`HiResFITS`, remains supported. If both layouts contain usable templates, the
+standard nested layout is selected. Alpha-enhanced directories such as
+`Z-0.0.Alpha=+0.40` are not included in the current three-dimensional
+`(Teff, [Fe/H], logg)` interpolator.
 
 ## PHOENIX template path and config file
 
@@ -83,7 +99,7 @@ Minimal config:
 
 ```toml
 [paths]
-phoenix_dir = "/path/to/PHOENIXv2"
+phoenix_dir = "/path/to/HiResFITS"
 ```
 
 If you use a nonstandard XDG config root, Spyctres follows
@@ -93,8 +109,11 @@ shell sessions, and the config file for everyday use. Check what Spyctres sees
 with:
 
 ```bash
-python scripts/check_spyctres_setup.py --require-phoenix --skip-phoenix-scan
+spyctres doctor --require-phoenix
 ```
+
+Use `--skip-phoenix-scan` only when you deliberately want to verify the root
+and wavelength grid without checking template discovery.
 
 ## Quick start
 
@@ -112,7 +131,7 @@ Use this checklist for a first local run from a source checkout.
 
    ```toml
    [paths]
-   phoenix_dir = "/path/to/PHOENIXv2"
+   phoenix_dir = "/path/to/HiResFITS"
    ```
 
 3. Check that the environment, package import, PHOENIX path, and bundled
@@ -129,7 +148,7 @@ Use this checklist for a first local run from a source checkout.
    use:
 
    ```bash
-   spyctres doctor --require-phoenix --skip-phoenix-scan
+   spyctres doctor --require-phoenix
    ```
 
 4. Run the numbered quickstart. The default run is intentionally cheap: it
@@ -590,7 +609,7 @@ from Spyctres import fit_stellar_spectrum
 result = fit_stellar_spectrum(
     "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits",
     reader="xshooter_merge1d",
-    phoenix_dir="/path/to/PHOENIXv2",
+    phoenix_dir="/path/to/HiResFITS",
 )
 print(result["teff"], result["rv_kms"])
 print(result.quality_report_text())
@@ -612,7 +631,7 @@ from Spyctres import fit_phoenix_spectrum, suggest_phoenix_fit_defaults
 defaults = suggest_phoenix_fit_defaults(spectrum, mode="quicklook")
 result = fit_phoenix_spectrum(
     spectrum,
-    phoenix_dir="/path/to/PHOENIXv2",
+    phoenix_dir="/path/to/HiResFITS",
     **defaults.fit_kwargs,
 )
 print(result["teff"], result["rv_kms"])

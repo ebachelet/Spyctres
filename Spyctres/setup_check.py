@@ -236,7 +236,8 @@ def check_phoenix(args):
     _status(
         True,
         "PHOENIX template discovery",
-        "Teff={0} values, [Fe/H]={1} values, logg={2} values".format(
+        "template root={0}; Teff={1} values, [Fe/H]={2} values, logg={3} values".format(
+            library.template_dir,
             len(teff),
             len(feh),
             len(logg),

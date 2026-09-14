@@ -33,15 +33,15 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
-            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/HiResFITS\n"
             "  python scripts/fitting_smoketest.py\n\n"
             "  python scripts/fitting_smoketest.py \\\n"
-            "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
+            "    --phoenix-dir /path/to/HiResFITS \\\n"
             "    --cache-path /tmp/spyctres_fit_cache.npz \\\n"
             "    --verbose 2\n\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
-            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "    phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

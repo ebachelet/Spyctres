@@ -290,16 +290,16 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
-            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/HiResFITS\n"
             "  python scripts/xshooter_notebook_scan_smoketest.py "
             "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits\n\n"
             "  python scripts/xshooter_notebook_scan_smoketest.py \\\n"
-            "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
+            "    --phoenix-dir /path/to/HiResFITS \\\n"
             "    --use-telluric-mask --use-barycorr \\\n"
             "    examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
-            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "    phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

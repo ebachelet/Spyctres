@@ -7,6 +7,7 @@ https://doi.org/10.1051/0004-6361/201219058
 import os
 import hashlib
 import json
+import re
 import time
 import numpy as np
 from astropy.io import fits
@@ -132,16 +133,14 @@ def phoenix_relpath(teff, logg, feh, model_tag="PHOENIX-ACES-AGSS-COND-2011-HiRe
     """
     Return relative path from the template root to a PHOENIX template.
 
-    Layout supported here (your install):
-      <base_dir>/
-        WAVE_PHOENIX-ACES-AGSS-COND-2011.fits
+    The template root is resolved separately from the PHOENIX library root. It
+    contains ordinary metallicity directories such as::
+
+      <template_dir>/
         Z-0.0/
           lte05000-4.00-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits
         Z-1.0/
           ...
-
-    If you later want to support the alternative nested layout, we can add it,
-    but for now we match your PHOENIXv2 tree.
     """
     teff_i = int(round(float(teff)))
     logg_s = _format_logg(logg)
@@ -166,6 +165,10 @@ class PhoenixLibrary(object):
             lte05000-4.00-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits
           Z-1.0/
             ...
+
+    A legacy flat layout with the ``Z-*`` directories directly under
+    ``base_dir`` is also supported. The standard nested layout is preferred
+    deterministically when both contain usable ordinary templates.
 
     Wavelength-grid state:
     
@@ -211,6 +214,7 @@ class PhoenixLibrary(object):
         self.base_dir = os.path.abspath(os.path.expanduser(base_dir))
         self.wave_filename = wave_filename
         self.model_tag = model_tag
+        self._template_dir = None
         self.phoenix_wave_medium = str(phoenix_wave_medium).lower()
         self.verbose = bool(verbose)
 
@@ -226,39 +230,104 @@ class PhoenixLibrary(object):
         self._grid_scale = None
         self.wave = None  # the wave grid of the interpolator, usually observed_wave
 
+    @property
+    def template_dir(self):
+        """Resolved directory containing the ordinary ``Z-*`` template tree.
+
+        Resolution is lazy so that setup checks can validate the PHOENIX root
+        and wavelength grid while deliberately skipping template discovery.
+        """
+        if self._template_dir is None:
+            self._template_dir = self._resolve_template_dir()
+        return self._template_dir
+
+    def _nested_template_candidate(self):
+        family_name = str(self.model_tag)
+        if family_name.endswith("-HiRes"):
+            family_name = family_name[:-len("-HiRes")]
+        return os.path.join(self.base_dir, family_name)
+
+    def _iter_template_records(self, template_dir):
+        """Yield loadable ordinary-grid records under one candidate root."""
+        zdir_pattern = re.compile(r"^Z(?P<feh>[+-]\d+(?:\.\d+)?)$")
+        filename_pattern = re.compile(
+            r"^lte(?P<teff>\d+)-(?P<logg>\d+\.\d+)"
+            r"(?P<feh>[+-]\d+\.\d+)\."
+            + re.escape(str(self.model_tag))
+            + r"\.fits$"
+        )
+
+        if not os.path.isdir(template_dir):
+            return
+
+        for zname in sorted(os.listdir(template_dir)):
+            zmatch = zdir_pattern.fullmatch(zname)
+            zdir = os.path.join(template_dir, zname)
+            if zmatch is None or not os.path.isdir(zdir):
+                continue
+
+            directory_feh = float(zmatch.group("feh"))
+            if zname != _format_feh_dir(directory_feh):
+                continue
+
+            for name in sorted(os.listdir(zdir)):
+                match = filename_pattern.fullmatch(name)
+                path = os.path.join(zdir, name)
+                if match is None or not os.path.isfile(path):
+                    continue
+
+                teff = float(match.group("teff"))
+                logg = float(match.group("logg"))
+                feh = float(match.group("feh"))
+                expected_name = os.path.basename(
+                    phoenix_relpath(teff, logg, feh, model_tag=self.model_tag)
+                )
+                if feh != directory_feh or name != expected_name:
+                    continue
+                yield (teff, feh, logg), path
+
+    def _template_discovery_error(self):
+        nested = self._nested_template_candidate()
+        wave_path = os.path.join(self.base_dir, self.wave_filename)
+        return RuntimeError(
+            "No usable ordinary PHOENIX templates were found. "
+            "base_dir={0}; wavelength_file={1}; nested_template_candidate={2}; "
+            "flat_template_candidate={0}. Searched ordinary metallicity "
+            "directories such as Z-0.0 containing templates named for model "
+            "tag {3}; alpha-enhanced Z*.Alpha=* directories are not part of "
+            "the current (Teff, [Fe/H], logg) grid.".format(
+                self.base_dir,
+                wave_path,
+                nested,
+                self.model_tag,
+            )
+        )
+
+    def _resolve_template_dir(self):
+        """Resolve the standard nested or legacy flat template root."""
+        nested = self._nested_template_candidate()
+        if next(self._iter_template_records(nested), None) is not None:
+            return nested
+        if next(self._iter_template_records(self.base_dir), None) is not None:
+            return self.base_dir
+        raise self._template_discovery_error()
+
     def template_path(self, teff, logg, feh):
         rel = phoenix_relpath(teff, logg, feh, model_tag=self.model_tag)
-        return os.path.join(self.base_dir, rel)
+        return os.path.join(self.template_dir, rel)
 
     def scan_available_points(self):
         """
         Scan the local PHOENIX directory tree and return the available grid
         points as a sorted list of (teff, feh, logg) tuples.
         """
-        import glob
-        import re
-
-        pat = re.compile(
-            r"lte(?P<teff>\d+)-(?P<logg>\d+\.\d+)(?P<feh>[+-]\d+\.\d+)\.PHOENIX"
-        )
-
-        points = []
-        for zdir in sorted(glob.glob(os.path.join(self.base_dir, "Z*"))):
-            for path in sorted(glob.glob(os.path.join(zdir, "lte*.fits"))):
-                name = os.path.basename(path)
-                m = pat.search(name)
-                if m is None:
-                    continue
-
-                teff = float(m.group("teff"))
-                logg = float(m.group("logg"))
-                feh = float(m.group("feh"))
-                points.append((teff, feh, logg))
+        points = [
+            point
+            for point, _path in self._iter_template_records(self.template_dir)
+        ]
 
         if len(points) == 0:
-            raise RuntimeError(
-                "No PHOENIX templates found under {0}".format(self.base_dir)
-            )
+            raise self._template_discovery_error()
 
         return sorted(set(points))
 
@@ -743,7 +812,10 @@ class PhoenixLibrary(object):
         p = (validate_phoenix_teff(teff), float(feh), float(logg))
         return self._interp(self._scale_parameter_point(p))
     
-    CACHE_SCHEMA_VERSION = 2
+    # Version 3 invalidates caches created before nested-vs-flat template-root
+    # selection became deterministic. Otherwise an old flat-tree cache could
+    # survive even when the standard nested tree is now selected.
+    CACHE_SCHEMA_VERSION = 3
 
     def interpolator_matches(
         self, wave, teff_grid, feh_grid, logg_grid, observed_wave_medium=None

@@ -71,7 +71,7 @@ def build_parser():
             "    examples/data/Gaia21ccu_2024_11_23_FLOYDS.csv\n\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
-            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "    phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

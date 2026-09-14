@@ -68,8 +68,8 @@ python examples/example3_improving_a_phoenix_fit.py --no-show
 After configuring PHOENIX:
 
 ```bash
-export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2
-spyctres doctor --require-phoenix --skip-phoenix-scan
+export SPYCTRES_PHOENIX_DIR=/path/to/HiResFITS
+spyctres doctor --require-phoenix
 python scripts/phoenix_smoketest.py
 python scripts/fitting_smoketest.py
 python examples/example1_quickstart.py --run-fit --no-show
@@ -142,7 +142,7 @@ Checkpoint validation performed on 2026-08-08.
 | Clean wheel import | PASS | temporary venv import printed `0.5.0a1` |
 | CLI help from wheel | PASS | `spyctres --help` |
 | `spyctres doctor --skip-phoenix` | PASS | installed-wheel check passed; source-checkout check also passed with a PATH warning in the sandbox shell |
-| PHOENIX discovery | PASS | `spyctres doctor --require-phoenix --skip-phoenix-scan` found the configured PHOENIX directory and wavelength file |
+| PHOENIX root/wavelength resolution | PASS | `spyctres doctor --require-phoenix --skip-phoenix-scan` found the configured PHOENIX directory and wavelength file; the option deliberately did not test template discovery |
 | PHOENIX smoke test | PASS | `python scripts/phoenix_smoketest.py` |
 | Synthetic fitting smoke test | PASS | `python scripts/fitting_smoketest.py` |
 | Multi-segment fit | PASS WITH CAVEAT | maintained tracked regression `tests/test_fitting_initialization.py::test_multisegment_weighted_chi2_and_dof_accounting` passed; no tracked `scripts/multisegment_fit_smoketest.py` is included in this checkpoint |

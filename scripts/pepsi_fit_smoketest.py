@@ -107,11 +107,11 @@ def build_parser():
             "      examples/data/pepsir.20230603.010.dxt.nor\n"
             "\n"
             "Configuration:\n"
-            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/HiResFITS\n"
             "\n"
             "or use ~/.config/spyctres/config.toml:\n"
             "  [paths]\n"
-            "  phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "  phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

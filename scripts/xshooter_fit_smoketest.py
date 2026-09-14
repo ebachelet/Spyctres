@@ -462,7 +462,7 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
-            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/HiResFITS\n\n"
             "  Validated Balmer-wing benchmark:\n"
             "    python scripts/xshooter_fit_smoketest.py \\\n"
             "      --balmer-only \\\n"
@@ -480,7 +480,7 @@ def build_parser():
             "      examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
-            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "    phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

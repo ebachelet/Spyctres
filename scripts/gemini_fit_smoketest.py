@@ -93,7 +93,7 @@ def build_parser():
             "--wmin 4700 --wmax 8800.\n\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
-            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "    phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,

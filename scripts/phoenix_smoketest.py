@@ -25,15 +25,15 @@ def build_parser():
         ),
         epilog=(
             "Examples:\n"
-            "  export SPYCTRES_PHOENIX_DIR=/path/to/PHOENIXv2\n"
+            "  export SPYCTRES_PHOENIX_DIR=/path/to/HiResFITS\n"
             "  python scripts/phoenix_smoketest.py\n\n"
             "  python scripts/phoenix_smoketest.py \\\n"
-            "    --phoenix-dir /path/to/PHOENIXv2 \\\n"
+            "    --phoenix-dir /path/to/HiResFITS \\\n"
             "    --cache-path /tmp/spyctres_phoenix_cache_test.npz \\\n"
             "    --verbose\n"
             "  ~/.config/spyctres/config.toml:\n"
             "    [paths]\n"
-            "    phoenix_dir = \"/path/to/PHOENIXv2\"\n"
+            "    phoenix_dir = \"/path/to/HiResFITS\"\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
