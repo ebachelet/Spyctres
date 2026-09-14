@@ -1,0 +1,1205 @@
+"""Batch quick-scan then focused-refine PHOENIX example.
+
+This is the practical workflow to show someone who needs to fit many spectra:
+
+1. read each reduced spectrum;
+2. run a cheap, conservative PHOENIX quicklook fit;
+3. use that result to define a narrower local parameter box;
+4. rerun a more focused fit inside that box;
+5. checkpoint results after every spectrum so interrupted batches can resume;
+6. optionally save a few representative fit plots for human inspection.
+
+The default example uses the bundled X-SHOOTER UVB spectrum because it is fast
+and line-rich enough to demonstrate the idea. Multi-arm X-SHOOTER fitting is
+valuable, but it brings extra arm/telluric/flux-calibration choices; this
+example intentionally keeps the first batch pattern simple.
+
+Example
+-------
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  --reader xshooter_merge1d \
+  --output-json /tmp/spyctres_batch_xshooter_uvb.json \
+  --plot-dir /tmp/spyctres_batch_plots \
+  --max-plots 2 \
+  --resume
+
+For a multi-file demonstration, pass bundled spectra explicitly:
+
+python examples/batch_quickscan_then_refine.py \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits \
+  examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_VIS_TELL_CORR.fits \
+  --reader xshooter_merge1d --output-json /tmp/spyctres_batch.json --resume
+
+For heterogeneous batches, use --manifest with a CSV containing at least a
+path column and optional target_id, reader, and R/resolution_R columns.
+The older instrument column name is still accepted as a compatibility alias.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+
+# Let the example run directly from a source checkout, even if Spyctres has not
+# been installed into the active Python environment yet.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if (_REPO_ROOT / "Spyctres").is_dir() and str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from Spyctres import fit_stellar_spectrum, prepare_phoenix_fit_kwargs
+from Spyctres._serialization import (
+    atomic_write_csv_rows,
+    atomic_write_json,
+)
+from Spyctres._spectrum_helpers import spectrum_segments
+from Spyctres._workflow_helpers import (
+    archive_masks_by_segment as _shared_archive_masks_by_segment,
+    fit_kwargs_with_archive_policy as _shared_fit_kwargs_with_archive_policy,
+    readiness_intent_detail_lines as _shared_readiness_intent_detail_lines,
+    readiness_summary_line as _shared_readiness_summary_line,
+    resolution_assumption_for_audit as _shared_resolution_assumption_for_audit,
+    resolution_override_summary as _shared_resolution_override_summary,
+)
+from Spyctres.config import resolve_phoenix_dir
+from Spyctres.io import read_spectrum
+from Spyctres.phoenix import PhoenixLibrary
+from Spyctres.plotting import plot_model_line_windows
+from Spyctres.preprocessing import audit_spectrum_for_fit
+
+
+EXAMPLE_UVB = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits"
+)
+
+
+def build_parser():
+    # Keep the interface operational: files in, reader name, JSON checkpoint
+    # out, plus a few knobs that control how much effort each fit stage spends.
+    parser = argparse.ArgumentParser(
+        description=(
+            "Example batch workflow: cheap PHOENIX quick scan, then focused "
+            "local refinement for each spectrum. The default demonstration "
+            "uses the bundled X-SHOOTER UVB file."
+        ),
+        epilog=(
+            "Example:\n"
+            "  python examples/batch_quickscan_then_refine.py "
+            "examples/data/TOO_Gaia21ccu_SCI_SLIT_FLUX_MERGE1D_UVB.fits "
+            "--reader xshooter_merge1d "
+            "--output-json /tmp/spyctres_batch_xshooter_uvb.json "
+            "--summary-csv /tmp/spyctres_batch_xshooter_uvb.csv "
+            "--plot-dir /tmp/spyctres_batch_plots --max-plots 2 --resume\n\n"
+            "Manifest example after saving a CSV with examples/data paths:\n"
+            "  python examples/batch_quickscan_then_refine.py "
+            "--manifest examples/my_batch_manifest.csv "
+            "--refine-quality-policy skip-risky "
+            "--output-json /tmp/spyctres_batch_manifest.json --resume\n\n"
+            "Manifest columns: path or spectrum; optional target_id, "
+            "reader, R/resolution_R. The older instrument column is still "
+            "accepted as a compatibility alias."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "spectra",
+        nargs="*",
+        help=(
+            "Input spectrum files. If omitted, the bundled X-SHOOTER UVB "
+            "example spectrum is used. Ignored when --manifest is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help=(
+            "Optional CSV manifest for heterogeneous batches. Required column: "
+            "path or spectrum. Optional columns: target_id, reader, R or "
+            "resolution_R. The older instrument column is still accepted. "
+            "Relative paths are resolved beside the manifest."
+        ),
+    )
+    parser.add_argument(
+        "--reader",
+        default="xshooter_merge1d",
+        help="Registered Spyctres reader name. Default: xshooter_merge1d.",
+    )
+    parser.add_argument("--instrument", default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--sdss-mask-policy",
+        choices=("auto", "ivar_only", "and_mask_conservative", "stellar_strict", "sky_strict"),
+        default="auto",
+        help=(
+            "SDSS reader bitmask policy. 'auto' uses stellar_strict for this "
+            "PHOENIX fitting example; non-SDSS instruments ignore this option."
+        ),
+    )
+    parser.add_argument(
+        "--archive-mask-policy",
+        choices=("apply", "warn", "ignore"),
+        default="apply",
+        help=(
+            "How to handle recognized archive/product bad-region catalogs. "
+            "'apply' excludes them as named fit masks and records provenance; "
+            "'warn' leaves them fitted but skip-risky refinement will block; "
+            "'ignore' leaves them fitted and records an explicit override."
+        ),
+    )
+    parser.add_argument("--phoenix-dir", default=None)
+    parser.add_argument(
+        "--output",
+        "--output-json",
+        dest="output",
+        default="/tmp/spyctres_batch_quickscan_then_refine.json",
+        help="Checkpoint/output JSON path.",
+    )
+    parser.add_argument(
+        "--summary-csv",
+        default=None,
+        help=(
+            "Optional compact CSV summary path for spreadsheet/pandas review. "
+            "The full auditable record remains in --output-json."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip spectra already marked complete in the output checkpoint.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rerun spectra even when --resume finds completed records.",
+    )
+    parser.add_argument(
+        "--quick-only",
+        "--quicklook",
+        dest="quick_only",
+        action="store_true",
+        help=(
+            "Run only the cheap quick-scan stage. --quicklook is a friendly "
+            "alias for this mode."
+        ),
+    )
+    parser.add_argument(
+        "--quick-defaults-mode",
+        choices=("quicklook", "standard", "diagnostic"),
+        default="quicklook",
+        help="Defaults budget for the first pass.",
+    )
+    parser.add_argument(
+        "--refine-defaults-mode",
+        choices=("quicklook", "standard", "diagnostic"),
+        default="standard",
+        help="Defaults budget used as the base for the focused second pass.",
+    )
+    parser.add_argument(
+        "--refine-window",
+        choices=("quick", "refine-default"),
+        default="quick",
+        help=(
+            "Use the quick-scan wavelength window for refinement, or keep the "
+            "window suggested by --refine-defaults-mode."
+        ),
+    )
+    parser.add_argument(
+        "--refine-quality-policy",
+        choices=("always", "skip-risky"),
+        default="skip-risky",
+        help=(
+            "Refinement gate after the quick scan. Default: skip-risky. "
+            "'skip-risky' records the quicklook result but skips the expensive "
+            "refinement when spectrum readiness or quick-result quality flags "
+            "indicate missing frame/resolution assumptions, obvious artifacts, "
+            "archive bad-region overlap, no fitted pixels, undersampled LSF, "
+            "or poor preliminary fit quality. Use 'always' to force the older "
+            "throughput-oriented behavior."
+        ),
+    )
+    parser.add_argument("--quick-max-nfev", type=int, default=45)
+    parser.add_argument("--refine-max-nfev", type=int, default=120)
+    parser.add_argument("--quick-rv-grid-n", type=int, default=31)
+    parser.add_argument("--refine-rv-grid-n", type=int, default=41)
+    parser.add_argument("--refine-multistart", type=int, default=2)
+    parser.add_argument(
+        "--R",
+        type=float,
+        default=None,
+        dest="resolution_R",
+        help=(
+            "Explicit assumed resolving power used for both quicklook and "
+            "refinement. Treat this as a user-supplied approximation unless "
+            "the product metadata justify it."
+        ),
+    )
+    parser.add_argument("--teff-margin", type=float, default=1000.0)
+    parser.add_argument("--feh-margin", type=float, default=0.5)
+    parser.add_argument("--logg-margin", type=float, default=0.8)
+    parser.add_argument("--rv-margin", type=float, default=50.0)
+    parser.add_argument(
+        "--reconstruct-final",
+        action="store_true",
+        help=(
+            "Reconstruct final models. Off by default because this example is "
+            "about throughput and tabular batch results rather than plotting."
+        ),
+    )
+    parser.add_argument(
+        "--plot-dir",
+        default=None,
+        help=(
+            "Optional directory for a small number of representative "
+            "line-window fit plots. Supplying this reconstructs plotted models "
+            "even though compact JSON still omits model arrays."
+        ),
+    )
+    parser.add_argument(
+        "--max-plots",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of representative fit plots to write when "
+            "--plot-dir is supplied. Default: 3."
+        ),
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose PHOENIX backend output and fit progress events.",
+    )
+    return parser
+
+
+def _resolution_override_payload(args):
+    return _shared_resolution_override_summary(getattr(args, "resolution_R", None))
+
+
+def _resolution_fit_kwargs(args):
+    payload = _resolution_override_payload(args)
+    if payload is None:
+        return {}
+    return {"R": payload["assumed_resolution_R"]}
+
+
+def _assumed_resolution_for_audit(args):
+    return _shared_resolution_assumption_for_audit(getattr(args, "resolution_R", None))
+
+
+def _atomic_write_json(path, payload):
+    # Checkpoint through a temporary file and atomic replace so interrupted runs
+    # do not leave behind half-written JSON.
+    atomic_write_json(path, payload)
+
+
+def _atomic_write_summary_csv(path, payload):
+    """Write a compact per-target CSV beside the detailed JSON checkpoint."""
+    fieldnames = [
+        "target_id",
+        "path",
+        "status",
+        "refinement_skipped_reason",
+        "fit_ready",
+        "quicklook_only",
+        "readiness_intent",
+        "ready_for_intent",
+        "blockers_for_intent",
+        "warnings_for_intent",
+        "readiness_flags",
+        "readiness_fit_pixels",
+        "outside_fit_window_fraction",
+        "rejected_inside_fit_window_fraction",
+        "resolution_source",
+        "assumed_resolution_R",
+        "archive_mask_policy",
+        "archive_masks_applied",
+        "archive_mask_count",
+        "teff",
+        "feh",
+        "logg",
+        "rv_kms",
+        "chi2_red",
+        "quality_flags",
+        "quick_teff",
+        "quick_feh",
+        "quick_logg",
+        "quick_rv_kms",
+        "quick_chi2_red",
+        "quick_seconds",
+        "refine_seconds",
+        "total_seconds",
+    ]
+    rows = []
+    for item in payload.get("results", []):
+        refined = item.get("refined_result") or {}
+        quick = item.get("quick_result") or {}
+        primary = refined if refined else quick
+        readiness = item.get("spectrum_readiness") or {}
+        resolution_assumption = item.get("resolution_assumption") or {}
+        rows.append(
+            {
+                "target_id": item.get("target_id"),
+                "path": item.get("path"),
+                "status": item.get("status"),
+                "refinement_skipped_reason": ",".join(
+                    str(reason)
+                    for reason in (item.get("refinement_skipped_reason") or [])
+                ),
+                "fit_ready": readiness.get("fit_ready"),
+                "quicklook_only": readiness.get("quicklook_only"),
+                "readiness_intent": (
+                    readiness.get("intent") or readiness.get("readiness_intent")
+                ),
+                "ready_for_intent": readiness.get("ready_for_intent"),
+                "blockers_for_intent": ",".join(
+                    str(flag) for flag in (readiness.get("blockers_for_intent") or [])
+                ),
+                "warnings_for_intent": ",".join(
+                    str(flag) for flag in (readiness.get("warnings_for_intent") or [])
+                ),
+                "readiness_flags": ",".join(
+                    str(flag)
+                    for flag in (readiness.get("interpretation_flags") or [])
+                ),
+                "readiness_fit_pixels": readiness.get("n_fit_candidate"),
+                "outside_fit_window_fraction": readiness.get(
+                    "outside_fit_window_fraction"
+                ),
+                "rejected_inside_fit_window_fraction": readiness.get(
+                    "rejected_inside_fit_window_fraction"
+                ),
+                "resolution_source": resolution_assumption.get("resolution_source"),
+                "assumed_resolution_R": resolution_assumption.get(
+                    "assumed_resolution_R"
+                ),
+                "archive_mask_policy": (
+                    item.get("archive_mask_policy") or {}
+                ).get("policy"),
+                "archive_masks_applied": (
+                    item.get("archive_mask_policy") or {}
+                ).get("applied"),
+                "archive_mask_count": (
+                    item.get("archive_mask_policy") or {}
+                ).get("recognized_mask_count"),
+                "teff": primary.get("teff"),
+                "feh": primary.get("feh"),
+                "logg": primary.get("logg"),
+                "rv_kms": primary.get("rv_kms"),
+                "chi2_red": primary.get("chi2_red"),
+                "quality_flags": ",".join(
+                    str(flag) for flag in (primary.get("quality_flags") or [])
+                ),
+                "quick_teff": quick.get("teff"),
+                "quick_feh": quick.get("feh"),
+                "quick_logg": quick.get("logg"),
+                "quick_rv_kms": quick.get("rv_kms"),
+                "quick_chi2_red": quick.get("chi2_red"),
+                "quick_seconds": item.get("quick_seconds"),
+                "refine_seconds": item.get("refine_seconds"),
+                "total_seconds": item.get("total_seconds"),
+            }
+        )
+    atomic_write_csv_rows(path, fieldnames, rows)
+
+
+def _load_checkpoint(path):
+    # Resume mode is deliberately simple: load the previous JSON checkpoint and
+    # skip spectra already marked with a terminal status.
+    path = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _input_paths(paths):
+    # With no arguments, keep the example immediately runnable from the repo.
+    # Real batches pass explicit files or shell-expanded patterns such as *.fits.
+    if paths:
+        return [os.path.abspath(os.path.expanduser(os.fspath(path))) for path in paths]
+    return [str(EXAMPLE_UVB)]
+
+
+def _manifest_value(row, *names, default=None):
+    for name in names:
+        if name in row and row[name] not in (None, ""):
+            return row[name]
+    return default
+
+
+def _resolve_manifest_path(value, base_dir):
+    path = Path(os.path.expanduser(os.fspath(value)))
+    if not path.is_absolute():
+        path = Path(base_dir) / path
+    return str(path.resolve())
+
+
+def _load_manifest_records(path, default_instrument="xshooter"):
+    """Load a lightweight heterogeneous-batch CSV manifest."""
+    manifest_path = Path(os.path.expanduser(os.fspath(path))).resolve()
+    records = []
+    with open(manifest_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError("Batch manifest must be a CSV file with a header row.")
+        for index, raw_row in enumerate(reader, start=1):
+            row = {
+                str(key).strip(): ("" if value is None else str(value).strip())
+                for key, value in raw_row.items()
+                if key is not None
+            }
+            path_value = _manifest_value(row, "path", "spectrum", "file")
+            if path_value is None:
+                raise ValueError(
+                    "Batch manifest row {0} is missing a path/spectrum/file column.".format(
+                        index
+                    )
+                )
+            resolution_value = _manifest_value(row, "resolution_R", "R")
+            if resolution_value in (None, ""):
+                resolution_R = None
+            else:
+                resolution_R = float(resolution_value)
+            record = {
+                "path": _resolve_manifest_path(path_value, manifest_path.parent),
+                "target_id": _manifest_value(row, "target_id", "id", default=None),
+                "instrument": _manifest_value(
+                    row,
+                    "reader",
+                    "instrument",
+                    default=default_instrument,
+                ),
+                "resolution_R": resolution_R,
+                "manifest_row": index,
+                "manifest_path": str(manifest_path),
+            }
+            if not record["target_id"]:
+                record["target_id"] = record["path"]
+            records.append(record)
+    if not records:
+        raise ValueError("Batch manifest did not contain any spectra.")
+    return records
+
+
+def _input_records(args):
+    if args.manifest:
+        return _load_manifest_records(args.manifest, default_instrument=args.instrument)
+    return [
+        {
+            "path": path,
+            "target_id": _target_id(path),
+            "instrument": args.instrument,
+            "resolution_R": args.resolution_R,
+        }
+        for path in _input_paths(args.spectra)
+    ]
+
+
+def _reader_kwargs_for_instrument(instrument, args):
+    instrument = str(instrument or "").strip().lower()
+    if instrument not in {"sdss", "sdss_spec", "segue"}:
+        return {}
+    policy = args.sdss_mask_policy
+    if policy == "auto":
+        policy = "stellar_strict"
+    return {"sdss_mask_policy": policy}
+
+
+def _args_for_record(args, record):
+    values = vars(args).copy()
+    values["instrument"] = record.get("instrument") or args.instrument
+    record_resolution = record.get("resolution_R", None)
+    values["resolution_R"] = args.resolution_R if record_resolution is None else record_resolution
+    return SimpleNamespace(**values)
+
+
+def _record_path(record):
+    return os.path.abspath(os.path.expanduser(os.fspath(record["path"])))
+
+
+def _record_target_id(record):
+    return str(record.get("target_id") or _target_id(_record_path(record)))
+
+
+def _target_id(path):
+    """Stable checkpoint identifier for local batch processing."""
+    return os.path.abspath(os.path.expanduser(os.fspath(path)))
+
+
+def _coerce_segments(spectrum):
+    return spectrum_segments(spectrum, tuple_is_collection=True, coerce=False)
+
+
+def _archive_masks_by_segment(spectrum):
+    return _shared_archive_masks_by_segment(spectrum)
+
+
+def _fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy):
+    return _shared_fit_kwargs_with_archive_policy(fit_kwargs, archive_masks, policy)
+
+
+def _result_payload(result):
+    # This example is about throughput and tabular summaries, so it omits model
+    # arrays by default. Use --reconstruct-final only when plots/models matter.
+    return result.to_dict(include_arrays=False, include_local_paths=False)
+
+
+def _brief_result(result):
+    # Store a small, scan-friendly summary beside the fuller compact result.
+    payload = _result_payload(result)
+    return {
+        "success": payload.get("success"),
+        "teff": payload.get("teff"),
+        "feh": payload.get("feh"),
+        "logg": payload.get("logg"),
+        "rv_kms": payload.get("rv_kms"),
+        "chi2_red": payload.get("chi2_red"),
+        "quality_flags": list(payload.get("quality_flags") or []),
+    }
+
+
+def _safe_plot_token(value):
+    text = str(value or "target")
+    chars = []
+    for char in text:
+        if char.isalnum() or char in {".", "-", "_"}:
+            chars.append(char)
+        else:
+            chars.append("_")
+    token = "".join(chars).strip("._")
+    return (token or "target")[-80:]
+
+
+def _maybe_write_representative_plot(result, windows, record, args, *, stage):
+    """Write a line-window plot for a small representative batch subset."""
+    plot_dir = getattr(args, "plot_dir", None)
+    if not plot_dir:
+        return None
+    max_plots = int(getattr(args, "max_plots", 0) or 0)
+    if max_plots <= 0:
+        return None
+    written = int(getattr(args, "_plots_written", 0) or 0)
+    if written >= max_plots:
+        return None
+
+    outdir = Path(plot_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    target = _safe_plot_token(record.get("target_id") or record.get("path"))
+    savepath = outdir / "{0:02d}_{1}_{2}.png".format(written + 1, target, stage)
+
+    try:
+        fig, _axes = plot_model_line_windows(
+            result,
+            windows=windows,
+            title="{0}: representative {1} fit".format(
+                Path(_record_path(record)).name,
+                stage,
+            ),
+            show_residuals=True,
+            residual_kind="auto",
+            ncols=2,
+            figsize_per_panel=(7.2, 4.4),
+            footer=(
+                "Representative batch plot only. Inspect flagged spectra before "
+                "treating a batch result as science-ready."
+            ),
+            savepath=str(savepath),
+        )
+    except Exception as exc:
+        return {
+            "stage": stage,
+            "status": "plot_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+    try:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+    except Exception:
+        pass
+    args._plots_written = written + 1
+    return {
+        "stage": stage,
+        "status": "written",
+        "path": str(savepath),
+        "purpose": "representative_batch_fit_inspection",
+    }
+
+
+def _required_quick_parameters(quick_result):
+    # The focused second pass only makes sense if the quick pass found finite
+    # physical parameters. Fail clearly instead of constructing nonsense bounds.
+    values = []
+    for key in ("teff", "feh", "logg", "rv_kms"):
+        value = quick_result[key]
+        value = float(value)
+        if not np.isfinite(value):
+            raise ValueError("Quick-scan result has non-finite {0}.".format(key))
+        values.append(value)
+    return tuple(values)
+
+
+def focused_bounds_from_quick_result(quick_result, base_bounds, margins):
+    """Return p0 and clipped local bounds around a quick-scan fit.
+
+    This helper is intentionally separate and tested because it is the core
+    lesson of the example: do not refit the entire broad classification box for
+    every spectrum once a cheap pass has identified the local region.
+    """
+    p0 = _required_quick_parameters(quick_result)
+    lower_base = tuple(float(value) for value in base_bounds[0])
+    upper_base = tuple(float(value) for value in base_bounds[1])
+    margins = tuple(float(value) for value in margins)
+    lower = []
+    upper = []
+    for value, lo_base, hi_base, margin in zip(p0, lower_base, upper_base, margins):
+        # Clip each local interval to the broad defaults/model-domain interval.
+        # This is the speed trick: refine locally, not across the whole grid.
+        if margin <= 0:
+            raise ValueError("Focus margins must be positive.")
+        lo = max(lo_base, value - margin)
+        hi = min(hi_base, value + margin)
+        if hi <= lo:
+            # Defensive fallback for pathological edge cases.
+            lo, hi = lo_base, hi_base
+        lower.append(float(lo))
+        upper.append(float(hi))
+    return p0, (tuple(lower), tuple(upper))
+
+
+def make_refine_fit_kwargs(spectrum, quick_result, quick_fit_kwargs, args):
+    # Start from the same audited defaults helper as the public API, then replace
+    # the broad starting point with a local box centred on the quick result.
+    fit_kwargs, suggestion = prepare_phoenix_fit_kwargs(
+        spectrum,
+        auto_defaults=True,
+        defaults_mode=args.refine_defaults_mode,
+        science_case="classification",
+    )
+    if args.refine_window == "quick" and quick_fit_kwargs.get("regions") is not None:
+        # Usually the quick stage chooses where the spectrum is useful; the
+        # refinement then spends extra optimizer effort on the same pixels.
+        fit_kwargs["regions"] = list(quick_fit_kwargs["regions"])
+    fit_kwargs.update(_resolution_fit_kwargs(args))
+    p0, bounds = focused_bounds_from_quick_result(
+        quick_result,
+        fit_kwargs["bounds"],
+        (
+            args.teff_margin,
+            args.feh_margin,
+            args.logg_margin,
+            args.rv_margin,
+        ),
+    )
+    fit_kwargs.update(
+        {
+            "p0": p0,
+            "bounds": bounds,
+            "rv_grid_n": int(args.refine_rv_grid_n),
+            "multistart": int(args.refine_multistart),
+            "max_nfev": int(args.refine_max_nfev),
+        }
+    )
+    focus = {
+        "source": "quick_scan_result",
+        "p0": p0,
+        "bounds": bounds,
+        "margins": {
+            "teff": float(args.teff_margin),
+            "feh": float(args.feh_margin),
+            "logg": float(args.logg_margin),
+            "rv_kms": float(args.rv_margin),
+        },
+        "refine_window_policy": args.refine_window,
+    }
+    if _resolution_override_payload(args) is not None:
+        focus["resolution_assumption"] = _resolution_override_payload(args)
+    return fit_kwargs, suggestion, focus
+
+
+def _run_configuration(args, records):
+    # Record the strategy knobs in the JSON checkpoint. This makes resumed or
+    # shared batch products auditable without requiring a separate lab notebook.
+    return {
+        "example": "examples/batch_quickscan_then_refine.py",
+        "instrument": args.instrument,
+        "manifest": None if args.manifest is None else os.path.abspath(args.manifest),
+        "n_input_spectra": len(records),
+        "quick_defaults_mode": args.quick_defaults_mode,
+        "refine_defaults_mode": args.refine_defaults_mode,
+        "refine_window": args.refine_window,
+        "refine_quality_policy": args.refine_quality_policy,
+        "archive_mask_policy": args.archive_mask_policy,
+        "sdss_mask_policy": args.sdss_mask_policy,
+        "quick_max_nfev": int(args.quick_max_nfev),
+        "refine_max_nfev": int(args.refine_max_nfev),
+        "quick_rv_grid_n": int(args.quick_rv_grid_n),
+        "refine_rv_grid_n": int(args.refine_rv_grid_n),
+        "refine_multistart": int(args.refine_multistart),
+        "quick_only": bool(args.quick_only),
+        "reconstruct_final": bool(args.reconstruct_final),
+        "plot_dir": args.plot_dir,
+        "max_plots": int(args.max_plots),
+        "resolution_assumption": _resolution_override_payload(args),
+        "focus_margins": {
+            "teff": float(args.teff_margin),
+            "feh": float(args.feh_margin),
+            "logg": float(args.logg_margin),
+            "rv_kms": float(args.rv_margin),
+        },
+    }
+
+
+def _progress_callback(enabled, label):
+    # Verbose mode forwards the fitter's progress events with a stage label.
+    # Normal mode stays quiet enough for hundred-spectrum batches.
+    if not enabled:
+        return None
+
+    def callback(event):
+        print("    [{0}] {1}".format(label, event), flush=True)
+
+    return callback
+
+
+REFINE_READINESS_BLOCK_FLAGS = {
+    "no_fitted_pixels",
+    "resolution_assumption_required",
+    "wave_medium_unknown",
+    "observer_frame_unknown",
+    "stellar_rest_status_unknown",
+    "artifact_review_required",
+    "lsf_undersampled",
+    "archive_mask_fraction_high",
+    "archive_mask_overlap_inside_fit_window",
+}
+
+
+REFINE_RESULT_BLOCK_FLAGS = {
+    "high_chi2",
+    "structured_residuals",
+    "fit_bound_hit",
+    "grid_edge_teff",
+    "grid_edge_logg",
+    "grid_edge_feh",
+    "metadata_incomplete",
+    "resolution_missing",
+    "fallback_errors_used",
+    "rv_interpretation_ambiguous",
+    "continuum_mismatch",
+    "artifact_fraction_high",
+    "archive_mask_fraction_high",
+    "too_few_fit_pixels",
+    "known_line_region_residual",
+}
+
+
+def should_refine_after_quicklook(
+    readiness,
+    quick_result,
+    policy="always",
+    archive_mask_policy="apply",
+):
+    """Return ``(should_refine, reasons)`` for the optional refinement gate."""
+    policy = str(policy).strip().lower()
+    if policy == "always":
+        return True, []
+    if policy != "skip-risky":
+        raise ValueError("policy must be 'always' or 'skip-risky'.")
+    flags = set(readiness.get("interpretation_flags") or [])
+    if str(archive_mask_policy).strip().lower() == "ignore":
+        flags -= {
+            "archive_mask_fraction_high",
+            "archive_mask_overlap_inside_fit_window",
+        }
+    reasons = sorted(flags & REFINE_READINESS_BLOCK_FLAGS)
+    if readiness.get("ready_for_intent") is False:
+        reasons.append(
+            "readiness_not_ready_for_{0}".format(
+                readiness.get("intent")
+                or readiness.get("readiness_intent")
+                or "intent"
+            )
+        )
+    if not readiness.get("fit_ready", False):
+        reasons.append("readiness_fit_ready_false")
+    if not quick_result.get("success", False):
+        reasons.append("quick_fit_not_successful")
+    result_flags = set(quick_result.get("quality_flags") or [])
+    reasons.extend(
+        "quick_result:{0}".format(flag)
+        for flag in sorted(result_flags & REFINE_RESULT_BLOCK_FLAGS)
+    )
+    return len(reasons) == 0, sorted(set(reasons))
+
+
+def _fit_one(record, args, phoenix_lib):
+    started = time.perf_counter()
+    input_record = dict(record)
+    path = _record_path(record)
+    local_args = _args_for_record(args, record)
+
+    # Ingestion is intentionally separate from fitting: each reader normalizes
+    # an instrument product into Spyctres' common spectrum container.
+    print("Reading spectrum: {0}".format(path), flush=True)
+    reader_kwargs = _reader_kwargs_for_instrument(local_args.instrument, local_args)
+    if reader_kwargs:
+        print(
+            "  Reader options: {0}".format(
+                ", ".join("{0}={1}".format(k, v) for k, v in reader_kwargs.items())
+            ),
+            flush=True,
+        )
+    spectrum = read_spectrum(
+        path,
+        reader=local_args.instrument,
+        **reader_kwargs,
+    )
+    archive_masks = _archive_masks_by_segment(spectrum)
+    if archive_masks:
+        n_archive_masks = sum(len(value) for value in archive_masks.values())
+        print(
+            "  Archive mask policy: {0} ({1} recognized archive mask region(s)).".format(
+                local_args.archive_mask_policy,
+                n_archive_masks,
+            ),
+            flush=True,
+        )
+    quick_fit_kwargs, quick_suggestion = prepare_phoenix_fit_kwargs(
+        spectrum,
+        auto_defaults=True,
+        defaults_mode=local_args.quick_defaults_mode,
+        science_case="classification",
+        extra_kwargs={
+            "max_nfev": int(local_args.quick_max_nfev),
+            "rv_grid_n": int(local_args.quick_rv_grid_n),
+        },
+        resolution_R=local_args.resolution_R,
+    )
+    quick_fit_kwargs = _fit_kwargs_with_archive_policy(
+        quick_fit_kwargs,
+        archive_masks,
+        local_args.archive_mask_policy,
+    )
+    readiness = audit_spectrum_for_fit(
+        spectrum,
+        fit_windows=quick_fit_kwargs.get("regions"),
+        exclude_masks=quick_fit_kwargs.get("exclude_masks"),
+        intended_use="batch_quick_scan_classification",
+        assumed_resolution=_assumed_resolution_for_audit(local_args),
+    )
+    print(
+        "  {0}".format(_shared_readiness_summary_line(readiness)),
+        flush=True,
+    )
+    for line in _shared_readiness_intent_detail_lines(readiness, prefix="    "):
+        print(line, flush=True)
+    for warning in readiness.get("warnings", []):
+        print("  Readiness WARNING: {0}".format(warning), flush=True)
+    quick_mode_policy = (
+        quick_suggestion.provenance.get("mode_policy", {})
+        if quick_suggestion is not None
+        else {}
+    )
+    if quick_mode_policy:
+        print(
+            "  Defaults mode: {0} ({1} budget; {2})".format(
+                quick_mode_policy.get("mode", local_args.quick_defaults_mode),
+                quick_mode_policy.get("search_budget", "unknown"),
+                quick_mode_policy.get("default_status", "first_pass"),
+            ),
+            flush=True,
+        )
+
+    # Stage 1: a cheap classification-style search. Its job is to locate a
+    # sensible region of parameter space, not to be the final scientific answer.
+    print("  Quick scan...", flush=True)
+    quick_start = time.perf_counter()
+    quick_result = fit_stellar_spectrum(
+        spectrum,
+        model="phoenix",
+        phoenix_lib=phoenix_lib,
+        auto_defaults=False,
+        reconstruct=bool(local_args.plot_dir and args.quick_only),
+        progress_callback=_progress_callback(local_args.verbose, "quick"),
+        **quick_fit_kwargs,
+    )
+    if quick_suggestion is not None:
+        quick_result.summary["fit_default_suggestion"] = quick_suggestion.to_dict()
+    quick_result.summary["spectrum_readiness"] = readiness
+    quick_result.provenance["spectrum_readiness"] = readiness
+    quick_seconds = time.perf_counter() - quick_start
+    record = {
+        "target_id": _record_target_id(input_record),
+        "path": path,
+        "instrument": local_args.instrument,
+        "status": "quick_ok" if args.quick_only else "quick_complete",
+        "spectrum_readiness": readiness,
+        "archive_mask_policy": {
+            "policy": local_args.archive_mask_policy,
+            "recognized_mask_count": int(
+                sum(len(value) for value in archive_masks.values())
+            ),
+            "applied": bool(local_args.archive_mask_policy == "apply"),
+        },
+        "reader_options": reader_kwargs,
+        "quick_seconds": float(quick_seconds),
+        "quick_result": _brief_result(quick_result),
+        "quick_result_full": _result_payload(quick_result),
+    }
+    if record["target_id"] != path:
+        record["target_label"] = record["target_id"]
+    if _resolution_override_payload(local_args) is not None:
+        record["resolution_assumption"] = _resolution_override_payload(local_args)
+    if args.manifest:
+        record["manifest_row"] = int(input_record.get("manifest_row", 0) or 0)
+        record["manifest_path"] = input_record.get("manifest_path")
+    print(
+        "  Quick result: Teff={teff} logg={logg} [Fe/H]={feh} RV={rv_kms} chi2={chi2_red}".format(
+            **record["quick_result"]
+        ),
+        flush=True,
+    )
+
+    if args.quick_only:
+        plot_record = _maybe_write_representative_plot(
+            quick_result,
+            quick_fit_kwargs.get("regions") or (),
+            record,
+            args,
+            stage="quick",
+        )
+        if plot_record is not None:
+            record.setdefault("representative_plots", []).append(plot_record)
+            if plot_record.get("status") == "written":
+                print(
+                    "  Representative quick plot: {0}".format(plot_record["path"]),
+                    flush=True,
+                )
+            else:
+                print(
+                    "  Representative quick plot not written: {0}".format(
+                        plot_record.get("error", "unknown plotting error")
+                    ),
+                    flush=True,
+                )
+        # Useful when surveying a directory before deciding which spectra merit
+        # a more expensive second pass.
+        record["total_seconds"] = float(time.perf_counter() - started)
+        return record
+
+    should_refine, skip_reasons = should_refine_after_quicklook(
+        readiness,
+        record["quick_result"],
+        policy=args.refine_quality_policy,
+        archive_mask_policy=local_args.archive_mask_policy,
+    )
+    if not should_refine:
+        record.update(
+            {
+                "status": "refine_skipped",
+                "refinement_skipped_reason": skip_reasons,
+                "total_seconds": float(time.perf_counter() - started),
+            }
+        )
+        print(
+            "  Skipping focused refinement because: {0}".format(
+                ", ".join(skip_reasons)
+            ),
+            flush=True,
+        )
+        return record
+
+    # Stage 2: reuse the quick result to build a focused local fit.
+    print("  Focused refinement...", flush=True)
+    refine_fit_kwargs, refine_suggestion, focus = make_refine_fit_kwargs(
+        spectrum,
+        quick_result,
+        quick_fit_kwargs,
+        local_args,
+    )
+    refine_fit_kwargs = _fit_kwargs_with_archive_policy(
+        refine_fit_kwargs,
+        archive_masks,
+        local_args.archive_mask_policy,
+    )
+    refine_start = time.perf_counter()
+    refined_result = fit_stellar_spectrum(
+        spectrum,
+        model="phoenix",
+        phoenix_lib=phoenix_lib,
+        auto_defaults=False,
+        reconstruct=bool(local_args.reconstruct_final or local_args.plot_dir),
+        progress_callback=_progress_callback(local_args.verbose, "refine"),
+        **refine_fit_kwargs,
+    )
+    refine_seconds = time.perf_counter() - refine_start
+    record.update(
+        {
+            "status": "ok",
+            "refine_seconds": float(refine_seconds),
+            "refinement_focus": focus,
+            "refine_default_suggestion": (
+                None if refine_suggestion is None else refine_suggestion.to_dict()
+            ),
+            "refined_result": _brief_result(refined_result),
+            "refined_result_full": _result_payload(refined_result),
+            "total_seconds": float(time.perf_counter() - started),
+        }
+    )
+    print(
+        "  Refined result: Teff={teff} logg={logg} [Fe/H]={feh} RV={rv_kms} chi2={chi2_red}".format(
+            **record["refined_result"]
+        ),
+        flush=True,
+    )
+    plot_record = _maybe_write_representative_plot(
+        refined_result,
+        refine_fit_kwargs.get("regions") or (),
+        record,
+        args,
+        stage="refined",
+    )
+    if plot_record is not None:
+        record.setdefault("representative_plots", []).append(plot_record)
+        if plot_record.get("status") == "written":
+            print(
+                "  Representative refined plot: {0}".format(plot_record["path"]),
+                flush=True,
+            )
+        else:
+            print(
+                "  Representative refined plot not written: {0}".format(
+                    plot_record.get("error", "unknown plotting error")
+                ),
+                flush=True,
+            )
+    return record
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.instrument is not None:
+        if args.reader != "xshooter_merge1d":
+            raise ValueError("Pass --reader or --instrument, not both.")
+        args.reader = args.instrument
+    args.instrument = args.reader
+    args._plots_written = 0
+    records = _input_records(args)
+    run_configuration = _run_configuration(args, records)
+    if _resolution_override_payload(args) is not None:
+        print(
+            "Using user-supplied assumed resolution R={0:g} for this batch.".format(
+                float(args.resolution_R)
+            ),
+            flush=True,
+        )
+
+    # Load any existing checkpoint before touching PHOENIX. On a resumed batch,
+    # this lets completed targets be skipped quickly.
+    previous = _load_checkpoint(args.output) if args.resume else None
+    records_by_id = {}
+    if previous is not None:
+        for item in previous.get("results", []):
+            target_id = item.get("target_id")
+            if target_id:
+                records_by_id[target_id] = item
+
+    def checkpoint():
+        # Preserve input order in the output JSON so batch tables are stable
+        # across resumed runs.
+        ordered = [
+            records_by_id[_record_target_id(record)]
+            for record in records
+            if _record_target_id(record) in records_by_id
+        ]
+        payload = {
+            "schema_version": 1,
+            "purpose": "batch quick-scan then focused-refine PHOENIX example",
+            "run_configuration": run_configuration,
+            "results": ordered,
+        }
+        _atomic_write_json(args.output, payload)
+        if args.summary_csv:
+            _atomic_write_summary_csv(args.summary_csv, payload)
+        return payload
+
+    resolved_phoenix_dir = resolve_phoenix_dir(args.phoenix_dir)
+    if resolved_phoenix_dir is None:
+        raise ValueError(
+            "No PHOENIX directory configured. Pass --phoenix-dir or set "
+            "SPYCTRES_PHOENIX_DIR / the Spyctres config path."
+        )
+    print("Loading PHOENIX library once for the whole batch...", flush=True)
+    # This is the main speed lesson: initialize the PHOENIX backend once and
+    # pass the same object into every fit instead of reloading it per spectrum.
+    phoenix_lib = PhoenixLibrary(resolved_phoenix_dir, verbose=bool(args.verbose))
+
+    completed_statuses = {"ok", "quick_ok", "refine_skipped", "fit_failed", "error"}
+    for index, record in enumerate(records, start=1):
+        target_id = _record_target_id(record)
+        path = _record_path(record)
+        # Resume skips terminal records unless --force is requested.
+        if (
+            args.resume
+            and not args.force
+            and target_id in records_by_id
+            and records_by_id[target_id].get("status") in completed_statuses
+        ):
+            print("Skipping completed {0}/{1}: {2}".format(index, len(records), path), flush=True)
+            continue
+        print("\nTarget {0}/{1}".format(index, len(records)), flush=True)
+        try:
+            records_by_id[target_id] = _fit_one(record, args, phoenix_lib)
+        except Exception as exc:
+            # Do not let one bad file kill an entire batch. Record the failure,
+            # checkpoint it, and continue with the next spectrum.
+            records_by_id[target_id] = {
+                "target_id": target_id,
+                "path": path,
+                "status": "error",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            print("  ERROR: {0}: {1}".format(type(exc).__name__, exc), flush=True)
+        checkpoint()
+        print("  Wrote checkpoint: {0}".format(args.output), flush=True)
+        if args.summary_csv:
+            print("  Wrote summary CSV: {0}".format(args.summary_csv), flush=True)
+
+    payload = checkpoint()
+    # Detailed quality flags live in JSON; the terminal gets a compact summary.
+    n_ok = sum(1 for item in payload["results"] if item.get("status") == "ok")
+    n_quick = sum(1 for item in payload["results"] if item.get("status") == "quick_ok")
+    n_skipped = sum(
+        1 for item in payload["results"] if item.get("status") == "refine_skipped"
+    )
+    n_error = sum(1 for item in payload["results"] if item.get("status") == "error")
+    print(
+        "\nDone. ok={0}, quick_only={1}, refine_skipped={2}, errors={3}, output={4}".format(
+            n_ok,
+            n_quick,
+            n_skipped,
+            n_error,
+            args.output,
+        ),
+        flush=True,
+    )
+    if args.summary_csv:
+        print("Summary CSV: {0}".format(args.summary_csv), flush=True)
+
+
+if __name__ == "__main__":
+    main()

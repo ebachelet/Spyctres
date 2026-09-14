@@ -1,3 +1,23 @@
-.idea/inspectionProfiles/
-.idea/modules.xml
-Spyctres/__pycache__/
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# IDE files
+.idea/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Local development scripts
+scripts/phoenix_backend_compare.py
+
+# Local reviewer/referee handoff notes (kept outside the repo)
+/reviewer_*.md
+/spyctres_reviewer_update_*.md
+/spyctres_referee_*.md
+/spyctres_phase_a_review_submission_*.md
