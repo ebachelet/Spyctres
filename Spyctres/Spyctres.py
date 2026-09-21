@@ -311,7 +311,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
         return np.inf
 
     normalisation = (10**theta_s/UAS_TO_RAD)**2    
-<<<<<<< HEAD
+
   
     if isochrones is not None:
         
@@ -358,9 +358,9 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
          logR = 0.5*(log_mass_model-logg+4.4374)
          theta_s = logR-theta_s+0.667499
          normalisation = (10**theta_s/UAS_TO_RAD)**2    
-=======
+
     #print('NORMALIZE: ', normalisation)
->>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
+
 
     try:
     
@@ -396,12 +396,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
 
         speed_correction = spectras[spectrum]['barycentric_velocity'].value 
         shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
-<<<<<<< HEAD
-        
-        #sbreakpoint()
-=======
 
->>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
         #shifted_flux= np.c_[wave,model_flux]
         absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
         shifted_flux[:,1] *= normalisation/absorption*magnification
@@ -464,15 +459,12 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
             #breakpoint()
             #if np.abs(ab_mag-predicted_mag_ab)>0.1:
             #    return np.inf
-<<<<<<< HEAD
-     
-    return 0.5*chichi    
-=======
+
 
     #print('CHI2 = ', chichi)
 
     return 0.5*chichi
->>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
+
 
 
 def fit_spectra_with_constant_star_chichi(params,star_model,spectras=[],telluric_lines_mask=None):
@@ -1011,146 +1003,39 @@ def extract_spectrum(name):
     return spectrum
 
 
-#def bin_spectrum(data,lambda_ref):
-#    #https://arxiv.org/pdf/1705.05165.pdf
-#    #http://www.analyticalgroup.com/download/WEIGHTED_MEAN.pdf
-#    # match https://www.astrobetter.com/blog/2013/08/12/python-tip-re-sampling-spectra-with-pysynphot/ but gives errors
-#    steps = np.diff(lambda_ref)/2
-#    steps = np.r_[steps,steps[-1]]
-#    
-#    mask = (lambda_ref>=data[0,0]) & (lambda_ref<data[-1,0])
-#    
-#    flux = []
-#    errors = []
-#    cij = []
-
-#    for ind,lamb in enumerate(lambda_ref[mask]):
-
-#        #try:
-#            index = np.argmin(np.abs(data[:,0]-lamb))
-
-#            if np.abs(data[index,0]-lamb)>10**-10: 
-#               
-#                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))    
-#                index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
-
-
-
-#                winside = data[index_moins:index_plus+1,0]
-#                einside = data[index_moins:index_plus+1,2]
-#                finside = data[index_moins:index_plus+1,1]
-#                bins = np.array([(data[i+1,0]-data[i-1,0])/2 for i in range(index_moins,index_plus+1)])
-
-#                efficiency = np.zeros(len(winside))
-#                efficiency[1:-1] = 1
-#                    
-#                efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
-#                efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
-
-#                flux.append(np.sum(efficiency*bins*finside)/np.sum(bins*efficiency))
-#                cij_line = np.zeros(len(data))
-#                cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
-#                cij.append(cij_line)
-#                
-#            else:
-#                   
-#                flux.append(data[index,1])
-#                cij_line = np.zeros(len(data))
-#                cij_line[index] = 1
-#                cij.append(cij_line)
-#                
-#        #except:
-#         #       breakpoint()
-#                     
-#    covariance = np.array(cij)
-#    
-#    #eflux = np.dot(covariance,data[:,2]**2)**0.5
-#    final_covariance = np.dot(covariance*data[:,2],(covariance*data[:,2]).T)
-#    eflux = final_covariance.diagonal()**0.5
-
-#    return np.c_[lambda_ref[mask],flux,eflux],final_covariance
-
-
-def bin_spectrum(data,lambda_ref):
+def bin_spectrum_old(data,lambda_ref):
     #https://arxiv.org/pdf/1705.05165.pdf
     #http://www.analyticalgroup.com/download/WEIGHTED_MEAN.pdf
     # match https://www.astrobetter.com/blog/2013/08/12/python-tip-re-sampling-spectra-with-pysynphot/ but gives errors
-<<<<<<< HEAD
-    lambda_data = data[:, 0]
-    flux_data = data[:, 1]
-    error_data = data[:, 2]
-
-    # Pixel widths in the input spectrum.
-    # Use one-sided widths at the boundaries and centered widths internally.
-    bins = np.empty(len(lambda_data), dtype=float)
-
-    if len(lambda_data) > 1:
-        bins[0] = lambda_data[1] - lambda_data[0]
-        bins[-1] = lambda_data[-1] - lambda_data[-2]
-
-    if len(lambda_data) > 2:
-        bins[1:-1] = (lambda_data[2:] - lambda_data[:-2]) / 2.0
-
-    # Half-width of the output pixels.
-    steps = np.diff(lambda_ref) / 2.0
-    steps = np.r_[steps, steps[-1]]
-
-    mask = (
-        (lambda_ref >= lambda_data[0]) &
-        (lambda_ref < lambda_data[-1])
-    )
-
-    lambda_out = lambda_ref[mask]
-    steps_out = steps[mask]
-
-=======
     steps = np.diff(lambda_ref)/2
     steps = np.r_[steps,steps[-1]]
+    
     mask = (lambda_ref>=data[0,0]) & (lambda_ref<data[-1,0])
->>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
+    
     flux = []
+    errors = []
     cij = []
 
-    for lamb, step in zip(lambda_out, steps_out):
+    for ind,lamb in enumerate(lambda_ref[mask]):
 
-        # Closest input pixel
-        index = np.argmin(np.abs(lambda_data - lamb))
+        #try:
+            index = np.argmin(np.abs(data[:,0]-lamb))
 
-<<<<<<< HEAD
-        # If the output wavelength is exactly an input wavelength,
-        # simply use that pixel.
-        if np.abs(lambda_data[index] - lamb) <= 1e-10:
-
-            flux.append(flux_data[index])
-
-            cij_line = np.zeros(len(data))
-            cij_line[index] = 1.0
-            cij.append(cij_line)
-=======
-            if np.abs(data[index,0]-lamb)>10**-10:
-
-                # Array indices need to be capped to avoid stepping off the end of arrays
-                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))
+            if np.abs(data[index,0]-lamb)>10**-10: 
+               
+                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))    
                 index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
-                if index_plus >= len(data[:,0]) - 1:
-                    index_plus = len(data[:,0]) - 2
-                if index_moins < 0:
-                    index_moins = 0
->>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
 
-            continue
 
-<<<<<<< HEAD
-        # Find all input pixels that can contribute to this output bin.
-        left = lamb - step
-        right = lamb + step
 
-        index_moins = np.searchsorted(lambda_data, left, side="left")
-        index_plus = np.searchsorted(lambda_data, right, side="right") - 1
-=======
+                winside = data[index_moins:index_plus+1,0]
+                einside = data[index_moins:index_plus+1,2]
+                finside = data[index_moins:index_plus+1,1]
+                bins = np.array([(data[i+1,0]-data[i-1,0])/2 for i in range(index_moins,index_plus+1)])
+
                 efficiency = np.zeros(len(winside))
                 efficiency[1:-1] = 1
-
+                    
                 efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
                 efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
 
@@ -1158,29 +1043,92 @@ def bin_spectrum(data,lambda_ref):
                 cij_line = np.zeros(len(data))
                 cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
                 cij.append(cij_line)
-
+                
             else:
-
+                   
                 flux.append(data[index,1])
                 cij_line = np.zeros(len(data))
                 cij_line[index] = 1
                 cij.append(cij_line)
                 
-        except:
-                breakpoint()
+        #except:
+         #       breakpoint()
                      
     covariance = np.array(cij)
     
     #eflux = np.dot(covariance,data[:,2]**2)**0.5
     final_covariance = np.dot(covariance*data[:,2],(covariance*data[:,2]).T)
     eflux = final_covariance.diagonal()**0.5
->>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
 
-        # Clip to valid array indices.
+    return np.c_[lambda_ref[mask],flux,eflux],final_covariance
+
+def bin_spectrum(data, lambda_ref):
+    """
+    Rééchantillonne un spectre de manière à préserver le flux, avec propagation
+    des incertitudes sous forme de matrice de covariance.
+    
+    Parameters:
+    -----------
+    data : np.ndarray
+        Matrice 2D de forme (N, 3) contenant [wavelength, flux, error]
+    lambda_ref : np.ndarray
+        Le nouveau réseau de longueurs d'onde cible.
+        
+    Returns:
+    --------
+    result : np.ndarray
+        Matrice de forme (M, 3) contenant [lambda_out, flux_binned, error_binned]
+    final_covariance : np.ndarray
+        Matrice de covariance des flux rééchantillonnés de forme (M, M).
+    """
+    lambda_data = data[:, 0]
+    flux_data = data[:, 1]
+    error_data = data[:, 2]
+
+    # 1. Calcul des largeurs des pixels du spectre d'entrée (bords inclus de manière sûre)
+    bins = np.empty(len(lambda_data), dtype=float)
+    if len(lambda_data) > 1:
+        bins[0] = lambda_data[1] - lambda_data[0]
+        bins[-1] = lambda_data[-1] - lambda_data[-2]
+    if len(lambda_data) > 2:
+        bins[1:-1] = (lambda_data[2:] - lambda_data[:-2]) / 2.0
+
+    # 2. Calcul des demi-largeurs des pixels du spectre de sortie
+    steps = np.diff(lambda_ref) / 2.0
+    steps = np.r_[steps, steps[-1]]
+
+    # Masque pour s'assurer que l'on reste dans la plage de données disponibles
+    mask = (lambda_ref >= lambda_data[0]) & (lambda_ref < lambda_data[-1])
+    lambda_out = lambda_ref[mask]
+    steps_out = steps[mask]
+
+    flux = []
+    cij = []
+
+    # 3. Boucle sur chaque pixel de sortie
+    for lamb, step in zip(lambda_out, steps_out):
+        # Pixel d'entrée le plus proche
+        index = np.argmin(np.abs(lambda_data - lamb))
+
+        # Si la longueur d'onde correspond exactement, on prend le pixel tel quel
+        if np.abs(lambda_data[index] - lamb) <= 1e-10:
+            flux.append(flux_data[index])
+            cij_line = np.zeros(len(data))
+            cij_line[index] = 1.0
+            cij.append(cij_line)
+            continue
+
+        # Définition de l'intervalle du pixel cible
+        output_left = lamb - step
+        output_right = lamb + step
+
+        # Recherche des indices des pixels d'entrée chevauchant cette zone
+        index_moins = np.searchsorted(lambda_data, output_left, side="left")
+        index_plus = np.searchsorted(lambda_data, output_right, side="right") - 1
+
         index_moins = max(0, index_moins)
         index_plus = min(len(data) - 1, index_plus)
 
-        # Make sure the interval is not empty.
         if index_plus < index_moins:
             flux.append(flux_data[index])
             cij_line = np.zeros(len(data))
@@ -1189,53 +1137,47 @@ def bin_spectrum(data,lambda_ref):
             continue
 
         inds = np.arange(index_moins, index_plus + 1)
-
-        winside = lambda_data[inds]
         finside = flux_data[inds]
 
-        # Fractional overlap of each input pixel with the output bin.
-        #
-        # Construct input pixel edges.
+        # Limites géométriques exactes de chaque pixel d'entrée concerné
         input_left = lambda_data[inds] - bins[inds] / 2.0
         input_right = lambda_data[inds] + bins[inds] / 2.0
 
-        output_left = lamb - step
-        output_right = lamb + step
-
+        # Calcul du recouvrement exact (overlap)
         overlap = np.maximum(
             0.0,
-            np.minimum(input_right, output_right)
-            - np.maximum(input_left, output_left)
+            np.minimum(input_right, output_right) - np.maximum(input_left, output_left)
         )
 
-        # Convert overlap into the fraction of each input pixel used.
+        # Fraction du pixel d'entrée contenue dans le pixel de sortie
         efficiency = overlap / bins[inds]
-
         denominator = np.sum(efficiency * bins[inds])
 
         if denominator <= 0:
             flux.append(flux_data[index])
-
             cij_line = np.zeros(len(data))
             cij_line[index] = 1.0
             cij.append(cij_line)
-
         else:
+            # Normalisation des coefficients pour préserver le flux intégré
             weights = efficiency * bins[inds] / denominator
-
             flux.append(np.sum(weights * finside))
-
+            
             cij_line = np.zeros(len(data))
             cij_line[inds] = weights
             cij.append(cij_line)
 
+    # 4. Conversion et gestion du cas où aucun point ne correspond au masque
+    if len(cij) == 0:
+        return np.empty((0, 3)), np.empty((0, 0))
+        
     covariance = np.asarray(cij)
 
-    # Propagate independent input uncertainties.
+    # 5. Propagation des incertitudes indépendantes d'origine vers la matrice de covariance de sortie
     weighted_errors = covariance * error_data
-
     final_covariance = weighted_errors @ weighted_errors.T
-
+    
+    # L'erreur finale est la racine carrée de la diagonale de la matrice de covariance
     eflux = np.sqrt(np.diag(final_covariance))
 
     result = np.column_stack([
