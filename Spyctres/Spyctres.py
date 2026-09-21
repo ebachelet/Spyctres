@@ -141,19 +141,64 @@ def plot_MCMC_chains_in_HR(mcmc_chains,isochrones):
     plt.show()
     
         
-def velocity_correction(spectrum,velocity):
+#def velocity_correction2(spectrum,velocity):
 
-    new_lambda = spectrum[:,0]*(1+velocity/constantes.c.value*1000)        
+#    new_lambda = spectrum[:,0]*(1+velocity/constantes.c.value*1000)        
+#    
+#    interpol = interpolate.interp1d(spectrum[:,0],spectrum[:,1],fill_value='extrapolate')
+#    
+#    new_spectrum = interpol(new_lambda)
+#    
+#    final_spectrum = np.c_[spectrum[:,0],new_spectrum]
+#    
+#    return final_spectrum
     
-    interpol = interpolate.interp1d(spectrum[:,0],spectrum[:,1],fill_value='extrapolate')
-    
-    new_spectrum = interpol(new_lambda)
-    
-    final_spectrum = np.c_[spectrum[:,0],new_spectrum]
-    
-    return final_spectrum
-    
-    
+def velocity_correction(spectrum, velocity):
+    """
+    Doppler-shift a rest-frame spectrum onto the same wavelength grid.
+
+    Parameters
+    ----------
+    spectrum : ndarray, shape (N, 2)
+        [wavelength, flux].
+    velocity : float
+        Radial velocity in km/s.
+        Positive velocity produces a redshift.
+
+    Returns
+    -------
+    shifted_spectrum : ndarray, shape (N, 2)
+        [same wavelength grid, Doppler-shifted flux].
+    """
+
+    wave = spectrum[:, 0]
+    flux = spectrum[:, 1]
+
+    c_kms = constantes.c.value/1000
+    beta = velocity / c_kms
+
+    if np.abs(beta) >= 1:
+        raise ValueError("velocity must satisfy |velocity| < c")
+
+    # Rest-frame wavelength corresponding to each observed wavelength.
+    wave_rest = wave * np.sqrt((1.0 - beta) / (1.0 + beta))
+
+#    interpol = interpolate.interp1d(
+#        wave,
+#        flux,
+#        kind='linear',
+#        bounds_error=False,
+#        fill_value=np.nan
+#    )
+
+    interpol = interpolate.interp1d(
+        wave,
+        flux,
+        fill_value='extrapolate')
+        
+    shifted_flux = interpol(wave_rest)
+
+    return np.column_stack((wave, shifted_flux))    
         
 def Barycentric_velocity(time, skycoord, location=None):
   """Barycentric velocity correction.
@@ -255,7 +300,7 @@ def plot_element_lines(figure_axe,lines):
         figure_axe.text(float(line[0]),0.8,line[1]+line[2],rotation='vertical',fontdict=dict(color='grey',fontsize=10),bbox=dict(alpha=0.0,facecolor='w',edgecolor='w'), transform=trans)
         
 
-def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93models'):
+def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93models',isochrones=None):
 
     theta_s, Av, v_radial, log10_Teff, abundance,logg, = params[:6]
     Teff = 10**log10_Teff
@@ -266,6 +311,52 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
 
     normalisation = (10**theta_s/UAS_TO_RAD)**2    
   
+    if isochrones is not None:
+        
+        #theta == Ds
+        
+         dist  = (isochrones['logTe']- log10_Teff)**2+(isochrones['Fe']- abundance)**2+(isochrones['logg']- logg)**2
+
+#         mask = dist<0.1**2
+#         mask = dist.argsort()[:5]
+#         if not np.any(mask):
+#            return np.inf
+#        
+#         weights = 1.0 / (dist[mask] + 1e-10)
+#         weights /= np.sum(weights)  # Normalisation pour que la somme des poids vaille 1
+#        
+#         log_mass_model = np.sum(isochrones['logMass'][mask] * weights)
+
+
+         # Characteristic scales
+         s_logTe = 0.01   # dex
+         s_Fe    = 0.10   # dex
+         s_logg  = 0.25   # dex
+
+         dlogTe = (isochrones['logTe'] - log10_Teff) / s_logTe
+         dFe    = (isochrones['Fe']    - abundance)   / s_Fe
+         dlogg  = (isochrones['logg']  - logg)        / s_logg
+
+         dist = dlogTe**2 + dFe**2 + dlogg**2
+
+         # Select nearest models
+         idx = np.argsort(dist)[:5]
+
+         
+
+         # Inverse-distance weighting
+         weights = 1.0 / (dist[idx] + 1e-10)
+         weights /= weights.sum()
+
+         log_mass_model = np.sum(
+         isochrones['logMass'][idx] * weights
+         )
+
+
+         logR = 0.5*(log_mass_model-logg+4.4374)
+         theta_s = logR-theta_s+0.667499
+         normalisation = (10**theta_s/UAS_TO_RAD)**2    
+
     try:
     
         rescale_flux_parameters = [params[6+i] for i in range(len(spectras))]
@@ -284,6 +375,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
     
 
     chichi = 0
+
     
     for ind,spectrum in enumerate(spectras.keys()):
 
@@ -298,6 +390,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
         
         speed_correction = spectras[spectrum]['barycentric_velocity'].value 
         shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+        
         #sbreakpoint()
         #shifted_flux= np.c_[wave,model_flux]
         absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
@@ -331,6 +424,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
         residuals = (data[mask_final,1]-shifted_flux_norm[mask_final,1])**2/errors[mask_final]**2+2*np.log(errors[mask_final])+np.log(2*np.pi)
 
         chichi += np.sum(residuals)
+        
         #chichi=0
         #breakpoint()
         for ind_sed,line_sed in enumerate(SED):
@@ -352,7 +446,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
             #breakpoint()
             #if np.abs(ab_mag-predicted_mag_ab)>0.1:
             #    return np.inf
-    
+     
     return 0.5*chichi    
 
 
@@ -371,6 +465,8 @@ def fit_spectra_with_constant_star_chichi(params,star_model,spectras=[],telluric
     
     normalisation = (theta_s/UAS_TO_RAD)**2    
   
+    
+    
     try:
     
         rescale_flux_parameters = [params[4+i] for i in range(len(spectras))]
@@ -461,7 +557,7 @@ def fit_spectra_with_constant_star_chichi(params,star_model,spectras=[],telluric
     
     return 0.5*chichi   
 
-def model_spectra(params,spectras=[],catalog='k93models'):
+def model_spectra(params,spectras=[],catalog='k93models',isochrones=None):
     
     theta_s, Av, v_radial, log10_Teff, abundance,logg = params[:6]
     Teff = 10**log10_Teff
@@ -472,6 +568,51 @@ def model_spectra(params,spectras=[],catalog='k93models'):
         return np.inf
 
     normalisation = (10**theta_s/UAS_TO_RAD)**2   
+    
+    if isochrones is not None:
+        
+        #theta == Ds
+        
+         dist  = (isochrones['logTe']- log10_Teff)**2+(isochrones['Fe']- abundance)**2+(isochrones['logg']- logg)**2
+
+#         mask = dist<0.1**2
+#         mask = dist.argsort()[:5]
+#         if not np.any(mask):
+#            return np.inf
+#        
+#         weights = 1.0 / (dist[mask] + 1e-10)
+#         weights /= np.sum(weights)  # Normalisation pour que la somme des poids vaille 1
+#        
+#         log_mass_model = np.sum(isochrones['logMass'][mask] * weights)
+
+         # Characteristic scales
+         s_logTe = 0.01   # dex
+         s_Fe    = 0.10   # dex
+         s_logg  = 0.25   # dex
+
+         dlogTe = (isochrones['logTe'] - log10_Teff) / s_logTe
+         dFe    = (isochrones['Fe']    - abundance)   / s_Fe
+         dlogg  = (isochrones['logg']  - logg)        / s_logg
+
+         dist = dlogTe**2 + dFe**2 + dlogg**2
+
+         # Select nearest models
+         idx = np.argsort(dist)[:5]
+
+       
+         # Inverse-distance weighting
+         weights = 1.0 / (dist[idx] + 1e-10)
+         weights /= weights.sum()
+
+         log_mass_model = np.sum(
+         isochrones['logMass'][idx] * weights
+         )
+
+         logR = 0.5*(log_mass_model-logg+4.4374)
+         theta_s = logR-theta_s+0.667499
+         normalisation = (10**theta_s/UAS_TO_RAD)**2    
+    
+    
     spectra = []
     
     
@@ -845,64 +986,193 @@ def extract_spectrum(name):
     return spectrum
 
 
+#def bin_spectrum(data,lambda_ref):
+#    #https://arxiv.org/pdf/1705.05165.pdf
+#    #http://www.analyticalgroup.com/download/WEIGHTED_MEAN.pdf
+#    # match https://www.astrobetter.com/blog/2013/08/12/python-tip-re-sampling-spectra-with-pysynphot/ but gives errors
+#    steps = np.diff(lambda_ref)/2
+#    steps = np.r_[steps,steps[-1]]
+#    
+#    mask = (lambda_ref>=data[0,0]) & (lambda_ref<data[-1,0])
+#    
+#    flux = []
+#    errors = []
+#    cij = []
+
+#    for ind,lamb in enumerate(lambda_ref[mask]):
+
+#        #try:
+#            index = np.argmin(np.abs(data[:,0]-lamb))
+
+#            if np.abs(data[index,0]-lamb)>10**-10: 
+#               
+#                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))    
+#                index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
+
+
+
+#                winside = data[index_moins:index_plus+1,0]
+#                einside = data[index_moins:index_plus+1,2]
+#                finside = data[index_moins:index_plus+1,1]
+#                bins = np.array([(data[i+1,0]-data[i-1,0])/2 for i in range(index_moins,index_plus+1)])
+
+#                efficiency = np.zeros(len(winside))
+#                efficiency[1:-1] = 1
+#                    
+#                efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
+#                efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
+
+#                flux.append(np.sum(efficiency*bins*finside)/np.sum(bins*efficiency))
+#                cij_line = np.zeros(len(data))
+#                cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
+#                cij.append(cij_line)
+#                
+#            else:
+#                   
+#                flux.append(data[index,1])
+#                cij_line = np.zeros(len(data))
+#                cij_line[index] = 1
+#                cij.append(cij_line)
+#                
+#        #except:
+#         #       breakpoint()
+#                     
+#    covariance = np.array(cij)
+#    
+#    #eflux = np.dot(covariance,data[:,2]**2)**0.5
+#    final_covariance = np.dot(covariance*data[:,2],(covariance*data[:,2]).T)
+#    eflux = final_covariance.diagonal()**0.5
+
+#    return np.c_[lambda_ref[mask],flux,eflux],final_covariance
+
+
 def bin_spectrum(data,lambda_ref):
     #https://arxiv.org/pdf/1705.05165.pdf
     #http://www.analyticalgroup.com/download/WEIGHTED_MEAN.pdf
     # match https://www.astrobetter.com/blog/2013/08/12/python-tip-re-sampling-spectra-with-pysynphot/ but gives errors
-    steps = np.diff(lambda_ref)/2
-    steps = np.r_[steps,steps[-1]]
-    
-    mask = (lambda_ref>=data[0,0]) & (lambda_ref<data[-1,0])
-    
+    lambda_data = data[:, 0]
+    flux_data = data[:, 1]
+    error_data = data[:, 2]
+
+    # Pixel widths in the input spectrum.
+    # Use one-sided widths at the boundaries and centered widths internally.
+    bins = np.empty(len(lambda_data), dtype=float)
+
+    if len(lambda_data) > 1:
+        bins[0] = lambda_data[1] - lambda_data[0]
+        bins[-1] = lambda_data[-1] - lambda_data[-2]
+
+    if len(lambda_data) > 2:
+        bins[1:-1] = (lambda_data[2:] - lambda_data[:-2]) / 2.0
+
+    # Half-width of the output pixels.
+    steps = np.diff(lambda_ref) / 2.0
+    steps = np.r_[steps, steps[-1]]
+
+    mask = (
+        (lambda_ref >= lambda_data[0]) &
+        (lambda_ref < lambda_data[-1])
+    )
+
+    lambda_out = lambda_ref[mask]
+    steps_out = steps[mask]
+
     flux = []
-    errors = []
     cij = []
 
-    for ind,lamb in enumerate(lambda_ref[mask]):
+    for lamb, step in zip(lambda_out, steps_out):
 
-        try:
-            index = np.argmin(np.abs(data[:,0]-lamb))
+        # Closest input pixel
+        index = np.argmin(np.abs(lambda_data - lamb))
 
-            if np.abs(data[index,0]-lamb)>10**-10: 
-               
-                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))    
-                index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
+        # If the output wavelength is exactly an input wavelength,
+        # simply use that pixel.
+        if np.abs(lambda_data[index] - lamb) <= 1e-10:
 
+            flux.append(flux_data[index])
 
+            cij_line = np.zeros(len(data))
+            cij_line[index] = 1.0
+            cij.append(cij_line)
 
-                winside = data[index_moins:index_plus+1,0]
-                einside = data[index_moins:index_plus+1,2]
-                finside = data[index_moins:index_plus+1,1]
-                bins = np.array([(data[i+1,0]-data[i-1,0])/2 for i in range(index_moins,index_plus+1)])
+            continue
 
-                efficiency = np.zeros(len(winside))
-                efficiency[1:-1] = 1
-                    
-                efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
-                efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
+        # Find all input pixels that can contribute to this output bin.
+        left = lamb - step
+        right = lamb + step
 
-                flux.append(np.sum(efficiency*bins*finside)/np.sum(bins*efficiency))
-                cij_line = np.zeros(len(data))
-                cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
-                cij.append(cij_line)
-                
-            else:
-                   
-                flux.append(data[index,1])
-                cij_line = np.zeros(len(data))
-                cij_line[index] = 1
-                cij.append(cij_line)
-                
-        except:
-                breakpoint()
-                     
-    covariance = np.array(cij)
-    
-    #eflux = np.dot(covariance,data[:,2]**2)**0.5
-    final_covariance = np.dot(covariance*data[:,2],(covariance*data[:,2]).T)
-    eflux = final_covariance.diagonal()**0.5
+        index_moins = np.searchsorted(lambda_data, left, side="left")
+        index_plus = np.searchsorted(lambda_data, right, side="right") - 1
 
-    return np.c_[lambda_ref[mask],flux,eflux],final_covariance
+        # Clip to valid array indices.
+        index_moins = max(0, index_moins)
+        index_plus = min(len(data) - 1, index_plus)
+
+        # Make sure the interval is not empty.
+        if index_plus < index_moins:
+            flux.append(flux_data[index])
+            cij_line = np.zeros(len(data))
+            cij_line[index] = 1.0
+            cij.append(cij_line)
+            continue
+
+        inds = np.arange(index_moins, index_plus + 1)
+
+        winside = lambda_data[inds]
+        finside = flux_data[inds]
+
+        # Fractional overlap of each input pixel with the output bin.
+        #
+        # Construct input pixel edges.
+        input_left = lambda_data[inds] - bins[inds] / 2.0
+        input_right = lambda_data[inds] + bins[inds] / 2.0
+
+        output_left = lamb - step
+        output_right = lamb + step
+
+        overlap = np.maximum(
+            0.0,
+            np.minimum(input_right, output_right)
+            - np.maximum(input_left, output_left)
+        )
+
+        # Convert overlap into the fraction of each input pixel used.
+        efficiency = overlap / bins[inds]
+
+        denominator = np.sum(efficiency * bins[inds])
+
+        if denominator <= 0:
+            flux.append(flux_data[index])
+
+            cij_line = np.zeros(len(data))
+            cij_line[index] = 1.0
+            cij.append(cij_line)
+
+        else:
+            weights = efficiency * bins[inds] / denominator
+
+            flux.append(np.sum(weights * finside))
+
+            cij_line = np.zeros(len(data))
+            cij_line[inds] = weights
+            cij.append(cij_line)
+
+    covariance = np.asarray(cij)
+
+    # Propagate independent input uncertainties.
+    weighted_errors = covariance * error_data
+
+    final_covariance = weighted_errors @ weighted_errors.T
+
+    eflux = np.sqrt(np.diag(final_covariance))
+
+    result = np.column_stack([
+        lambda_out,
+        np.asarray(flux),
+        eflux
+    ])
+
+    return result, final_covariance
 
 def define_ROMAN_filters():
 
