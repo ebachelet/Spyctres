@@ -302,6 +302,7 @@ def plot_element_lines(figure_axe,lines):
 
 def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93models',isochrones=None):
 
+    #print('FIT PARAMETERS: ', params)
     theta_s, Av, v_radial, log10_Teff, abundance,logg, = params[:6]
     Teff = 10**log10_Teff
     try:
@@ -310,6 +311,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
         return np.inf
 
     normalisation = (10**theta_s/UAS_TO_RAD)**2    
+<<<<<<< HEAD
   
     if isochrones is not None:
         
@@ -356,6 +358,9 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
          logR = 0.5*(log_mass_model-logg+4.4374)
          theta_s = logR-theta_s+0.667499
          normalisation = (10**theta_s/UAS_TO_RAD)**2    
+=======
+    #print('NORMALIZE: ', normalisation)
+>>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
 
     try:
     
@@ -365,6 +370,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
     
         rescale_flux_parameters = None 
 
+    #print('RESCALE FLUX ', rescale_flux_parameters)
     try:
     
         rescale_errors_parameters = [params[6+len(spectras)+i] for i in range(len(spectras))]
@@ -372,7 +378,7 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
     except:
     
         rescale_errors_parameters = None    
-    
+    #print('RESCALE ERRORS: ',rescale_errors_parameters)
 
     chichi = 0
 
@@ -387,22 +393,29 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
         
         
         model_flux = np.array(model_spectrum(wave*u.AA)*1.98644746*10**-8/wave)
-        
+
         speed_correction = spectras[spectrum]['barycentric_velocity'].value 
         shifted_flux = velocity_correction(np.c_[wave,model_flux],speed_correction+v_radial)
+<<<<<<< HEAD
         
         #sbreakpoint()
+=======
+
+>>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
         #shifted_flux= np.c_[wave,model_flux]
         absorption = 10**(Wang_absorption_law(Av,np.array(wave)/10000)/2.5)
         shifted_flux[:,1] *= normalisation/absorption*magnification
     
         shifted_flux_norm = np.copy(shifted_flux)
-        
+        #print('SHIFT FLUX: ',shifted_flux_norm)
+
         if rescale_flux_parameters is not None:
         
             rescale_flux = 10**rescale_flux_parameters[ind]
+            #print('RESCALED ', rescale_flux)
             shifted_flux_norm[:,1] /= rescale_flux
-       
+            #print('POST RESCALE: ', shifted_flux_norm[:,1])
+
         if telluric_lines_mask is not None:
         
             mask = telluric_lines_mask(data[:,0]).astype(bool)
@@ -421,6 +434,10 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
             errors = data[:,2]*rescale_errors
         else:
              errors = data[:,2]
+
+        #print(data[mask_final,1], shifted_flux_norm[mask_final,1])
+        #print(errors[mask_final])
+
         residuals = (data[mask_final,1]-shifted_flux_norm[mask_final,1])**2/errors[mask_final]**2+2*np.log(errors[mask_final])+np.log(2*np.pi)
 
         chichi += np.sum(residuals)
@@ -441,13 +458,21 @@ def fit_spectra_chichi(params,spectras=[],telluric_lines_mask=None,catalog='k93m
             #flux_obs = 10**((27.4-ab_mag)/2.5)
             #flux_pred = 10**((27.4-predicted_mag_ab)/2.5)
 
+            #print(ab_mag, predicted_mag_ab, err_ab_mag)
             chichi += (ab_mag-predicted_mag_ab)**2/err_ab_mag**2
             #chichi += (flux_obs-flux_pred)**2/(flux_obs*err_ab_mag)**2
             #breakpoint()
             #if np.abs(ab_mag-predicted_mag_ab)>0.1:
             #    return np.inf
+<<<<<<< HEAD
      
     return 0.5*chichi    
+=======
+
+    #print('CHI2 = ', chichi)
+
+    return 0.5*chichi
+>>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
 
 
 def fit_spectra_with_constant_star_chichi(params,star_model,spectras=[],telluric_lines_mask=None):
@@ -1050,6 +1075,7 @@ def bin_spectrum(data,lambda_ref):
     #https://arxiv.org/pdf/1705.05165.pdf
     #http://www.analyticalgroup.com/download/WEIGHTED_MEAN.pdf
     # match https://www.astrobetter.com/blog/2013/08/12/python-tip-re-sampling-spectra-with-pysynphot/ but gives errors
+<<<<<<< HEAD
     lambda_data = data[:, 0]
     flux_data = data[:, 1]
     error_data = data[:, 2]
@@ -1077,6 +1103,11 @@ def bin_spectrum(data,lambda_ref):
     lambda_out = lambda_ref[mask]
     steps_out = steps[mask]
 
+=======
+    steps = np.diff(lambda_ref)/2
+    steps = np.r_[steps,steps[-1]]
+    mask = (lambda_ref>=data[0,0]) & (lambda_ref<data[-1,0])
+>>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
     flux = []
     cij = []
 
@@ -1085,6 +1116,7 @@ def bin_spectrum(data,lambda_ref):
         # Closest input pixel
         index = np.argmin(np.abs(lambda_data - lamb))
 
+<<<<<<< HEAD
         # If the output wavelength is exactly an input wavelength,
         # simply use that pixel.
         if np.abs(lambda_data[index] - lamb) <= 1e-10:
@@ -1094,15 +1126,55 @@ def bin_spectrum(data,lambda_ref):
             cij_line = np.zeros(len(data))
             cij_line[index] = 1.0
             cij.append(cij_line)
+=======
+            if np.abs(data[index,0]-lamb)>10**-10:
+
+                # Array indices need to be capped to avoid stepping off the end of arrays
+                index_moins = np.argmin(np.abs(data[:,0]-lamb+steps[ind]))
+                index_plus = np.argmin(np.abs(data[:,0]-lamb-steps[ind]))
+                if index_plus >= len(data[:,0]) - 1:
+                    index_plus = len(data[:,0]) - 2
+                if index_moins < 0:
+                    index_moins = 0
+>>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
 
             continue
 
+<<<<<<< HEAD
         # Find all input pixels that can contribute to this output bin.
         left = lamb - step
         right = lamb + step
 
         index_moins = np.searchsorted(lambda_data, left, side="left")
         index_plus = np.searchsorted(lambda_data, right, side="right") - 1
+=======
+                efficiency = np.zeros(len(winside))
+                efficiency[1:-1] = 1
+
+                efficiency[0] = np.abs(0.5-(data[index_moins,0]-lamb+steps[ind]))
+                efficiency[-1] = np.abs(0.5-(data[index_plus,0]-lamb-steps[ind]))
+
+                flux.append(np.sum(efficiency*bins*finside)/np.sum(bins*efficiency))
+                cij_line = np.zeros(len(data))
+                cij_line[index_moins:index_plus+1] = efficiency*bins/np.sum(bins*efficiency)
+                cij.append(cij_line)
+
+            else:
+
+                flux.append(data[index,1])
+                cij_line = np.zeros(len(data))
+                cij_line[index] = 1
+                cij.append(cij_line)
+                
+        except:
+                breakpoint()
+                     
+    covariance = np.array(cij)
+    
+    #eflux = np.dot(covariance,data[:,2]**2)**0.5
+    final_covariance = np.dot(covariance*data[:,2],(covariance*data[:,2]).T)
+    eflux = final_covariance.diagonal()**0.5
+>>>>>>> 9ce192d23a184ea9e1ae0a935368da900d409ab7
 
         # Clip to valid array indices.
         index_moins = max(0, index_moins)
