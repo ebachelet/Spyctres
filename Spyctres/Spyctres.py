@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from scipy import interpolate
-import pysynphot as PS
+#import pysynphot as PS
 import astropy.units as u
 import astropy.constants as constantes
 import astropy.modeling.physical_models as apm
